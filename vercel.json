@@ -1,0 +1,23 @@
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/mlfp-weekly-report",
+      "schedule": "0 11 * * 1"
+    },
+    {
+      "path": "/api/cron/daily-report-morning",
+      "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/cron/daily-report-evening",
+      "schedule": "0 22 * * *"
+    },
+    {
+      "path": "/api/cron/sla-check",
+      "schedule": "*/30 * * * *"
+    }
+  ]
+}

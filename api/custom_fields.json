@@ -1,0 +1,762 @@
+[
+  {
+    "id": 110082,
+    "name": "utm_content",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "UTM_CONTENT",
+    "sort": 518,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": false,
+    "is_predefined": true,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110082?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 110084,
+    "name": "utm_medium",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "UTM_MEDIUM",
+    "sort": 519,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": false,
+    "is_predefined": true,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110084?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 110086,
+    "name": "utm_campaign",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "UTM_CAMPAIGN",
+    "sort": 520,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": false,
+    "is_predefined": true,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110086?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 110088,
+    "name": "utm_source",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "UTM_SOURCE",
+    "sort": 521,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": false,
+    "is_predefined": true,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110088?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 110090,
+    "name": "utm_term",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "UTM_TERM",
+    "sort": 522,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": false,
+    "is_predefined": true,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110090?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 110092,
+    "name": "utm_referrer",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "UTM_REFERRER",
+    "sort": 523,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": false,
+    "is_predefined": true,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110092?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 110094,
+    "name": "referrer",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "REFERRER",
+    "sort": 524,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": false,
+    "is_predefined": true,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110094?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 110096,
+    "name": "gclientid",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "GCLIENTID",
+    "sort": 525,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": false,
+    "is_predefined": true,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110096?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 110098,
+    "name": "gclid",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "GCLID",
+    "sort": 526,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": false,
+    "is_predefined": true,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110098?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 110100,
+    "name": "fbclid",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "FBCLID",
+    "sort": 527,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": false,
+    "is_predefined": true,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110100?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 110128,
+    "name": "ttad_id",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "TIKTOK_AD_ID_TD",
+    "sort": 529,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110128?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 110130,
+    "name": "ttad_name",
+    "type": "tracking_data",
+    "account_id": 36183063,
+    "code": "TIKTOK_AD_NAME_TD",
+    "sort": 528,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": "statistic",
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/110130?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 128884,
+    "name": "Qual é o seu cargo?",
+    "type": "text",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 509,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/128884?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 128886,
+    "name": "Seu faturamento médio",
+    "type": "text",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 510,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/128886?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 128888,
+    "name": "Possui sócios?",
+    "type": "text",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 511,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/128888?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 304772,
+    "name": "Próxima consulta",
+    "type": "date_time",
+    "account_id": 36183063,
+    "code": "CF_SCHEDULER_UPCOMING_APPOINTMENT",
+    "sort": 507,
+    "is_api_only": true,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": false,
+    "is_predefined": true,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/304772?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 311994,
+    "name": "Seu instagram?",
+    "type": "text",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 512,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/311994?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 490891,
+    "name": "Reunião",
+    "type": "date_time",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 513,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/490891?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 491141,
+    "name": "Produto",
+    "type": "text",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 515,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/491141?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 491143,
+    "name": "Data da Última Compra",
+    "type": "date_time",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 516,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/491143?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 491687,
+    "name": "Data da Aplicação",
+    "type": "date_time",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 506,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/491687?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 491701,
+    "name": "Data de Cadastro",
+    "type": "date_time",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 504,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/491701?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 491901,
+    "name": "Closer",
+    "type": "select",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 508,
+    "is_api_only": false,
+    "enums": [
+      {
+        "id": 370741,
+        "value": "Jac",
+        "sort": 500
+      },
+      {
+        "id": 370743,
+        "value": "Alexandre",
+        "sort": 1
+      },
+      {
+        "id": 370745,
+        "value": "Kaka",
+        "sort": 2
+      },
+      {
+        "id": 370747,
+        "value": "Simone",
+        "sort": 3
+      }
+    ],
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/491901?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 491903,
+    "name": "SDR",
+    "type": "select",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 505,
+    "is_api_only": false,
+    "enums": [
+      {
+        "id": 370749,
+        "value": "Jac",
+        "sort": 500
+      },
+      {
+        "id": 370751,
+        "value": "Simone",
+        "sort": 1
+      }
+    ],
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/491903?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 492035,
+    "name": "Tamanho da equipe",
+    "type": "text",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 503,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/492035?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 492037,
+    "name": "Maior gargalo",
+    "type": "text",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 502,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/492037?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 492039,
+    "name": "Possui líder operacional?",
+    "type": "text",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 501,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/492039?page=1&limit=250"
+      }
+    }
+  },
+  {
+    "id": 492441,
+    "name": "Forma de Pagamento",
+    "type": "text",
+    "account_id": 36183063,
+    "code": null,
+    "sort": 514,
+    "is_api_only": false,
+    "enums": null,
+    "group_id": null,
+    "required_statuses": [],
+    "is_deletable": true,
+    "is_predefined": false,
+    "entity_type": "leads",
+    "tracking_callback": null,
+    "remind": null,
+    "triggers": [],
+    "currency": null,
+    "hidden_statuses": [],
+    "chained_lists": null,
+    "_links": {
+      "self": {
+        "href": "https://chefkakagomes.kommo.com/api/v4/leads/custom_fields/492441?page=1&limit=250"
+      }
+    }
+  }
+]

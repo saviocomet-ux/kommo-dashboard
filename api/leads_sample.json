@@ -1,0 +1,603 @@
+{
+  "_page": 1,
+  "_links": {
+    "self": {
+      "href": "https://chefkakagomes.kommo.com/api/v4/leads?limit=10&with=contacts%2Conly_active&page=1"
+    },
+    "next": {
+      "href": "https://chefkakagomes.kommo.com/api/v4/leads?limit=10&with=contacts%2Conly_active&page=2"
+    }
+  },
+  "_embedded": {
+    "leads": [
+      {
+        "id": 2120964,
+        "name": "Lead #2120964",
+        "price": 0,
+        "price_with_minor_units": 0,
+        "responsible_user_id": 14927391,
+        "group_id": 0,
+        "status_id": 102598991,
+        "pipeline_id": 13304583,
+        "loss_reason_id": null,
+        "created_by": 0,
+        "updated_by": 0,
+        "created_at": 1773256423,
+        "updated_at": 1773256423,
+        "closed_at": null,
+        "closest_task_at": null,
+        "is_deleted": false,
+        "custom_fields_values": null,
+        "score": null,
+        "account_id": 36183063,
+        "labor_cost": null,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/2120964?limit=10&with=contacts%2Conly_active&page=1"
+          }
+        },
+        "_embedded": {
+          "tags": [],
+          "companies": [],
+          "contacts": [
+            {
+              "id": 4045922,
+              "is_main": true,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/contacts/4045922?limit=10&with=contacts%2Conly_active&page=1"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 2121010,
+        "name": "Lead #2121010",
+        "price": 0,
+        "price_with_minor_units": 0,
+        "responsible_user_id": 14927391,
+        "group_id": 0,
+        "status_id": 102598991,
+        "pipeline_id": 13304583,
+        "loss_reason_id": null,
+        "created_by": 0,
+        "updated_by": 0,
+        "created_at": 1773257400,
+        "updated_at": 1773257400,
+        "closed_at": null,
+        "closest_task_at": null,
+        "is_deleted": false,
+        "custom_fields_values": null,
+        "score": null,
+        "account_id": 36183063,
+        "labor_cost": null,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/2121010?limit=10&with=contacts%2Conly_active&page=1"
+          }
+        },
+        "_embedded": {
+          "tags": [],
+          "companies": [],
+          "contacts": [
+            {
+              "id": 4046026,
+              "is_main": true,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/contacts/4046026?limit=10&with=contacts%2Conly_active&page=1"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 2121038,
+        "name": "Lead #2121038",
+        "price": 0,
+        "price_with_minor_units": 0,
+        "responsible_user_id": 14927391,
+        "group_id": 0,
+        "status_id": 102598991,
+        "pipeline_id": 13304583,
+        "loss_reason_id": null,
+        "created_by": 0,
+        "updated_by": 0,
+        "created_at": 1773258545,
+        "updated_at": 1773258545,
+        "closed_at": null,
+        "closest_task_at": null,
+        "is_deleted": false,
+        "custom_fields_values": null,
+        "score": null,
+        "account_id": 36183063,
+        "labor_cost": null,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/2121038?limit=10&with=contacts%2Conly_active&page=1"
+          }
+        },
+        "_embedded": {
+          "tags": [],
+          "companies": [],
+          "contacts": [
+            {
+              "id": 4046052,
+              "is_main": true,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/contacts/4046052?limit=10&with=contacts%2Conly_active&page=1"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 2120918,
+        "name": "Lead #2120918",
+        "price": 0,
+        "price_with_minor_units": 0,
+        "responsible_user_id": 14927391,
+        "group_id": 0,
+        "status_id": 102598991,
+        "pipeline_id": 13304583,
+        "loss_reason_id": null,
+        "created_by": 0,
+        "updated_by": 0,
+        "created_at": 1773262945,
+        "updated_at": 1773262945,
+        "closed_at": null,
+        "closest_task_at": null,
+        "is_deleted": false,
+        "custom_fields_values": null,
+        "score": null,
+        "account_id": 36183063,
+        "labor_cost": null,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/2120918?limit=10&with=contacts%2Conly_active&page=1"
+          }
+        },
+        "_embedded": {
+          "tags": [],
+          "companies": [],
+          "contacts": [
+            {
+              "id": 4045970,
+              "is_main": true,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/contacts/4045970?limit=10&with=contacts%2Conly_active&page=1"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 2121034,
+        "name": "Lead #2121034",
+        "price": 0,
+        "price_with_minor_units": 0,
+        "responsible_user_id": 14927391,
+        "group_id": 0,
+        "status_id": 102598991,
+        "pipeline_id": 13304583,
+        "loss_reason_id": null,
+        "created_by": 0,
+        "updated_by": 0,
+        "created_at": 1773273585,
+        "updated_at": 1773273585,
+        "closed_at": null,
+        "closest_task_at": null,
+        "is_deleted": false,
+        "custom_fields_values": null,
+        "score": null,
+        "account_id": 36183063,
+        "labor_cost": null,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/2121034?limit=10&with=contacts%2Conly_active&page=1"
+          }
+        },
+        "_embedded": {
+          "tags": [],
+          "companies": [],
+          "contacts": [
+            {
+              "id": 4046050,
+              "is_main": true,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/contacts/4046050?limit=10&with=contacts%2Conly_active&page=1"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 2120958,
+        "name": "Lead #2120958",
+        "price": 0,
+        "price_with_minor_units": 0,
+        "responsible_user_id": 14927391,
+        "group_id": 0,
+        "status_id": 102598991,
+        "pipeline_id": 13304583,
+        "loss_reason_id": null,
+        "created_by": 0,
+        "updated_by": 0,
+        "created_at": 1773318568,
+        "updated_at": 1773318568,
+        "closed_at": null,
+        "closest_task_at": null,
+        "is_deleted": false,
+        "custom_fields_values": null,
+        "score": null,
+        "account_id": 36183063,
+        "labor_cost": null,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/2120958?limit=10&with=contacts%2Conly_active&page=1"
+          }
+        },
+        "_embedded": {
+          "tags": [],
+          "companies": [],
+          "contacts": [
+            {
+              "id": 4045898,
+              "is_main": true,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/contacts/4045898?limit=10&with=contacts%2Conly_active&page=1"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 428438,
+        "name": "Rosana Ramos Silveira",
+        "price": 0,
+        "price_with_minor_units": 0,
+        "responsible_user_id": 14927391,
+        "group_id": 0,
+        "status_id": 102598995,
+        "pipeline_id": 13304583,
+        "loss_reason_id": null,
+        "created_by": 0,
+        "updated_by": 14927391,
+        "created_at": 1773291496,
+        "updated_at": 1773318606,
+        "closed_at": null,
+        "closest_task_at": null,
+        "is_deleted": false,
+        "custom_fields_values": [
+          {
+            "field_id": 110088,
+            "field_name": "utm_source",
+            "field_code": "UTM_SOURCE",
+            "field_type": "tracking_data",
+            "values": [
+              {
+                "value": "FB"
+              }
+            ]
+          },
+          {
+            "field_id": 110084,
+            "field_name": "utm_medium",
+            "field_code": "UTM_MEDIUM",
+            "field_type": "tracking_data",
+            "values": [
+              {
+                "value": "01-AUTO-Q-ENVOLVIMENTO-365D"
+              }
+            ]
+          },
+          {
+            "field_id": 110086,
+            "field_name": "utm_campaign",
+            "field_code": "UTM_CAMPAIGN",
+            "field_type": "tracking_data",
+            "values": [
+              {
+                "value": "VS-MLFP-CAPTACAO-CADASTRO-AUTO-Q-QUENTES-AMPLOS"
+              }
+            ]
+          },
+          {
+            "field_id": 110082,
+            "field_name": "utm_content",
+            "field_code": "UTM_CONTENT",
+            "field_type": "tracking_data",
+            "values": [
+              {
+                "value": "SET_VD 03"
+              }
+            ]
+          },
+          {
+            "field_id": 110090,
+            "field_name": "utm_term",
+            "field_code": "UTM_TERM",
+            "field_type": "tracking_data",
+            "values": [
+              {
+                "value": "Instagram_Feed"
+              }
+            ]
+          },
+          {
+            "field_id": 110100,
+            "field_name": "fbclid",
+            "field_code": "FBCLID",
+            "field_type": "tracking_data",
+            "values": [
+              {
+                "value": "PAZXh0bgNhZW0BMABhZGlkAasxvsF3VNJzcnRjBmFwcF9pZA81NjcwNjczNDMzNTI0MjcAAadNgiPHeMGXXdPNdX7Ml9ufho7vxkCLWj2RPDfr8rhBVym5493O-8kQ0ticcA_aem_RJ7y7ic8Xj9bistaNSxKaw"
+              }
+            ]
+          },
+          {
+            "field_id": 128884,
+            "field_name": "Qual é o seu cargo?",
+            "field_code": null,
+            "field_type": "text",
+            "values": [
+              {
+                "value": "Estou sendo promovido para Líder ou Chef de Cozinha"
+              }
+            ]
+          },
+          {
+            "field_id": 128886,
+            "field_name": "Seu faturamento médio",
+            "field_code": null,
+            "field_type": "text",
+            "values": [
+              {
+                "value": "1 a 3 mil reais"
+              }
+            ]
+          },
+          {
+            "field_id": 128888,
+            "field_name": "Possui sócios?",
+            "field_code": null,
+            "field_type": "text",
+            "values": [
+              {
+                "value": "https://www.chefkakagomes.com/mentoriafaixapretaoutubro25?utm_source=FB&utm_campaign=VS-MLFP-CAPTACAO-CADASTRO-AUTO-Q-QUENTES-AMPLOS%7C120244088697020562&utm_medium=01-AUTO-Q-ENVOLVIMENTO-365D%7C120244088697240562&utm_content=SET_VD+03%7C120244088697"
+              }
+            ]
+          }
+        ],
+        "score": null,
+        "account_id": 36183063,
+        "labor_cost": null,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/428438?limit=10&with=contacts%2Conly_active&page=1"
+          }
+        },
+        "_embedded": {
+          "tags": [],
+          "companies": [],
+          "contacts": [
+            {
+              "id": 1350952,
+              "is_main": true,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/contacts/1350952?limit=10&with=contacts%2Conly_active&page=1"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 428722,
+        "name": "Diego",
+        "price": 0,
+        "price_with_minor_units": 0,
+        "responsible_user_id": 14927391,
+        "group_id": 0,
+        "status_id": 102598995,
+        "pipeline_id": 13304583,
+        "loss_reason_id": null,
+        "created_by": 0,
+        "updated_by": 14927391,
+        "created_at": 1773294389,
+        "updated_at": 1773318689,
+        "closed_at": null,
+        "closest_task_at": null,
+        "is_deleted": false,
+        "custom_fields_values": [
+          {
+            "field_id": 110100,
+            "field_name": "fbclid",
+            "field_code": "FBCLID",
+            "field_type": "tracking_data",
+            "values": [
+              {
+                "value": "fbclid"
+              }
+            ]
+          },
+          {
+            "field_id": 128884,
+            "field_name": "Qual é o seu cargo?",
+            "field_code": null,
+            "field_type": "text",
+            "values": [
+              {
+                "value": "Sou auxiliar de cozinha ou cozinheiro, e busco evolução."
+              }
+            ]
+          },
+          {
+            "field_id": 128886,
+            "field_name": "Seu faturamento médio",
+            "field_code": null,
+            "field_type": "text",
+            "values": [
+              {
+                "value": "3 a 5 mil reais"
+              }
+            ]
+          },
+          {
+            "field_id": 128888,
+            "field_name": "Possui sócios?",
+            "field_code": null,
+            "field_type": "text",
+            "values": [
+              {
+                "value": "https://www.chefkakagomes.com/mentoriafaixapretaoutubro25?fbclid=fbclid"
+              }
+            ]
+          }
+        ],
+        "score": null,
+        "account_id": 36183063,
+        "labor_cost": null,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/428722?limit=10&with=contacts%2Conly_active&page=1"
+          }
+        },
+        "_embedded": {
+          "tags": [],
+          "companies": [],
+          "contacts": [
+            {
+              "id": 1351234,
+              "is_main": true,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/contacts/1351234?limit=10&with=contacts%2Conly_active&page=1"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 2120956,
+        "name": "Lead #2120956",
+        "price": 0,
+        "price_with_minor_units": 0,
+        "responsible_user_id": 14927391,
+        "group_id": 0,
+        "status_id": 102598991,
+        "pipeline_id": 13304583,
+        "loss_reason_id": null,
+        "created_by": 0,
+        "updated_by": 0,
+        "created_at": 1773320242,
+        "updated_at": 1773320242,
+        "closed_at": null,
+        "closest_task_at": null,
+        "is_deleted": false,
+        "custom_fields_values": null,
+        "score": null,
+        "account_id": 36183063,
+        "labor_cost": null,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/2120956?limit=10&with=contacts%2Conly_active&page=1"
+          }
+        },
+        "_embedded": {
+          "tags": [],
+          "companies": [],
+          "contacts": [
+            {
+              "id": 4045900,
+              "is_main": true,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/contacts/4045900?limit=10&with=contacts%2Conly_active&page=1"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 447238,
+        "name": "Kelvin Souza",
+        "price": 0,
+        "price_with_minor_units": 0,
+        "responsible_user_id": 14927391,
+        "group_id": 0,
+        "status_id": 102598999,
+        "pipeline_id": 13304583,
+        "loss_reason_id": null,
+        "created_by": 14927391,
+        "updated_by": 14927391,
+        "created_at": 1773333345,
+        "updated_at": 1773333547,
+        "closed_at": null,
+        "closest_task_at": null,
+        "is_deleted": false,
+        "custom_fields_values": [
+          {
+            "field_id": 128884,
+            "field_name": "Qual é o seu cargo?",
+            "field_code": null,
+            "field_type": "text",
+            "values": [
+              {
+                "value": "Sou líder de uma Brigada há menos de 2 anos."
+              }
+            ]
+          },
+          {
+            "field_id": 128886,
+            "field_name": "Seu faturamento médio",
+            "field_code": null,
+            "field_type": "text",
+            "values": [
+              {
+                "value": "5 a 7.5 mil reais"
+              }
+            ]
+          }
+        ],
+        "score": null,
+        "account_id": 36183063,
+        "labor_cost": null,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/447238?limit=10&with=contacts%2Conly_active&page=1"
+          }
+        },
+        "_embedded": {
+          "tags": [],
+          "companies": [],
+          "contacts": [
+            {
+              "id": 1379062,
+              "is_main": true,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/contacts/1379062?limit=10&with=contacts%2Conly_active&page=1"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
