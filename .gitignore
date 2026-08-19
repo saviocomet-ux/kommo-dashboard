@@ -7,3 +7,14 @@ node_modules/
 
 # dados gravados em runtime pelo tracker de pageview
 api/pageviews.json
+
+# Scripts exploratorios de uso unico. Varios tem credenciais coladas
+# direto no codigo — nao devem ir para o historico do git.
+scratch/
+perform_full_sync.js
+
+# Duplicata exata de api/all_leads.json (8 MB); a copia valida e a de api/
+/all_leads.json
+
+# Arquivo criado por engano (dump do "less --help")
+ter
