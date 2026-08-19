@@ -46,44 +46,67 @@
       </div>
     </header>
 
-    <!-- Dedicated Pipeline Tabs Bar -->
-    <div class="pipeline-navigation-tabs glass-card">
-      <button id="tabAll" class="pipeline-tab-btn active" data-pipeline="all">
-        <span class="tab-dot" style="background:#ff6b00;"></span>
-        📊 Todos os Funis (Geral)
+    <!-- Main Executive Top Navigation Bar -->
+    <nav class="main-executive-nav glass-card" id="mainExecutiveNav">
+      <button id="navTabCRM" class="main-nav-btn active" data-main-tab="crm">
+        <span class="nav-icon">📊</span>
+        <span class="nav-label">Visão Geral Comercial & CRM</span>
       </button>
-      <button id="tabMlfp" class="pipeline-tab-btn" data-pipeline="13304583">
-        <span class="tab-dot dot-mlfp"></span>
-        🔵 Mentoria [MLFP]
+      <button id="navTabVTurb" class="main-nav-btn" data-main-tab="vturb">
+        <span class="nav-icon">🎬</span>
+        <span class="nav-label">Páginas & VSLs (VTurb)</span>
       </button>
-      <button id="tabKoInbound" class="pipeline-tab-btn" data-pipeline="13304659">
-        <span class="tab-dot dot-ko"></span>
-        🔴 Komando [KO]
+      <button id="navTabEduzz" class="main-nav-btn" data-main-tab="eduzz">
+        <span class="nav-icon">💳</span>
+        <span class="nav-label">Vendas & Faturamento (Eduzz)</span>
       </button>
-      <button id="tabKopInbound" class="pipeline-tab-btn" data-pipeline="14173256">
-        <span class="tab-dot dot-kop"></span>
-        📦 KOP Inbound
+      <button id="navTabPages" class="main-nav-btn" data-main-tab="pages">
+        <span class="nav-icon">📄</span>
+        <span class="nav-label">Relatório de Páginas & A/B</span>
       </button>
-      <button id="tabKorRecuperacao" class="pipeline-tab-btn" data-pipeline="13956952">
-        <span class="tab-dot" style="background:#a855f7;"></span>
-        🔄 KOR (Recuperação)
-      </button>
-      <button id="tabKoEbooks" class="pipeline-tab-btn" data-pipeline="13537971">
-        <span class="tab-dot dot-ebooks"></span>
-        📚 Ebooks
-      </button>
-      <button id="tabSocialSelling" class="pipeline-tab-btn" data-pipeline="14104532">
-        <span class="tab-dot" style="background:#ec4899;"></span>
-        📲 Social Selling
-      </button>
-      <button id="tabEduzz" class="pipeline-tab-btn" data-pipeline="eduzz">
-        <span class="tab-dot dot-eduzz"></span>
-        💳 Eduzz Analytics
-      </button>
-    </div>
+    </nav>
 
-    <!-- Main Funnel View Container -->
-    <div id="kommoView" class="tab-content active">
+    <!-- MAIN TAB 1: Comercial & CRM View -->
+    <div id="crmMainTabContent" class="main-tab-content active">
+      
+      <!-- Sub-Pipeline Filter Pills (Commercial Funnels) -->
+      <div class="pipeline-navigation-tabs glass-card" style="margin-bottom: 1rem;">
+        <button id="tabAll" class="pipeline-tab-btn active" data-pipeline="all">
+          <span class="tab-dot" style="background:#ff6b00;"></span>
+          📊 Todos os Funis
+        </button>
+        <button id="tabMlfp" class="pipeline-tab-btn" data-pipeline="13304583">
+          <span class="tab-dot dot-mlfp"></span>
+          🔵 Mentoria [MLFP]
+        </button>
+        <button id="tabKoInbound" class="pipeline-tab-btn" data-pipeline="13304659">
+          <span class="tab-dot dot-ko"></span>
+          🔴 Komando [KO]
+        </button>
+        <button id="tabKopInbound" class="pipeline-tab-btn" data-pipeline="14173256">
+          <span class="tab-dot dot-kop"></span>
+          📦 KOP Inbound
+        </button>
+        <button id="tabKorInbound" class="pipeline-tab-btn" data-pipeline="14268556">
+          <span class="tab-dot" style="background:#a855f7;"></span>
+          🔄 KOR Inbound
+        </button>
+        <button id="tabRecuperacao" class="pipeline-tab-btn" data-pipeline="13956952">
+          <span class="tab-dot" style="background:#14b8a6;"></span>
+          ♻️ Recuperação
+        </button>
+        <button id="tabKoEbooks" class="pipeline-tab-btn" data-pipeline="13537971">
+          <span class="tab-dot dot-ebooks"></span>
+          📚 Ebooks
+        </button>
+        <button id="tabSocialSelling" class="pipeline-tab-btn" data-pipeline="14104532">
+          <span class="tab-dot" style="background:#ec4899;"></span>
+          📲 Social Selling
+        </button>
+      </div>
+
+      <!-- Main Funnel View Container -->
+      <div id="kommoView" class="tab-content active">
       <!-- Integrated Top Filters Bar -->
       <section class="filters-bar-integrated glass-card">
         <div class="date-filter-container">
@@ -273,7 +296,7 @@
           <button class="media-tab-btn" data-media-tab="mlfp">🔵 Mentoria MLFP</button>
           <button class="media-tab-btn" data-media-tab="komando">🔴 Komando</button>
           <button class="media-tab-btn" data-media-tab="kop">📦 KOP</button>
-          <button class="media-tab-btn" data-media-tab="kor">🔄 KOR</button>
+          <button class="media-tab-btn" data-media-tab="kor">🔄 KOR Inbound</button>
           <button class="media-tab-btn" data-media-tab="ebook">📚 Ebook</button>
           <button class="media-tab-btn" data-media-tab="engajamento">📲 Social Selling</button>
         </div>
@@ -377,7 +400,25 @@
         </div>
       </section>
 
-      <!-- 6 Direct Ranking Cards (Top Campanhas por Métricas) -->
+      <!-- 6 Direct Ranking Cards (Top Campanhas / Criativos por Métricas) -->
+      <div class="rankings-header-bar" style="display: flex; align-items: center; justify-content: space-between; margin-top: 1.5rem; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+        <div>
+          <h2 style="font-size: 1.25rem; font-weight: 800; color: var(--text-main); margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+            🏆 Ranking de Performance de Mídia Paga
+          </h2>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.2rem 0 0 0;">
+            Alterne entre campanhas e criativos. Clique em qualquer item para ver a lista de leads e o link do anúncio.
+          </p>
+        </div>
+        <div class="ranking-segmented-tabs" style="display: flex; background: rgba(241, 245, 249, 0.9); border: 1px solid rgba(226, 232, 240, 0.9); padding: 4px; border-radius: 12px; gap: 4px;">
+          <button type="button" id="btnRankCampaigns" class="rank-tab-btn active" onclick="switchRankingType('campaign')">
+            📢 Melhores Campanhas
+          </button>
+          <button type="button" id="btnRankCreatives" class="rank-tab-btn" onclick="switchRankingType('creative')">
+            🎨 Melhores Criativos
+          </button>
+        </div>
+      </div>
       <section class="rankings-grid-container">
         <!-- Card 1: Top Leads -->
         <div class="ranking-card glass-card">
@@ -514,6 +555,74 @@
         </div>
       </section>
 
+      <!-- VTurb Page & VSL Analytics Section -->
+      <section class="vturb-section glass-card" style="margin-top: 1.5rem; padding: 1.5rem; border-radius: 16px; background: rgba(255, 255, 255, 0.9);">
+        <div class="section-header" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.25rem;">
+          <div>
+            <h2 style="font-size: 1.3rem; font-weight: 800; color: var(--color-slate-900); margin: 0; display: flex; align-items: center; gap: 0.6rem;">
+              🎬 Performance de Páginas & VSL (VTurb Analytics)
+              <span class="live-pill" style="display: inline-flex; align-items: center; gap: 6px; background: rgba(239, 68, 68, 0.12); color: #dc2626; padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 800; border: 1px solid rgba(239, 68, 68, 0.25);">
+                <span style="width: 8px; height: 8px; background: #ef4444; border-radius: 50%; box-shadow: 0 0 8px #ef4444;"></span>
+                <span id="vturbLiveUsers">0 Ao Vivo</span>
+              </span>
+            </h2>
+            <p style="font-size: 0.85rem; color: var(--color-slate-500); margin: 0.2rem 0 0 0;">
+              Métricas de acessos às páginas, visualizações e retenção de vídeo em tempo real (VTurb)
+            </p>
+          </div>
+        </div>
+
+        <!-- VTurb KPI Cards -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
+            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">👁️ Visualizações da Página</div>
+            <div id="vturbMetricViews" style="font-size: 1.6rem; font-weight: 900; color: var(--color-slate-900); margin-top: 4px;">0</div>
+            <div id="vturbMetricSessions" style="font-size: 0.75rem; color: var(--color-slate-500);">0 visitantes únicos</div>
+          </div>
+          
+          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
+            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">▶️ Plays Iniciados na VSL</div>
+            <div id="vturbMetricPlays" style="font-size: 1.6rem; font-weight: 900; color: var(--color-primary); margin-top: 4px;">0</div>
+            <div id="vturbMetricPlayRate" style="font-size: 0.75rem; color: #10b981; font-weight: 700;">Taxa de Play: 0.0%</div>
+          </div>
+
+          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
+            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">🔥 Assistiram até o Pitch</div>
+            <div id="vturbMetricPitch" style="font-size: 1.6rem; font-weight: 900; color: #7c3aed; margin-top: 4px;">0</div>
+            <div id="vturbMetricPitchRate" style="font-size: 0.75rem; color: #7c3aed; font-weight: 700;">Retenção Pitch: 0.0%</div>
+          </div>
+
+          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
+            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">📈 Engajamento Médio</div>
+            <div id="vturbMetricEngagement" style="font-size: 1.6rem; font-weight: 900; color: #059669; margin-top: 4px;">0.0%</div>
+            <div style="font-size: 0.75rem; color: var(--color-slate-500);">Retenção média da VSL</div>
+          </div>
+        </div>
+
+        <!-- VTurb Pages & Players Table -->
+        <div class="table-responsive">
+          <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+              <tr style="border-bottom: 2px solid #e2e8f0; font-size: 0.8rem; text-align: left;">
+                <th style="padding: 0.75rem;">Vídeo / Página VSL</th>
+                <th style="padding: 0.75rem;">Duração</th>
+                <th style="padding: 0.75rem;" class="text-center">Visualizações</th>
+                <th style="padding: 0.75rem;" class="text-center">Visitantes Únicos</th>
+                <th style="padding: 0.75rem;" class="text-center">Plays</th>
+                <th style="padding: 0.75rem;" class="text-center">Taxa de Play</th>
+                <th style="padding: 0.75rem;" class="text-center">Assistiram ao Pitch</th>
+                <th style="padding: 0.75rem;" class="text-center">Ao Vivo</th>
+              </tr>
+            </thead>
+            <tbody id="vturbTableBody">
+              <tr>
+                <td colspan="8" class="text-center text-muted py-3">Carregando métricas da VTurb...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- Detailed Performance Tables -->
       <section class="tables-layout">
         <!-- Campaigns Conversions Table -->
@@ -559,172 +668,420 @@
           </div>
         </div>
       </section>
-    </div>
 
-    <!-- Eduzz Analytics View -->
-    <div id="eduzzView" class="tab-content">
-      <!-- Eduzz Metrics Cards (KPIs) -->
-      <section class="metrics-grid">
-        <!-- Card 1: Total Revenue -->
-        <div class="kpi-card glass-card hover-lift">
-          <div class="kpi-icon icon-won">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"></circle><path d="M5.5 21v-3.5a3.5 3.5 0 0 1 7 0v3.5"></path><path d="M11.5 21h5a3.5 3.5 0 0 0 3.5-3.5V14"></path></svg>
-          </div>
-          <div class="kpi-content">
-            <h3>Faturamento Eduzz</h3>
-            <h2 id="eduzzMetricRevenue">R$ 0,00</h2>
-            <span class="kpi-sub kpi-success" id="eduzzMetricSalesCount">0 vendas aprovadas</span>
-          </div>
+      <!-- SDR & Closer Performance Section -->
+      <section class="sdr-closer-section glass-card" id="sdrCloserSection" style="margin-top: 1.5rem;">
+        <div class="section-header">
+          <h2>🎯 Desempenho por SDR & Closer</h2>
+          <p>Mapeamento de leads atribuídos, reuniões agendadas/realizadas, conversão e faturamento por SDR e Closer</p>
         </div>
 
-        <!-- Card 2: Total Clients -->
-        <div class="kpi-card glass-card hover-lift">
-          <div class="kpi-icon icon-leads">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>
-          </div>
-          <div class="kpi-content">
-            <h3>Total de Clientes</h3>
-            <h2 id="eduzzMetricClients">0</h2>
-            <span class="kpi-sub" id="eduzzMetricClientsSub">base de dados unificada</span>
-          </div>
-        </div>
-
-        <!-- Card 3: Multi-Purchase Clients -->
-        <div class="kpi-card glass-card hover-lift">
-          <div class="kpi-icon icon-conversion">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-          </div>
-          <div class="kpi-content">
-            <h3>Multi-Compradores</h3>
-            <h2 id="eduzzMetricMultiClients">0</h2>
-            <span class="kpi-sub kpi-warning" id="eduzzMetricMultiRate">0% de taxa de recompra</span>
-          </div>
-        </div>
-
-        <!-- Card 4: Average Ticket -->
-        <div class="kpi-card glass-card hover-lift">
-          <div class="kpi-icon icon-conversion">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect><line x1="12" y1="20" x2="12" y2="4"></line><line x1="2" y1="12" x2="22" y2="12"></line></svg>
-          </div>
-          <div class="kpi-content">
-            <h3>Ticket Médio</h3>
-            <h2 id="eduzzMetricAvgTicket">R$ 0,00</h2>
-            <span class="kpi-sub" id="eduzzMetricAvgTicketSub">por transação aprovada</span>
-          </div>
-        </div>
-      </section>
-
-      <!-- Eduzz Charts Section -->
-      <section class="charts-layout">
-        <!-- Campaign Volume Chart -->
-        <div class="chart-card glass-card">
-          <div class="chart-header">
-            <h2>Campanhas com Mais Vendas</h2>
-            <p>Volume de vendas aprovadas agrupadas por utm_campaign</p>
-          </div>
-          <div class="chart-body">
-            <canvas id="eduzzCampaignSalesChart"></canvas>
-          </div>
-        </div>
-
-        <!-- Campaign Average Ticket Chart -->
-        <div class="chart-card glass-card">
-          <div class="chart-header">
-            <h2>Campanhas com Melhor Ticket Médio</h2>
-            <p>Comparação do ticket médio das campanhas (mínimo de 3 vendas)</p>
-          </div>
-          <div class="chart-body">
-            <canvas id="eduzzCampaignTicketChart"></canvas>
-          </div>
-        </div>
-      </section>
-
-      <!-- Eduzz Detailed Tables -->
-      <section class="tables-layout">
-        <!-- Campaigns Table -->
-        <div class="table-card glass-card">
-          <div class="table-header">
-            <h2>Desempenho Geral de Campanhas Eduzz</h2>
-            <p>Vendas, faturamento total e ticket médio gerados por utm_campaign</p>
-          </div>
-          <div class="table-body">
+        <div class="sdr-closer-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 1.5rem; margin-top: 1rem;">
+          <!-- SDR Table Card -->
+          <div class="sdr-card glass-card" style="padding: 1.25rem;">
+            <div class="media-paga-header" style="margin-bottom: 0.8rem;">
+              <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--text-main);">📞 SDRs (Pré-Vendas / Agendamento)</h3>
+            </div>
             <div class="table-responsive">
-              <table>
+              <table class="media-paga-table">
                 <thead>
                   <tr>
-                    <th>Campanha (utm_campaign)</th>
-                    <th class="text-center">Vendas Aprovadas</th>
-                    <th class="text-center">Ticket Médio</th>
-                    <th class="text-right">Faturamento Total</th>
+                    <th>SDR</th>
+                    <th class="text-right">Entradas</th>
+                    <th class="text-right">MQLs</th>
+                    <th class="text-right">Agendadas</th>
+                    <th class="text-right">Realizadas</th>
+                    <th class="text-right">Vendas</th>
                   </tr>
                 </thead>
-                <tbody id="eduzzCampaignTableBody">
-                  <tr>
-                    <td colspan="4" class="text-center text-muted">Carregando dados...</td>
-                  </tr>
+                <tbody id="sdrTableBody">
+                  <tr><td colspan="6" class="text-center text-muted py-3">Carregando SDRs...</td></tr>
                 </tbody>
               </table>
             </div>
           </div>
-        </div>
 
-        <!-- Products Table -->
-        <div class="table-card glass-card">
-          <div class="table-header">
-            <h2>Produtos Mais Vendidos (Eduzz)</h2>
-            <p>Volume de vendas, faturamento total e ticket médio por produto</p>
-          </div>
-          <div class="table-body">
+          <!-- Closer Table Card -->
+          <div class="closer-card glass-card" style="padding: 1.25rem;">
+            <div class="media-paga-header" style="margin-bottom: 0.8rem;">
+              <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--text-main);">🤝 Closers (Reunião / Fechamento)</h3>
+            </div>
             <div class="table-responsive">
-              <table>
+              <table class="media-paga-table">
                 <thead>
                   <tr>
-                    <th>Nome do Produto</th>
-                    <th class="text-center">Quantidade Vendida</th>
-                    <th class="text-center">Ticket Médio</th>
-                    <th class="text-right">Faturamento Total</th>
+                    <th>Closer</th>
+                    <th class="text-right">Agendadas</th>
+                    <th class="text-right">Realizadas</th>
+                    <th class="text-right">Vendas</th>
+                    <th class="text-right">Taxa Conv.</th>
+                    <th class="text-right">Receita (R$)</th>
                   </tr>
                 </thead>
-                <tbody id="eduzzProductTableBody">
-                  <tr>
-                    <td colspan="4" class="text-center text-muted">Carregando dados...</td>
-                  </tr>
+                <tbody id="closerTableBody">
+                  <tr><td colspan="6" class="text-center text-muted py-3">Carregando Closers...</td></tr>
                 </tbody>
               </table>
             </div>
           </div>
         </div>
       </section>
+    </div> <!-- Close kommoView -->
+    </div> <!-- Close crmMainTabContent -->
 
-      <!-- VIP / Multi-Buyer Clients List -->
-      <section class="table-card glass-card w-full mt-6">
-        <div class="table-header">
-          <h2>Clientes VIP (Compraram mais de 1 produto)</h2>
-          <p>Relação de clientes com múltiplos produtos comprados e o total acumulado investido (LTV)</p>
-        </div>
-        <div class="table-body">
-          <div class="table-responsive">
-            <table>
-              <thead>
-                <tr>
-                  <th>Cliente</th>
-                  <th>Contato (E-mail / Tel)</th>
-                  <th class="text-center">Qtd. Vendas</th>
-                  <th>Produtos Adquiridos</th>
-                  <th class="text-right">Total Investido (LTV)</th>
-                </tr>
-              </thead>
-              <tbody id="eduzzVipTableBody">
-                <tr>
-                  <td colspan="5" class="text-center text-muted">Carregando dados...</td>
-                </tr>
-              </tbody>
-            </table>
+    <!-- MAIN TAB 2: VTurb Analytics View -->
+    <div id="vturbMainTabContent" class="main-tab-content">
+      <section class="vturb-section glass-card" style="padding: 1.5rem; border-radius: 16px; background: rgba(255, 255, 255, 0.9);">
+        <div class="section-header" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.25rem;">
+          <div>
+            <h2 style="font-size: 1.3rem; font-weight: 800; color: var(--color-slate-900); margin: 0; display: flex; align-items: center; gap: 0.6rem;">
+              🎬 Performance de Páginas & VSL (VTurb Analytics)
+              <span class="live-pill" style="display: inline-flex; align-items: center; gap: 6px; background: rgba(239, 68, 68, 0.12); color: #dc2626; padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 800; border: 1px solid rgba(239, 68, 68, 0.25);">
+                <span style="width: 8px; height: 8px; background: #ef4444; border-radius: 50%; box-shadow: 0 0 8px #ef4444;"></span>
+                <span id="vturbLiveUsers">0 Ao Vivo</span>
+              </span>
+            </h2>
+            <p style="font-size: 0.85rem; color: var(--color-slate-500); margin: 0.2rem 0 0 0;">
+              Métricas de acessos às páginas, visualizações e retenção de vídeo em tempo real (VTurb)
+            </p>
           </div>
+        </div>
+
+        <!-- VTurb KPI Cards -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
+            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">👁️ Visualizações da Página</div>
+            <div id="vturbMetricViews" style="font-size: 1.6rem; font-weight: 900; color: var(--color-slate-900); margin-top: 4px;">0</div>
+            <div id="vturbMetricSessions" style="font-size: 0.75rem; color: var(--color-slate-500);">0 visitantes únicos</div>
+          </div>
+          
+          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
+            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">▶️ Plays Iniciados na VSL</div>
+            <div id="vturbMetricPlays" style="font-size: 1.6rem; font-weight: 900; color: var(--color-primary); margin-top: 4px;">0</div>
+            <div id="vturbMetricPlayRate" style="font-size: 0.75rem; color: #10b981; font-weight: 700;">Taxa de Play: 0.0%</div>
+          </div>
+
+          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
+            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">🔥 Assistiram até o Pitch</div>
+            <div id="vturbMetricPitch" style="font-size: 1.6rem; font-weight: 900; color: #7c3aed; margin-top: 4px;">0</div>
+            <div id="vturbMetricPitchRate" style="font-size: 0.75rem; color: #7c3aed; font-weight: 700;">Retenção Pitch: 0.0%</div>
+          </div>
+
+          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
+            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">📈 Engajamento Médio</div>
+            <div id="vturbMetricEngagement" style="font-size: 1.6rem; font-weight: 900; color: #059669; margin-top: 4px;">0.0%</div>
+            <div style="font-size: 0.75rem; color: var(--color-slate-500);">Retenção média da VSL</div>
+          </div>
+        </div>
+
+        <!-- VTurb Pages & Players Table -->
+        <div class="table-responsive">
+          <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+              <tr style="border-bottom: 2px solid #e2e8f0; font-size: 0.8rem; text-align: left;">
+                <th style="padding: 0.75rem;">Vídeo / Página VSL</th>
+                <th style="padding: 0.75rem;">Duração</th>
+                <th style="padding: 0.75rem;" class="text-center">Visualizações</th>
+                <th style="padding: 0.75rem;" class="text-center">Visitantes Únicos</th>
+                <th style="padding: 0.75rem;" class="text-center">Plays</th>
+                <th style="padding: 0.75rem;" class="text-center">Taxa de Play</th>
+                <th style="padding: 0.75rem;" class="text-center">Assistiram ao Pitch</th>
+                <th style="padding: 0.75rem;" class="text-center">Ao Vivo</th>
+              </tr>
+            </thead>
+            <tbody id="vturbTableBody">
+              <tr>
+                <td colspan="8" class="text-center text-muted py-3">Carregando métricas da VTurb...</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
     </div>
-  </div>
+
+    <!-- MAIN TAB 3: Eduzz Analytics View -->
+    <div id="eduzzMainTabContent" class="main-tab-content">
+      <div id="eduzzView" class="tab-content active">
+        <!-- Eduzz Metrics Cards (KPIs) -->
+        <section class="metrics-grid">
+          <!-- Card 1: Total Revenue -->
+          <div class="kpi-card glass-card hover-lift">
+            <div class="kpi-icon icon-won">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"></circle><path d="M5.5 21v-3.5a3.5 3.5 0 0 1 7 0v3.5"></path><path d="M11.5 21h5a3.5 3.5 0 0 0 3.5-3.5V14"></path></svg>
+            </div>
+            <div class="kpi-content">
+              <h3>Faturamento Eduzz</h3>
+              <h2 id="eduzzMetricRevenue">R$ 0,00</h2>
+              <span class="kpi-sub kpi-success" id="eduzzMetricSalesCount">0 vendas aprovadas</span>
+            </div>
+          </div>
+
+          <!-- Card 2: Total Clients -->
+          <div class="kpi-card glass-card hover-lift">
+            <div class="kpi-icon icon-leads">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>
+            </div>
+            <div class="kpi-content">
+              <h3>Total de Clientes</h3>
+              <h2 id="eduzzMetricClients">0</h2>
+              <span class="kpi-sub" id="eduzzMetricClientsSub">base de dados unificada</span>
+            </div>
+          </div>
+
+          <!-- Card 3: Multi-Purchase Clients -->
+          <div class="kpi-card glass-card hover-lift">
+            <div class="kpi-icon icon-conversion">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+            </div>
+            <div class="kpi-content">
+              <h3>Multi-Compradores</h3>
+              <h2 id="eduzzMetricMultiClients">0</h2>
+              <span class="kpi-sub kpi-warning" id="eduzzMetricMultiRate">0% de taxa de recompra</span>
+            </div>
+          </div>
+
+          <!-- Card 4: Average Ticket -->
+          <div class="kpi-card glass-card hover-lift">
+            <div class="kpi-icon icon-conversion">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect><line x1="12" y1="20" x2="12" y2="4"></line><line x1="2" y1="12" x2="22" y2="12"></line></svg>
+            </div>
+            <div class="kpi-content">
+              <h3>Ticket Médio</h3>
+              <h2 id="eduzzMetricAvgTicket">R$ 0,00</h2>
+              <span class="kpi-sub" id="eduzzMetricAvgTicketSub">por transação aprovada</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Eduzz Charts Section -->
+        <section class="charts-layout">
+          <!-- Campaign Volume Chart -->
+          <div class="chart-card glass-card">
+            <div class="chart-header">
+              <h2>Campanhas com Mais Vendas</h2>
+              <p>Volume de vendas aprovadas agrupadas por utm_campaign</p>
+            </div>
+            <div class="chart-body">
+              <canvas id="eduzzCampaignSalesChart"></canvas>
+            </div>
+          </div>
+
+          <!-- Campaign Average Ticket Chart -->
+          <div class="chart-card glass-card">
+            <div class="chart-header">
+              <h2>Campanhas com Melhor Ticket Médio</h2>
+              <p>Comparação do ticket médio das campanhas (mínimo de 3 vendas)</p>
+            </div>
+            <div class="chart-body">
+              <canvas id="eduzzCampaignTicketChart"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <!-- Eduzz Detailed Tables -->
+        <section class="tables-layout">
+          <!-- Campaigns Table -->
+          <div class="table-card glass-card">
+            <div class="table-header">
+              <h2>Desempenho Geral de Campanhas Eduzz</h2>
+              <p>Vendas, faturamento total e ticket médio gerados por utm_campaign</p>
+            </div>
+            <div class="table-body">
+              <div class="table-responsive">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Campanha (utm_campaign)</th>
+                      <th class="text-center">Vendas Aprovadas</th>
+                      <th class="text-center">Ticket Médio</th>
+                      <th class="text-right">Faturamento Total</th>
+                    </tr>
+                  </thead>
+                  <tbody id="eduzzCampaignTableBody">
+                    <tr>
+                      <td colspan="4" class="text-center text-muted">Carregando dados...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Products Table -->
+          <div class="table-card glass-card">
+            <div class="table-header">
+              <h2>Produtos Mais Vendidos (Eduzz)</h2>
+              <p>Volume de vendas, faturamento total e ticket médio por produto</p>
+            </div>
+            <div class="table-body">
+              <div class="table-responsive">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Nome do Produto</th>
+                      <th class="text-center">Quantidade Vendida</th>
+                      <th class="text-center">Ticket Médio</th>
+                      <th class="text-right">Faturamento Total</th>
+                    </tr>
+                  </thead>
+                  <tbody id="eduzzProductTableBody">
+                    <tr>
+                      <td colspan="4" class="text-center text-muted">Carregando dados...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- VIP / Multi-Buyer Clients List -->
+        <section class="table-card glass-card w-full mt-6">
+          <div class="table-header">
+            <h2>Clientes VIP (Compraram mais de 1 produto)</h2>
+            <p>Relação de clientes com múltiplos produtos comprados e o total acumulado investido (LTV)</p>
+          </div>
+          <div class="table-body">
+            <div class="table-responsive">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Cliente</th>
+                    <th>Contato (E-mail / Tel)</th>
+                    <th class="text-center">Qtd. Vendas</th>
+                    <th>Produtos Adquiridos</th>
+                    <th class="text-right">Total Investido (LTV)</th>
+                  </tr>
+                </thead>
+                <tbody id="eduzzVipTableBody">
+                  <tr>
+                    <td colspan="5" class="text-center text-muted">Carregando dados...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- MAIN TAB 4: Pages Analytics View -->
+    <div id="pagesMainTabContent" class="main-tab-content">
+        <div class="pages-header">
+            <h2 class="section-title">📄 Relatório de Páginas</h2>
+            <div class="pages-date-pills" id="pagesDatePills">
+                <button class="pill-btn active" data-period="today">Hoje</button>
+                <button class="pill-btn" data-period="7">7D</button>
+                <button class="pill-btn" data-period="30">30D</button>
+                <button class="pill-btn" data-period="this_month">Este Mês</button>
+                <button class="pill-btn" data-period="all">Todo</button>
+            </div>
+        </div>
+
+        <!-- KPI Cards Row -->
+        <div class="pages-kpi-row">
+            <div class="pages-kpi-card">
+                <div class="pages-kpi-label">Total de Acessos</div>
+                <div class="pages-kpi-value" id="pagesKpiTotal">—</div>
+            </div>
+            <div class="pages-kpi-card">
+                <div class="pages-kpi-label">Leads Gerados</div>
+                <div class="pages-kpi-value" id="pagesKpiLeads">—</div>
+            </div>
+            <div class="pages-kpi-card">
+                <div class="pages-kpi-label">Taxa de Conversão</div>
+                <div class="pages-kpi-value" id="pagesKpiConversion">—</div>
+            </div>
+            <div class="pages-kpi-card">
+                <div class="pages-kpi-label">Desktop / Mobile</div>
+                <div class="pages-kpi-value" id="pagesKpiDevice">—</div>
+            </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="pages-charts-row">
+            <div class="pages-chart-card">
+                <h3 class="pages-chart-title">Distribuição por Variação A/B</h3>
+                <div class="pages-chart-container">
+                    <canvas id="pagesVariantChart"></canvas>
+                </div>
+            </div>
+            <div class="pages-chart-card">
+                <h3 class="pages-chart-title">Acessos por Dia</h3>
+                <div class="pages-chart-container">
+                    <canvas id="pagesDailyChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- All Ecosystem Pages Table -->
+        <div class="pages-table-card" style="margin-bottom: 1.5rem;">
+            <h3 class="pages-chart-title">🌐 Desempenho Geral de Páginas & LPs (Ecossistema)</h3>
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Página / Produto</th>
+                            <th>Domínio / URL</th>
+                            <th class="text-center">Visualizações</th>
+                            <th class="text-center">Visitantes Únicos</th>
+                            <th class="text-center">Plays VSL %</th>
+                            <th class="text-center">Retenção Pitch %</th>
+                            <th class="text-center">Leads Gerados</th>
+                            <th class="text-center">Taxa de Conversão LP</th>
+                            <th class="text-center">Ao Vivo</th>
+                        </tr>
+                    </thead>
+                    <tbody id="allPagesTableBody">
+                      <tr>
+                        <td colspan="9" class="text-center text-muted">Carregando métricas de todas as páginas...</td>
+                      </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- A/B Comparison Table -->
+        <div class="pages-table-card">
+            <h3 class="pages-chart-title">Comparativo de Variações A/B</h3>
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Variação</th>
+                            <th class="text-center">Tipo VSL</th>
+                            <th class="text-center">Headline</th>
+                            <th class="text-center">Acessos</th>
+                            <th class="text-center">Leads</th>
+                            <th class="text-center">Conversão</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pagesVariantTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- UTM Sources Table -->
+        <div class="pages-table-card">
+            <h3 class="pages-chart-title">Acessos por Origem (UTM Source)</h3>
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Origem</th>
+                            <th class="text-center">Acessos</th>
+                            <th class="text-center">% do Total</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pagesUtmTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <p class="pages-footer-note">Dados atualizados em tempo real. Auto-refresh a cada 60s.</p>
+    </div> <!-- Close pagesView -->
+    </div> <!-- Close pagesMainTabContent -->
+  </div> <!-- Close app-container -->
 
   <!-- Toast Notification Banner -->
   <div id="toastNotification" class="toast glass-card">
@@ -775,8 +1132,11 @@
                 <th>Lead</th>
                 <th>Contato (WhatsApp)</th>
                 <th>E-mail</th>
+                <th>SDR</th>
+                <th>Closer</th>
+                <th>Tipo / Venda (Eduzz)</th>
                 <th>Data Ent.</th>
-                <th>Campanha / Criativo (UTM)</th>
+                <th>Campanha / Criativo / Variante A/B</th>
                 <th>Responsável</th>
                 <th>Status CRM</th>
                 <th class="text-center">Link CRM</th>
@@ -784,7 +1144,7 @@
             </thead>
             <tbody id="modalTableBody">
               <tr>
-                <td colspan="8" class="text-center text-muted py-4">Nenhum lead encontrado nesta etapa.</td>
+                <td colspan="10" class="text-center text-muted py-4">Nenhum lead encontrado nesta etapa.</td>
               </tr>
             </tbody>
           </table>

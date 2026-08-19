@@ -4,3 +4,6 @@
 !.env.example
 node_modules/
 *.log
+
+# dados gravados em runtime pelo tracker de pageview
+api/pageviews.json

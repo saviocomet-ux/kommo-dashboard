@@ -338,13 +338,148 @@ const bundledFields = require('./custom_fields.json');
 const bundledEduzzClients = require('./eduzz_clients_processed.json');
 const bundledEduzzSales = require('./eduzz_sales_raw.json');
 
-// Helper to check if updated cache exists in /tmp (for Vercel) or local CACHE_DIR
+const BUNDLED = {
+  'all_leads.json': bundledLeads,
+  'pipelines.json': bundledPipelines,
+  'users.json': bundledUsers,
+  'custom_fields.json': bundledFields,
+  'eduzz_clients_processed.json': bundledEduzzClients,
+  'eduzz_sales_raw.json': bundledEduzzSales
+};
+
+// ============================================================
+//  CAMADA DE ARMAZENAMENTO DO CACHE
+// ============================================================
+// No Vercel o filesystem é somente-leitura e /tmp é efêmero e não compartilhado
+// entre invocações: o /api/sync gravava, respondia "sucesso", e no request
+// seguinte os dados voltavam ao snapshot do deploy.
+//
+// Ordem de leitura: memória → Vercel Blob → disco (/tmp ou local) → bundled.
+// Blob só é usado quando BLOB_READ_WRITE_TOKEN existe; sem ele o
+// comportamento é exatamente o de antes, então nada quebra sem configuração.
+
+const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || '';
+const BLOB_ATIVO = Boolean(BLOB_TOKEN);
+const BLOB_PREFIXO = 'kommo-cache/';
+
+// Sobrevive entre invocações quentes do lambda.
+// Com TTL: sem ele, um lambda quente serviria para sempre o que leu na
+// primeira vez, e nunca enxergaria uma sincronização feita por outra instância.
+const memoriaCache = new Map();
+const urlsBlob = new Map();
+const TTL_MEMORIA_MS = 60 * 1000;
+
+function lerMemoria(filename) {
+  const item = memoriaCache.get(filename);
+  if (!item) return undefined;
+  if (Date.now() - item.gravadoEm > TTL_MEMORIA_MS) {
+    memoriaCache.delete(filename);
+    return undefined;
+  }
+  return item.dados;
+}
+
+function gravarMemoria(filename, dados) {
+  memoriaCache.set(filename, { dados, gravadoEm: Date.now() });
+}
+
+function caminhoDisco(filename) {
+  return isVercel ? path.join('/tmp', filename) : path.join(CACHE_DIR, filename);
+}
+
+async function listarBlobs() {
+  const resp = await fetch(`https://blob.vercel-storage.com/?prefix=${encodeURIComponent(BLOB_PREFIXO)}&limit=100`, {
+    headers: { authorization: `Bearer ${BLOB_TOKEN}`, 'x-api-version': '7' }
+  });
+  if (!resp.ok) throw new Error(`Blob list ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json();
+  (data.blobs || []).forEach(b => {
+    const nome = String(b.pathname || '').replace(BLOB_PREFIXO, '');
+    if (nome) urlsBlob.set(nome, b.url);
+  });
+  return urlsBlob;
+}
+
+async function lerDoBlob(filename) {
+  if (!urlsBlob.has(filename)) await listarBlobs();
+  const url = urlsBlob.get(filename);
+  if (!url) return undefined;
+
+  // cache-busting: o CDN do Blob serve a versão anterior por alguns segundos
+  const resp = await fetch(`${url}?v=${Date.now()}`, { cache: 'no-store' });
+  if (!resp.ok) throw new Error(`Blob get ${resp.status}`);
+  return resp.json();
+}
+
+async function gravarNoBlob(filename, dados) {
+  const resp = await fetch(`https://blob.vercel-storage.com/${BLOB_PREFIXO}${filename}`, {
+    method: 'PUT',
+    headers: {
+      authorization: `Bearer ${BLOB_TOKEN}`,
+      'x-api-version': '7',
+      'x-content-type': 'application/json',
+      'x-add-random-suffix': '0',
+      'x-cache-control-max-age': '60'
+    },
+    body: JSON.stringify(dados)
+  });
+  if (!resp.ok) throw new Error(`Blob put ${resp.status}: ${await resp.text()}`);
+  const info = await resp.json();
+  if (info && info.url) urlsBlob.set(filename, info.url);
+  return info;
+}
+
+// Leitura assíncrona — use esta nas rotas
+async function lerCache(filename, defaultVal) {
+  const emMemoria = lerMemoria(filename);
+  if (emMemoria !== undefined) return emMemoria;
+
+  if (BLOB_ATIVO) {
+    try {
+      const dados = await lerDoBlob(filename);
+      if (dados !== undefined) {
+        gravarMemoria(filename, dados);
+        return dados;
+      }
+    } catch (err) {
+      console.error(`[Cache] Falha ao ler ${filename} do Blob, caindo para disco:`, err.message);
+    }
+  }
+
+  const doDisco = readCacheFile(filename, defaultVal);
+  gravarMemoria(filename, doDisco);
+  return doDisco;
+}
+
+// Gravação — persiste no Blob quando configurado, e sempre no disco local
+async function gravarCache(filename, dados) {
+  gravarMemoria(filename, dados);
+
+  let persistido = false;
+  if (BLOB_ATIVO) {
+    try {
+      await gravarNoBlob(filename, dados);
+      persistido = true;
+    } catch (err) {
+      console.error(`[Cache] Falha ao gravar ${filename} no Blob:`, err.message);
+    }
+  }
+
+  try {
+    fs.writeFileSync(caminhoDisco(filename), JSON.stringify(dados, null, 2));
+    if (!isVercel) persistido = true; // em dev o disco é persistência de verdade
+  } catch (err) {
+    console.error(`[Cache] Falha ao gravar ${filename} em disco:`, err.message);
+  }
+
+  return persistido;
+}
+
+// Leitura síncrona (disco → bundled). Mantida para os pontos que ainda
+// não são assíncronos; não enxerga o Blob.
 function readCacheFile(filename, defaultVal) {
   try {
-    const filePath = isVercel 
-      ? path.join('/tmp', filename) 
-      : path.join(CACHE_DIR, filename);
-
+    const filePath = caminhoDisco(filename);
     if (fs.existsSync(filePath)) {
       return JSON.parse(fs.readFileSync(filePath, 'utf8'));
     }
@@ -352,23 +487,13 @@ function readCacheFile(filename, defaultVal) {
     console.error(`Error reading cache file ${filename}:`, err);
   }
 
-  // Fallback to static bundled versions
-  if (filename === 'all_leads.json') return bundledLeads;
-  if (filename === 'pipelines.json') return bundledPipelines;
-  if (filename === 'users.json') return bundledUsers;
-  if (filename === 'custom_fields.json') return bundledFields;
-  if (filename === 'eduzz_clients_processed.json') return bundledEduzzClients;
-  if (filename === 'eduzz_sales_raw.json') return bundledEduzzSales;
-
+  if (filename in BUNDLED) return BUNDLED[filename];
   return defaultVal;
 }
 
 // Get path for writing cache updates
 function getWriteCachePath(filename) {
-  if (isVercel) {
-    return path.join('/tmp', filename);
-  }
-  return path.join(CACHE_DIR, filename);
+  return caminhoDisco(filename);
 }
 
 // Fetch helper with Authorization
@@ -404,8 +529,8 @@ async function fetchFromKommo(endpoint) {
 }
 
 // API Routes
-app.get('/api/leads', (req, res) => {
-  const leads = readCacheFile('all_leads.json', []);
+app.get('/api/leads', async (req, res) => {
+  const leads = await lerCache('all_leads.json', []);
   res.json(leads);
 });
 
@@ -424,34 +549,85 @@ app.post('/api/contacts/batch', async (req, res) => {
   }
 });
 
-app.get('/api/pipelines', (req, res) => {
-  const pipelines = readCacheFile('pipelines.json', {});
+app.get('/api/pipelines', async (req, res) => {
+  const pipelines = await lerCache('pipelines.json', {});
   res.json(pipelines);
 });
 
-app.get('/api/users', (req, res) => {
-  const users = readCacheFile('users.json', {});
+app.get('/api/users', async (req, res) => {
+  const users = await lerCache('users.json', {});
   res.json(users);
 });
 
-app.get('/api/custom-fields', (req, res) => {
-  const fields = readCacheFile('custom_fields.json', []);
+app.get('/api/custom-fields', async (req, res) => {
+  const fields = await lerCache('custom_fields.json', []);
   res.json(fields);
 });
 
-// GET Eduzz Analytics
-app.get('/api/eduzz-analytics', (req, res) => {
+// GET Eduzz Analytics (with real-time & date filter support)
+app.get('/api/eduzz-analytics', async (req, res) => {
   try {
-    const processedClients = readCacheFile('eduzz_clients_processed.json', []);
-    const rawSales = readCacheFile('eduzz_sales_raw.json', []);
+    const { from, to } = req.query;
+    const processedClients = await lerCache('eduzz_clients_processed.json', []);
+    const rawSales = await lerCache('eduzz_sales_raw.json', []);
     
     // Filter paid sales
-    const paidSales = rawSales.filter(s => s.sale_status === 3 || s.sale_status_name === 'Paga' || s.status === 'paid');
+    let paidSales = rawSales.filter(s => s.sale_status === 3 || s.sale_status_name === 'Paga' || s.status === 'paid');
     
+    // Data da venda: o pagamento é o que vale (é quando a venda é validada).
+    // Os campos reais do payload Eduzz são date_payment / date_create —
+    // created_at / sale_date / date NÃO existem.
+    const dataDaVenda = s => {
+      const raw = s.date_payment || s.date_create;
+      if (!raw) return NaN;
+      return Math.floor(new Date(String(raw).replace(' ', 'T')).getTime() / 1000);
+    };
+
+    // Apply date range filter if provided
+    const filtrandoPorData = Boolean(from || to);
+    if (filtrandoPorData) {
+      const dFrom = from ? new Date(from + 'T00:00:00-03:00').getTime() / 1000 : 0;
+      const dTo = to ? new Date(to + 'T23:59:59-03:00').getTime() / 1000 : Infinity;
+
+      paidSales = paidSales.filter(s => {
+        const sSecs = dataDaVenda(s);
+        // Venda sem data utilizável fica de fora quando há filtro ativo,
+        // senão ela apareceria em todos os períodos
+        return !isNaN(sSecs) && sSecs >= dFrom && sSecs <= dTo;
+      });
+    }
+
+    // Clientes do período: reconstruídos a partir das vendas já filtradas,
+    // para não misturar receita do período com base de clientes histórica.
+    const clientesDoPeriodo = new Map();
+    paidSales.forEach(s => {
+      const chave = s.client_email || s.client_document || s.client_id;
+      if (!chave) return;
+      if (!clientesDoPeriodo.has(chave)) {
+        clientesDoPeriodo.set(chave, {
+          name: s.client_name || 'Sem nome',
+          email: s.client_email || '',
+          phone: s.client_cel || '',
+          products: [],
+          totalSpent: 0,
+          salesCount: 0
+        });
+      }
+      const c = clientesDoPeriodo.get(chave);
+      const produto = s.content_title || s.product_name || 'Produto Eduzz';
+      if (!c.products.includes(produto)) c.products.push(produto);
+      c.totalSpent += parseFloat(s.sale_total) || parseFloat(s.value) || 0;
+      c.salesCount++;
+    });
+
+    const clientes = filtrandoPorData
+      ? Array.from(clientesDoPeriodo.values())
+      : processedClients;
+
     // Calculate KPIs
-    const totalClients = processedClients.length;
-    const multiProductClients = processedClients.filter(c => c.products && c.products.length > 1).length;
-    
+    const totalClients = clientes.length;
+    const multiProductClients = clientes.filter(c => c.products && c.products.length > 1).length;
+
     const totalSales = paidSales.length;
     const totalRevenue = paidSales.reduce((sum, s) => sum + (parseFloat(s.sale_total) || parseFloat(s.value) || 0), 0);
     const averageTicket = totalSales > 0 ? totalRevenue / totalSales : 0;
@@ -498,7 +674,7 @@ app.get('/api/eduzz-analytics', (req, res) => {
     })).sort((a, b) => b.salesCount - a.salesCount);
     
     // Compile list of multi-product clients (bought > 1 product)
-    const vipClients = processedClients
+    const vipClients = clientes
       .filter(c => c.products && c.products.length > 1)
       .map(c => ({
         name: c.name,
@@ -521,11 +697,418 @@ app.get('/api/eduzz-analytics', (req, res) => {
       },
       campaigns,
       products,
-      vipClients
+      vipClients,
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('Error generating Eduzz analytics:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// VTurb Video Player & Page Analytics Integration
+const VTURB_API_TOKEN = process.env.VTURB_API_TOKEN || 'f913f3a4050ce208f7e56ca78d9e4a43f50c4c8cc244b8e32c276782dabff421';
+
+async function fetchFromVTurb(path, method = 'GET', bodyData = null) {
+  const https = require('https');
+  const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  
+  return new Promise((resolve, reject) => {
+    try {
+      const u = new URL('https://analytics.vturb.net' + path);
+      const reqHeaders = {
+        'User-Agent': UA,
+        'Accept': 'application/json',
+        'X-Api-Token': VTURB_API_TOKEN,
+        'X-Api-Version': 'v1'
+      };
+
+      let postData = null;
+      if (bodyData) {
+        postData = JSON.stringify(bodyData);
+        reqHeaders['Content-Type'] = 'application/json';
+        reqHeaders['Content-Length'] = Buffer.byteLength(postData);
+      }
+
+      const req = https.request({
+        hostname: u.hostname,
+        path: u.pathname + u.search,
+        method: method,
+        headers: reqHeaders
+      }, res => {
+        let body = '';
+        res.on('data', chunk => body += chunk);
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch(e) {
+            resolve({ rawBody: body });
+          }
+        });
+      });
+
+      req.on('error', err => reject(err));
+      if (postData) req.write(postData);
+      req.end();
+    } catch(err) {
+      reject(err);
+    }
+  });
+}
+
+// Resolve a janela de datas de um request.
+// Sem parâmetros válidos, usa do 1º dia do mês corrente até hoje.
+// Nunca usar datas fixas no código — elas vencem silenciosamente.
+function resolveDateWindow(from, to) {
+  const pad = num => String(num).padStart(2, '0');
+  const fmt = (d, hora) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hora}`;
+
+  const agora = new Date();
+  let dFrom = new Date(agora.getFullYear(), agora.getMonth(), 1);
+  let dTo = agora;
+
+  if (from && to) {
+    const pFrom = new Date(from);
+    const pTo = new Date(to);
+    if (!isNaN(pFrom.getTime()) && !isNaN(pTo.getTime())) {
+      dFrom = pFrom;
+      dTo = pTo;
+    }
+  }
+
+  return {
+    startDate: fmt(dFrom, '00:00:00'),
+    endDate: fmt(dTo, '23:59:59')
+  };
+}
+
+app.get('/api/vturb-analytics', async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const { startDate, endDate } = resolveDateWindow(from, to);
+
+    // 1. Fetch Players
+    const players = await fetchFromVTurb(`/players/list?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`);
+    const playerList = Array.isArray(players) ? players : [];
+
+    let totalLiveUsers = 0;
+    const playerMetrics = [];
+
+    for (const p of playerList) {
+      const pId = p.id;
+      const duration = p.duration || 567;
+
+      // Live viewers
+      const liveRes = await fetchFromVTurb(`/sessions/live_users?player_id=${pId}`).catch(() => []);
+      const liveUsersArr = Array.isArray(liveRes) ? liveRes : [];
+      const pLive = liveUsersArr.reduce((sum, item) => sum + (item.live_users || 0), 0);
+      totalLiveUsers += pLive;
+
+      // Stats
+      const statsRes = await fetchFromVTurb('/sessions/stats', 'POST', {
+        player_id: pId,
+        start_date: startDate,
+        end_date: endDate,
+        timezone: 'America/Sao_Paulo'
+      }).catch(() => ({}));
+
+      // Traffic origin
+      const trafficRes = await fetchFromVTurb('/traffic_origin/stats', 'POST', {
+        player_id: pId,
+        video_duration: duration,
+        start_date: startDate,
+        end_date: endDate,
+        timezone: 'America/Sao_Paulo'
+      }).catch(() => []);
+
+      playerMetrics.push({
+        id: p.id,
+        name: p.name,
+        duration: p.duration,
+        pitch_time: p.pitch_time,
+        created_at: p.created_at,
+        live_users: pLive,
+        live_domains: liveUsersArr,
+        stats: statsRes,
+        traffic_origin: Array.isArray(trafficRes) ? trafficRes : []
+      });
+    }
+
+    res.json({
+      success: true,
+      totalLiveUsers,
+      players: playerMetrics
+    });
+  } catch(err) {
+    console.error('[VTurb API Error]:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Comprehensive Ecosystem Page Analytics Endpoint
+// Fontes REAIS: pageviews.json (tracker das LPs) + VTurb (VSL) + Kommo (leads).
+// Métrica sem fonte disponível retorna null — o frontend exibe "—".
+// Nunca estimar pageview a partir de contagem de lead.
+app.get('/api/page-analytics', async (req, res) => {
+  try {
+    const { since, until } = req.query;
+    const { startDate, endDate } = resolveDateWindow(since, until);
+
+    // 1. Fetch VTurb Players & Stats
+    const vturbPlayers = await fetchFromVTurb(`/players/list?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`).catch(() => []);
+    const playerList = Array.isArray(vturbPlayers) ? vturbPlayers : [];
+
+    let vturbStats = { views: 0, uniq: 0, plays: 0, pitch: 0, live: 0 };
+    for (const p of playerList) {
+      const liveRes = await fetchFromVTurb(`/sessions/live_users?player_id=${p.id}`).catch(() => []);
+      const liveCount = Array.isArray(liveRes) ? liveRes.reduce((s, i) => s + (i.live_users || 0), 0) : 0;
+      vturbStats.live += liveCount;
+
+      const stats = await fetchFromVTurb('/sessions/stats', 'POST', {
+        player_id: p.id, start_date: startDate, end_date: endDate, timezone: 'America/Sao_Paulo'
+      }).catch(() => ({}));
+
+      vturbStats.views += stats.total_viewed || 0;
+      vturbStats.uniq += stats.total_viewed_session_uniq || 0;
+      vturbStats.plays += stats.total_started || 0;
+      vturbStats.pitch += stats.total_over_pitch || 0;
+    }
+
+    // 2. Fetch CRM Leads for Conversion Cross-reference
+    const allLeads = await lerCache('all_leads.json', []);
+    
+    // Filter CRM leads by date range
+    const dFromSec = since ? Math.floor(new Date(since).getTime() / 1000) : 0;
+    const dToSec = until ? Math.floor(new Date(until).getTime() / 1000) : Infinity;
+
+    // Mesma definição usada no dashboard: Base de Clientes (registro de
+    // pagamento) e Leads Antigos não são captação de LP e ficam de fora
+    const FUNIS_COMERCIAIS = [13304583, 13304659, 13537971, 14173256, 14268556, 14104532, 13956952];
+
+    const filteredLeads = allLeads.filter(l => {
+      const created = l.created_at || 0;
+      return FUNIS_COMERCIAIS.includes(l.pipeline_id) && created >= dFromSec && created <= dToSec;
+    });
+
+    // Categorize leads by page/pipeline
+    const koLeads = filteredLeads.filter(l => l.pipeline_id === 13304659); // Komando
+    const mlfpLeads = filteredLeads.filter(l => l.pipeline_id === 13304583); // Mentoria (chefkaka.com)
+    const kopLeads = filteredLeads.filter(l => l.pipeline_id === 14173256); // KOP
+    const korLeads = filteredLeads.filter(l => l.pipeline_id === 14268556); // KOR
+    const ebookLeads = filteredLeads.filter(l => l.pipeline_id === 13537971); // Ebooks
+
+    // 3. Pageviews REAIS registrados pelo tracker das LPs
+    const allViews = await readPageviews();
+    const sinceIso = since || new Date(startDate.replace(' ', 'T')).toISOString();
+    const untilIso = until || new Date(endDate.replace(' ', 'T')).toISOString();
+
+    const periodViews = allViews.filter(v => {
+      const ts = v.timestamp || '';
+      return ts >= sinceIso && ts <= untilIso;
+    });
+    const hasTracker = periodViews.length > 0;
+
+    // Views por chave de página (o tracker envia `page`).
+    // "Visitante único" só é contado quando o tracker manda session_id ou
+    // visitor_id. Sem identificador não dá para saber — antes isso era
+    // aproximado por device+hora, o que colapsava 4 acessos em 1 "único".
+    const viewsByPage = {};
+    const uniqByPage = {};
+    periodViews.forEach(v => {
+      const key = v.page || 'unknown';
+      viewsByPage[key] = (viewsByPage[key] || 0) + 1;
+
+      const id = v.session_id || v.visitor_id;
+      if (id) {
+        if (!uniqByPage[key]) uniqByPage[key] = new Set();
+        uniqByPage[key].add(String(id));
+      }
+    });
+
+    // A/B Variant: views do tracker, leads do CRM
+    const VARIANT_LABELS = {
+      '1': 'VSL Travada (7:33) - Headline 1',
+      '2': 'VSL Travada (7:33) - Headline 2',
+      '3': 'VSL Aberta - Headline 1',
+      '4': 'VSL Aberta - Headline 2',
+      '5': 'Sem VSL - Headline 1',
+      '6': 'Sem VSL - Headline 2'
+    };
+    const variantMap = {};
+    Object.keys(VARIANT_LABELS).forEach(k => {
+      variantMap[k] = { label: VARIANT_LABELS[k], views: 0, leads: 0 };
+    });
+    periodViews.forEach(v => {
+      const key = String(v.variant || '');
+      if (!variantMap[key]) variantMap[key] = { label: `Variação desconhecida (${key || 'sem valor'})`, views: 0, leads: 0 };
+      variantMap[key].views++;
+    });
+    koLeads.forEach(l => {
+      const cfs = l.custom_fields_values || [];
+      const varVal = cfs.find(f => f.field_id === 494249 || f.field_code === 'AB_VARIANT')?.values?.[0]?.value;
+      const key = String(varVal || '');
+      if (variantMap[key]) variantMap[key].leads++;
+    });
+
+    // UTM source: do tracker quando existir, senão do CRM (marcado na resposta)
+    const utmSourceMap = {};
+    if (hasTracker) {
+      periodViews.forEach(v => {
+        const src = v.utm_source || '(direto)';
+        utmSourceMap[src] = (utmSourceMap[src] || 0) + 1;
+      });
+    } else {
+      filteredLeads.forEach(l => {
+        const cfs = l.custom_fields_values || [];
+        const src = cfs.find(f => f.field_id === 110088 || f.field_code === 'UTM_SOURCE')?.values?.[0]?.value || '(direto)';
+        utmSourceMap[src] = (utmSourceMap[src] || 0) + 1;
+      });
+    }
+
+    // Acessos por dia — série real do tracker
+    const byDayMap = {};
+    periodViews.forEach(v => {
+      const day = (v.timestamp || '').split('T')[0];
+      if (day) byDayMap[day] = (byDayMap[day] || 0) + 1;
+    });
+    const by_day = Object.keys(byDayMap)
+      .sort()
+      .map(date => ({ date, views: byDayMap[date] }));
+
+    // Dispositivo
+    const by_device = {};
+    periodViews.forEach(v => {
+      const d = v.device || 'unknown';
+      by_device[d] = (by_device[d] || 0) + 1;
+    });
+
+    // Helper: monta a linha de uma LP só com o que foi realmente medido
+    const buildPage = ({ id, name, url, pageKeys, leads, vturb }) => {
+      const views = pageKeys.reduce((sum, k) => sum + (viewsByPage[k] || 0), 0);
+      const uniqSet = new Set();
+      pageKeys.forEach(k => (uniqByPage[k] || new Set()).forEach(x => uniqSet.add(x)));
+
+      // Ordem de preferência: tracker da LP > views do player VTurb.
+      // Sem nenhum dos dois, fica null (não medido) em vez de estimado.
+      let trackedViews = views > 0 ? views : null;
+      let viewsOrigem = trackedViews ? 'tracker' : null;
+      if (trackedViews === null && vturb && vturb.views > 0) {
+        trackedViews = vturb.views;
+        viewsOrigem = 'vturb';
+      }
+
+      let uniqVisitors = uniqSet.size > 0 ? uniqSet.size : null;
+      if (uniqVisitors === null && viewsOrigem === 'vturb' && vturb.uniq > 0) {
+        uniqVisitors = vturb.uniq;
+      }
+
+      const baseForConv = uniqVisitors || trackedViews;
+
+      // Conversão só é comparável quando o denominador cobre a mesma
+      // população do numerador. Views do VTurb medem só quem abriu a VSL,
+      // enquanto os leads do CRM chegam por todas as origens do funil —
+      // daí sair taxa acima de 100%. Nesse caso devolvemos null com o motivo,
+      // em vez de exibir um número impossível.
+      let conversionRate = null;
+      let conversionObs = null;
+      if (baseForConv) {
+        const razao = leads / baseForConv;
+        if (razao > 1) {
+          conversionObs = viewsOrigem === 'vturb'
+            ? 'Leads do CRM excedem os espectadores da VSL: os leads chegam por outras origens além desta página. Instale o tracker na LP para uma taxa real.'
+            : 'Leads excedem os acessos medidos no período — verifique a cobertura do tracker.';
+        } else {
+          conversionRate = (razao * 100).toFixed(1) + '%';
+        }
+      }
+
+      return {
+        id,
+        name,
+        url,
+        vsl_player_id: vturb ? vturb.playerId : null,
+        views: trackedViews,
+        views_origem: viewsOrigem,
+        uniq_visitors: uniqVisitors,
+        plays: vturb ? vturb.plays : null,
+        play_rate: vturb && vturb.views > 0 ? ((vturb.plays / vturb.views) * 100).toFixed(1) + '%' : null,
+        pitch_views: vturb ? vturb.pitch : null,
+        pitch_rate: vturb && vturb.plays > 0 ? ((vturb.pitch / vturb.plays) * 100).toFixed(1) + '%' : null,
+        leads,
+        conversion_rate: conversionRate,
+        conversion_obs: conversionObs,
+        live_users: vturb ? vturb.live : 0
+      };
+    };
+
+    const CATALOGO_PAGINAS = [
+      { id: 'komando_vsl', name: 'Komando VSL Principal', url: 'consultoriakomando.com.br',
+        pageKeys: ['komando_vsl', 'komando', 'consultoriakomando.com.br', '/'],
+        leads: koLeads.length, vturb: { playerId: '6a820f153c0897e7c536a2e7', ...vturbStats } },
+      { id: 'mentoria_mlfp', name: 'Mentoria Líder Faixa Preta (MLFP)', url: 'chefkaka.com',
+        pageKeys: ['mentoria_mlfp', 'mlfp', 'chefkaka.com'],
+        leads: mlfpLeads.length, vturb: null },
+      { id: 'kop_inbound', name: 'KOP Inbound LP', url: 'chefkakagomes.com/kop',
+        pageKeys: ['kop_inbound', 'kop', '/kop'],
+        leads: kopLeads.length, vturb: null },
+      { id: 'kor_inbound', name: 'KOR Inbound LP', url: 'chefkakagomes.com/kor',
+        pageKeys: ['kor_inbound', 'kor', '/kor'],
+        leads: korLeads.length, vturb: null },
+      { id: 'ebooks_icdigitais', name: 'Ebooks & Iscas Digitais', url: 'consultoriakomando.com.br/ebooks',
+        pageKeys: ['ebooks_icdigitais', 'ebooks', '/ebooks'],
+        leads: ebookLeads.length, vturb: null }
+    ];
+
+    const by_page = CATALOGO_PAGINAS.map(buildPage);
+
+    // Páginas registradas pelo tracker que não estão no catálogo acima —
+    // aparecem em vez de sumirem silenciosamente
+    const chavesCatalogadas = new Set(CATALOGO_PAGINAS.flatMap(p => p.pageKeys));
+    Object.keys(viewsByPage).forEach(key => {
+      if (chavesCatalogadas.has(key)) return;
+      by_page.push({
+        id: key,
+        name: key,
+        url: key,
+        vsl_player_id: null,
+        views: viewsByPage[key],
+        uniq_visitors: (uniqByPage[key] || new Set()).size || null,
+        plays: null,
+        play_rate: null,
+        pitch_views: null,
+        pitch_rate: null,
+        leads: null,
+        conversion_rate: null,
+        live_users: 0
+      });
+    });
+
+    const totalViews = periodViews.length;
+    const totalLeads = filteredLeads.length;
+
+    res.json({
+      success: true,
+      data: {
+        // null quando o tracker não registrou nada no período — evita que
+        // "0" seja lido como "medido e deu zero"
+        total_pageviews: hasTracker ? totalViews : null,
+        total_leads: totalLeads,
+        conversion_rate: hasTracker && totalViews > 0
+          ? ((totalLeads / totalViews) * 100).toFixed(1) + '%'
+          : null,
+        tracker_ativo: hasTracker,
+        utm_source_origem: hasTracker ? 'tracker' : 'crm',
+        by_page,
+        by_variant: variantMap,
+        by_utm_source: utmSourceMap,
+        by_device,
+        by_day,
+        periodo: { since: sinceIso, until: untilIso }
+      }
+    });
+  } catch (err) {
+    console.error('[Page Analytics Error]:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -537,17 +1120,17 @@ app.post('/api/sync', async (req, res) => {
     // 1. Fetch Users
     console.log('[Sync] Fetching users...');
     const usersData = await fetchFromKommo('/api/v4/users');
-    fs.writeFileSync(getWriteCachePath('users.json'), JSON.stringify(usersData || {}, null, 2));
+    await gravarCache('users.json', usersData || {});
 
     // 2. Fetch Pipelines
     console.log('[Sync] Fetching pipelines...');
     const pipelinesData = await fetchFromKommo('/api/v4/leads/pipelines');
-    fs.writeFileSync(getWriteCachePath('pipelines.json'), JSON.stringify(pipelinesData || {}, null, 2));
+    await gravarCache('pipelines.json', pipelinesData || {});
 
     // 3. Fetch Custom Fields
     console.log('[Sync] Fetching custom fields...');
     const fieldsData = await fetchFromKommo('/api/v4/leads/custom_fields');
-    fs.writeFileSync(getWriteCachePath('custom_fields.json'), JSON.stringify(fieldsData || {}, null, 2));
+    await gravarCache('custom_fields.json', fieldsData || {});
 
     // 4. Fetch All Leads (paged)
     console.log('[Sync] Fetching leads (paged)...');
@@ -577,14 +1160,23 @@ app.post('/api/sync', async (req, res) => {
       }
     }
 
-    fs.writeFileSync(getWriteCachePath('all_leads.json'), JSON.stringify(allLeads, null, 2));
-    console.log(`[Sync] Sync complete. Saved ${allLeads.length} leads.`);
-    
+    const persistido = await gravarCache('all_leads.json', allLeads);
+    console.log(`[Sync] Sync complete. Saved ${allLeads.length} leads. Persistido: ${persistido}`);
+
+    // Sem persistência real, o sync some no próximo request. Dizer isso na
+    // resposta evita o "sincronizado com sucesso" seguido de dados velhos.
+    const aviso = persistido
+      ? null
+      : 'Os dados foram sincronizados, mas NÃO ficaram persistidos: no Vercel o /tmp é descartado entre requisições. Configure BLOB_READ_WRITE_TOKEN para que a sincronização valha de verdade.';
+
     res.json({
       success: true,
       leadsCount: allLeads.length,
       usersCount: usersData?._embedded?.users?.length || 0,
       pipelinesCount: pipelinesData?._embedded?.pipelines?.length || 0,
+      persistido,
+      armazenamento: BLOB_ATIVO ? 'vercel-blob' : (isVercel ? 'tmp-efemero' : 'disco-local'),
+      aviso,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -660,7 +1252,7 @@ async function getStatusInfo(statusId) {
   if (!pipelineStatusesMapCache) {
     pipelineStatusesMapCache = {};
     try {
-      const data = readCacheFile('pipelines.json', null);
+      const data = await lerCache('pipelines.json', null);
       if (data && data._embedded && data._embedded.pipelines) {
         data._embedded.pipelines.forEach(p => {
           const statuses = p._embedded?.statuses || [];
@@ -694,7 +1286,7 @@ async function getStatusInfo(statusId) {
       });
       // Save updated pipelines to cache file
       try {
-        fs.writeFileSync(getWriteCachePath('pipelines.json'), JSON.stringify(data, null, 2));
+        await gravarCache('pipelines.json', data);
       } catch (writeErr) {
         console.error('Error writing updated pipelines.json cache:', writeErr);
       }
@@ -1470,6 +2062,13 @@ function isFaturamentoAbove100k(faturamento, renda) {
   return fVal >= 100000 || rVal >= 100000;
 }
 
+// Helper to validate if billing is equal to or greater than 50k
+function isFaturamentoAbove50k(faturamento, renda) {
+  const fVal = parseFaturamentoNumber(faturamento);
+  const rVal = parseFaturamentoNumber(renda);
+  return fVal >= 50000 || rVal >= 50000;
+}
+
 // Helper to validate if billing is equal to or greater than 3k
 function isFaturamentoAbove3k(faturamento, renda) {
   const fVal = parseFaturamentoNumber(faturamento);
@@ -1496,6 +2095,7 @@ app.post('/api/ko-webhook', async (req, res) => {
   const utm_campaign = getFlexibleValue(payload, ['UTM_Campaign', 'utm_campaign', 'Campaign', 'campaign']);
   const utm_content = getFlexibleValue(payload, ['UTM_Content', 'utm_content', 'Content', 'content']);
   const utm_term = getFlexibleValue(payload, ['UTM_Term', 'utm_term', 'Term', 'term']);
+  const ab_variant = getFlexibleValue(payload, ['ab_variant', 'abVariant', 'ab_test', 'variant', 'page_variant', 'pagina_variante', 'variante', 'variant_id']);
   
   if (!email && !phone) {
     console.warn('[KO Webhook] Warning: Form submission without email and phone, ignoring.');
@@ -1554,9 +2154,11 @@ app.post('/api/ko-webhook', async (req, res) => {
     if (equipe) leadCustomFields.push({ field_id: 492035, values: [{ value: equipe }] }); // Tamanho da equipe
     if (gargalo) leadCustomFields.push({ field_id: 492037, values: [{ value: gargalo }] }); // Maior gargalo
     if (lider) leadCustomFields.push({ field_id: 492039, values: [{ value: lider }] }); // Possui líder operacional?
+    if (ab_variant) leadCustomFields.push({ field_id: 494249, values: [{ value: String(ab_variant) }] }); // Variante A/B (Página)
 
     let leadId = null;
     const baseTags = isEbookEvent ? ['KO_Ebooks', 'Ebook'] : ['KO_Inbound'];
+    if (ab_variant) baseTags.push(`AB_${String(ab_variant).substring(0, 30)}`);
 
     if (existingContacts.length > 0) {
       existingContacts.sort((a, b) => a.id - b.id);
@@ -2015,7 +2617,8 @@ app.post('/api/kommo-lead-created', async (req, res) => {
     KO_EBOOKS: 13537971,
     MLFP_INBOUND: 13304583,
     KOP: 14173256,
-    KOR: 13956952
+    KOR: 14268556,
+    RECOVERY: 13956952
   };
 
   try {
@@ -2040,10 +2643,10 @@ app.post('/api/kommo-lead-created', async (req, res) => {
       const leadDetails = await kommoRequest('GET', `/api/v4/leads/${leadId}?with=contacts`);
       if (!leadDetails) continue;
 
-      // Skip retroactive/old leads (created more than 10 minutes ago) to prevent notification storm (can be bypassed for testing)
+      // Skip retroactive/old leads (created more than 12 hours ago) to prevent notification storm (can be bypassed for testing)
       const nowUnix = Math.floor(Date.now() / 1000);
       const skipOldLeads = process.env.SKIP_OLD_LEADS_NOTIFICATION !== 'false' && req.query.test !== 'true';
-      if (skipOldLeads && (nowUnix - leadDetails.created_at > 10 * 60)) {
+      if (skipOldLeads && (nowUnix - leadDetails.created_at > 12 * 60 * 60)) {
         console.log(`[Z-API Webhook] Skipping lead ${leadId}: Retroactive/Old lead (created ${nowUnix - leadDetails.created_at}s ago).`);
         continue;
       }
@@ -2115,15 +2718,15 @@ app.post('/api/kommo-lead-created', async (req, res) => {
       
       if (isKoPipeline) {
         const isQualifiedRole = isPartnerOrOwner(displayCargo, '');
-        const isQualifiedBilling = isFaturamentoAbove100k(displayFaturamento, '');
-        isQualified = isQualifiedRole && isQualifiedBilling;
+        const isQualifiedBilling = isFaturamentoAbove50k(displayFaturamento, '');
+        isQualified = isQualifiedBilling || (isQualifiedRole && isFaturamentoAbove3k(displayFaturamento, ''));
         targetPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763'; // Savio
         pipelineName = pipelineId === PIPELINES.KO_INBOUND ? '[KO] Inbound' : '[KO] Ebooks';
         headerTitle = '🚀 *Novo Lead VIP Recebido - Komando!*';
         
         console.log(`[Z-API Webhook] KO Lead ${leadId} qualification check:
           Role Check (Partner/Owner): ${isQualifiedRole} (Cargo/Perfil: "${displayCargo}")
-          Billing Check (>= 100k): ${isQualifiedBilling} (Faturamento/Renda: "${displayFaturamento}")
+          Billing Check (>= 50k): ${isQualifiedBilling} (Faturamento/Renda: "${displayFaturamento}")
           Overall Qualified: ${isQualified}
         `);
 
@@ -2230,8 +2833,8 @@ app.post('/api/kommo-lead-created', async (req, res) => {
       } else if (isKorPipeline) {
         // KOR — All recovery leads are notified (no qualification needed)
         isQualified = true;
-        pipelineName = '[KOR] Recuperação';
-        headerTitle = '🔄 *Novo Lead KOR - Recuperação!*';
+        pipelineName = '[KOR] KOR Inbound';
+        headerTitle = '🔄 *Novo Lead KOR Inbound!*';
         
         console.log(`[Z-API Webhook] KOR Lead ${leadId}: Auto-qualified for notification.`);
       }
@@ -2267,8 +2870,11 @@ app.post('/api/kommo-lead-created', async (req, res) => {
 📊 *Faturamento/Renda:* ${displayFaturamento || 'Não informado'}
 👥 *Sócios:* ${socios || 'Não informado'}`;
 
+      const displayAbVariant = leadFields.find(f => f.field_id === 494249 || f.field_code === 'AB_VARIANT' || String(f.field_name || '').toLowerCase().includes('variante'))?.values?.[0]?.value || '';
+
       if (utmCampaign) message += `\n📢 *Campanha (UTM):* ${utmCampaign}`;
       if (utmSource) message += `\n🔍 *Origem (UTM):* ${utmSource}`;
+      if (displayAbVariant) message += `\n⚡ *Variante A/B (Página):* ${displayAbVariant}`;
 
       if (equipe) message += `\n🧑‍🤝‍🧑 *Equipe:* ${equipe}`;
       if (gargalo) message += `\n🚧 *Gargalo:* ${gargalo}`;
@@ -2810,7 +3416,7 @@ async function getDailyLeadsReport(isYesterday) {
     KO_EBOOKS: 13537971,
     MLFP: 13304583,
     KOP: 14173256,
-    KOR: 13956952
+    KOR: 14268556
   };
 
   const categorized = {
@@ -2836,7 +3442,7 @@ async function getDailyLeadsReport(isYesterday) {
     let isMql = tags.includes('MQL');
     if (!isMql) {
       if (lead.pipeline_id === PIPELINES.KO_INBOUND || lead.pipeline_id === PIPELINES.KO_EBOOKS) {
-        isMql = isPartnerOrOwner(cargo, '') && isFaturamentoAbove100k(faturamento, '');
+        isMql = isPartnerOrOwner(cargo, '') && isFaturamentoAbove50k(faturamento, '');
       } else if (lead.pipeline_id === PIPELINES.MLFP) {
         isMql = isFaturamentoAbove3k(faturamento, '');
       } else if (lead.pipeline_id === PIPELINES.KOP) {
@@ -2900,7 +3506,7 @@ async function getDailyLeadsReport(isYesterday) {
   message += formatSection('KO Ebook', categorized.KO_EBOOKS);
   message += formatSection('MLFP Inbound', categorized.MLFP);
   message += formatSection('📦 KOP (Komando Operação)', categorized.KOP);
-  message += formatSection('🔄 KOR (Recuperação)', categorized.KOR);
+  message += formatSection('🔄 KOR Inbound', categorized.KOR);
 
   if (categorized.OUTROS.length > 0) {
     message += `📦 *Outros Funis (${categorized.OUTROS.length} leads)*\n\n`;
@@ -3125,9 +3731,9 @@ app.get(['/api/healthcheck', '/api/webhook/healthcheck'], async (req, res) => {
     timestamp: new Date().toISOString(),
     environment: isVercel ? 'production-vercel' : 'development-local',
     services: {
-      crm_api: { status: 'unknown' },
       lp_mlfp_webhook: { status: 'ok', endpoint: '/api/lp-webhook' },
       greatpages_kop_webhook: { status: 'ok', endpoint: '/api/webhook/greatpages-kop' },
+      greatpages_kor_webhook: { status: 'ok', endpoint: '/api/webhook/greatpages-kor' },
       ko_inbound_webhook: { status: 'ok', endpoint: '/api/ko-webhook' }
     }
   };
@@ -3185,14 +3791,22 @@ const META_AD_ACCOUNTS = [
   { id: 'act_342834581', name: 'Caio Gomes', type: 'engagement' }
 ];
 
+// Classifica a campanha pelo nome.
+// Ordem importa: os marcadores mais específicos vêm primeiro. Antes 'KO' era
+// testado antes de MLFP e EBOOK, então "KOMANDO-MLFP" caía em komando.
+// 'KO' também é casado como palavra isolada (\bKO\b) — como substring solto
+// ele engolia qualquer nome que contivesse essas duas letras juntas.
 function classifyCampaignFunnel(campaignName) {
   const n = (campaignName || '').toUpperCase();
+
   if (n.includes('KOP')) return 'kop';
-  if (n.includes('KOR') || n.includes('RECUPERAC')) return 'kor';
-  if (n.includes('KOMANDO') || n.includes('KO')) return 'komando';
-  if (n.includes('MLFP')) return 'mlfp';
-  if (n.includes('EBOOK')) return 'ebook';
+  if (n.includes('KOR')) return 'kor';
+  if (n.includes('RECUPERAC') || n.includes('RECUPERAÇ')) return 'recuperacao';
+  if (n.includes('EBOOK') || n.includes('E-BOOK')) return 'ebook';
+  if (n.includes('MLFP') || n.includes('FAIXA PRETA')) return 'mlfp';
+  if (n.includes('KOMANDO') || /\bKO\b/.test(n)) return 'komando';
   if (n.includes('[VIEWS]') || n.includes('[A]') || n.includes('POST DO INSTAGRAM') || n.includes('PUBLICAÇÃO DO INSTAGRAM') || n.includes('INSTAGRAM POST')) return 'engajamento';
+
   return 'outros';
 }
 
@@ -3237,7 +3851,11 @@ app.get('/api/meta-ads/insights', async (req, res) => {
 
         if (campData.data) {
           for (const camp of campData.data) {
-            if (parseFloat(camp.spend) > 0) {
+            // Antes só entrava spend > 0, o que escondia campanha pausada no
+            // meio do período que ainda assim gerou impressão/lead no recorte
+            const temGasto = parseFloat(camp.spend) > 0;
+            const temEntrega = parseInt(camp.impressions || 0) > 0;
+            if (temGasto || temEntrega) {
               const funnel = account.type === 'engagement' ? 'engajamento' : classifyCampaignFunnel(camp.campaign_name);
               
               // Extract lead and purchase actions
@@ -3260,15 +3878,17 @@ app.get('/api/meta-ads/insights', async (req, res) => {
                 campaign_id: camp.campaign_id,
                 campaign_name: camp.campaign_name,
                 funnel,
-                spend: parseFloat(camp.spend),
-                impressions: parseInt(camp.impressions),
-                clicks: parseInt(camp.clicks),
-                ctr: parseFloat(camp.ctr),
-                cpc: parseFloat(camp.cpc || 0),
-                meta_leads: metaLeads,
-                link_clicks: parseInt(linkClicks),
-                landing_page_views: parseInt(landingPageViews),
-                purchases: parseInt(purchases)
+                // NaN aqui contamina todos os somatórios a jusante (spend,
+                // CTR, CPL, ROAS viram NaN), então tudo cai para 0
+                spend: parseFloat(camp.spend) || 0,
+                impressions: parseInt(camp.impressions) || 0,
+                clicks: parseInt(camp.clicks) || 0,
+                ctr: parseFloat(camp.ctr) || 0,
+                cpc: parseFloat(camp.cpc) || 0,
+                meta_leads: metaLeads || 0,
+                link_clicks: parseInt(linkClicks) || 0,
+                landing_page_views: parseInt(landingPageViews) || 0,
+                purchases: parseInt(purchases) || 0
               });
             }
           }
@@ -3369,17 +3989,20 @@ app.post(['/api/lp-webhook', '/api/webhook/lp-webhook'], async (req, res) => {
     const fatUpper = faturamento.toUpperCase();
 
     const is1M = fatUpper.includes('1 MILHÃO') || fatUpper.includes('1 MILHAO') || fatUpper.includes('1M') || fatUpper.includes('1.000.000');
-    const isOver100k = fatUpper.includes('100') || fatUpper.includes('150') || fatUpper.includes('300') || fatUpper.includes('600') || is1M;
+    const isOver50k = fatUpper.includes('50') || fatUpper.includes('60') || fatUpper.includes('70') || fatUpper.includes('80') || fatUpper.includes('90') || fatUpper.includes('100') || fatUpper.includes('150') || fatUpper.includes('300') || fatUpper.includes('600') || is1M || parseFaturamentoNumber(faturamento) >= 50000;
     const isDonoSocio = cargoUpper.includes('DONO') || cargoUpper.includes('SÓCIO') || cargoUpper.includes('SOCIO') || cargoUpper.includes('PROPRIETÁRIO') || cargoUpper.includes('PROPRIETARIO');
 
-    const isMql = is1M || (isDonoSocio && isOver100k);
+    const isMql = is1M || (isDonoSocio && isOver50k);
     const tag = isMql ? 'MQL' : 'Downsell';
+
+    const ab_variant = data.ab_variant || data.abVariant || data.ab_test || data.variant || data.pagina_variante || data.variante || '';
 
     const customFields = [];
     if (cargo) customFields.push({ field_id: 128884, values: [{ value: cargo }] });
     if (instagram) customFields.push({ field_id: 311994, values: [{ value: String(instagram) }] });
     if (faturamento) customFields.push({ field_id: 128886, values: [{ value: String(faturamento) }] });
     if (socios) customFields.push({ field_id: 128888, values: [{ value: String(socios) }] });
+    if (ab_variant) customFields.push({ field_id: 494249, values: [{ value: String(ab_variant) }] });
 
     if (utm_campaign) customFields.push({ field_code: 'UTM_CAMPAIGN', values: [{ value: utm_campaign }] });
     if (utm_source) customFields.push({ field_code: 'UTM_SOURCE', values: [{ value: utm_source }] });
@@ -3473,12 +4096,15 @@ app.post(['/api/webhook/greatpages-kop', '/api/greatpages-kop'], async (req, res
     gsRow = gsResult?.row;
     console.log(`[GreatPages KOP Webhook] Lead saved FIRST to Google Sheets (row: ${gsRow || 'N/A'})`);
 
+    const ab_variant = data.ab_variant || data.abVariant || data.ab_test || data.variant || data.pagina_variante || data.variante || '';
+
     const customFields = [];
     if (cargo) customFields.push({ field_id: 128884, values: [{ value: cargo }] });
     if (instagram) customFields.push({ field_id: 311994, values: [{ value: String(instagram) }] });
     if (faturamento) customFields.push({ field_id: 128886, values: [{ value: String(faturamento) }] });
     if (socios) customFields.push({ field_id: 128888, values: [{ value: String(socios) }] });
     if (gargalo) customFields.push({ field_id: 492037, values: [{ value: String(gargalo) }] });
+    if (ab_variant) customFields.push({ field_id: 494249, values: [{ value: String(ab_variant) }] });
 
     if (utm_campaign) customFields.push({ field_code: 'UTM_CAMPAIGN', values: [{ value: utm_campaign }] });
     if (utm_source) customFields.push({ field_code: 'UTM_SOURCE', values: [{ value: utm_source }] });
@@ -3532,6 +4158,121 @@ app.post(['/api/webhook/greatpages-kop', '/api/greatpages-kop'], async (req, res
   }
 });
 
+// GreatPages Webhook Endpoint for KOR Page (Funil de Recuperação)
+// URL: POST /api/webhook/greatpages-kor or POST /api/greatpages-kor
+app.post(['/api/webhook/greatpages-kor', '/api/greatpages-kor'], async (req, res) => {
+  let gsRow = null;
+  try {
+    const data = req.body || {};
+    console.log('[GreatPages KOR Webhook] Received payload:', JSON.stringify(data));
+
+    const name = data.Seu_nome_completo || data.nome || data.name || data.full_name || 'Lead KOR';
+    const email = data.Seu_melhor_e_mail || data.email || data['e-mail'] || '';
+    const phone = data.Seu_WhatsApp_com_DDD || data.whatsapp || data.telefone || data.phone || '';
+    const instagram = data.Seu_instagram || data.seu_instagram || data.Instagram || data.instagram || data['Seu_instagram'] || data['Seu instagram?'] || data.insta || data.ig || '';
+    const faturamento = data.Seu_faturamento_medio || data.faturamento || data.Seu_faturamento || '';
+    const socios = data.Possui_socios || data.socios || data.Possui_socio || '';
+    const gargalo = data.Maior_gargalo || data.gargalo || '';
+    const cargo = data.Cargo || data.cargo || '';
+
+    const utm_source = data.utm_source || '';
+    const utm_campaign = data.utm_campaign || '';
+    const utm_medium = data.utm_medium || '';
+    const utm_content = data.utm_content || '';
+    const utm_term = data.utm_term || '';
+
+    // KOR Qualification Logic (Cargo + Faturamento >= 100k)
+    const cargoUpper = cargo.toUpperCase();
+    const fatUpper = faturamento.toUpperCase();
+    const is1M = fatUpper.includes('1 MILHÃO') || fatUpper.includes('1 MILHAO') || fatUpper.includes('1M') || fatUpper.includes('1.000.000');
+    const isOver100k = fatUpper.includes('100') || fatUpper.includes('150') || fatUpper.includes('300') || fatUpper.includes('600') || is1M;
+    const isDonoSocio = cargoUpper.includes('DONO') || cargoUpper.includes('SÓCIO') || cargoUpper.includes('SOCIO') || cargoUpper.includes('PROPRIETÁRIO') || cargoUpper.includes('PROPRIETARIO');
+    const korIsMql = is1M || (isDonoSocio && isOver100k);
+    const korTag = korIsMql ? 'MQL' : 'Downsell';
+    console.log(`[GreatPages KOR Webhook] Qualification: Cargo="${cargo}", Fat="${faturamento}", isMQL=${korIsMql}`);
+
+    // 1. SAVE FIRST TO GOOGLE SHEETS (Separate 'KOR' Tab!)
+    const gsResult = await saveToGoogleSheets('KOR', {
+      nome: name,
+      email: email,
+      telefone: phone,
+      instagram: instagram,
+      cargo: cargo,
+      faturamento: faturamento,
+      socios: socios,
+      gargalo: gargalo,
+      utm_source: utm_source,
+      utm_medium: utm_medium,
+      utm_campaign: utm_campaign,
+      utm_content: utm_content,
+      utm_term: utm_term
+    });
+    gsRow = gsResult?.row;
+    console.log(`[GreatPages KOR Webhook] Lead saved FIRST to Google Sheets KOR tab (row: ${gsRow || 'N/A'})`);
+
+    const ab_variant = data.ab_variant || data.abVariant || data.ab_test || data.variant || data.pagina_variante || data.variante || '';
+
+    const customFields = [];
+    if (cargo) customFields.push({ field_id: 128884, values: [{ value: cargo }] });
+    if (instagram) customFields.push({ field_id: 311994, values: [{ value: String(instagram) }] });
+    if (faturamento) customFields.push({ field_id: 128886, values: [{ value: String(faturamento) }] });
+    if (socios) customFields.push({ field_id: 128888, values: [{ value: String(socios) }] });
+    if (gargalo) customFields.push({ field_id: 492037, values: [{ value: String(gargalo) }] });
+    if (ab_variant) customFields.push({ field_id: 494249, values: [{ value: String(ab_variant) }] });
+
+    if (utm_campaign) customFields.push({ field_code: 'UTM_CAMPAIGN', values: [{ value: utm_campaign }] });
+    if (utm_source) customFields.push({ field_code: 'UTM_SOURCE', values: [{ value: utm_source }] });
+    if (utm_medium) customFields.push({ field_code: 'UTM_MEDIUM', values: [{ value: utm_medium }] });
+    if (utm_content) customFields.push({ field_code: 'UTM_CONTENT', values: [{ value: utm_content }] });
+    if (utm_term) customFields.push({ field_code: 'UTM_TERM', values: [{ value: utm_term }] });
+
+    const contactCustomFields = [];
+    if (phone) contactCustomFields.push({ field_code: 'PHONE', values: [{ value: String(phone), enum_code: 'WORK' }] });
+    if (email) contactCustomFields.push({ field_code: 'EMAIL', values: [{ value: String(email), enum_code: 'WORK' }] });
+
+    const payload = [
+      {
+        name: `Lead KOR - ${name}`,
+        pipeline_id: 14268556, // [KOR] Inbound Pipeline
+        status_id: 110184132,  // Contato inicial em [KOR] Inbound
+        custom_fields_values: customFields,
+        _embedded: {
+          tags: [
+            { name: 'KOR' },
+            { name: 'RECUPERAÇÃO' },
+            { name: korTag }
+          ],
+          contacts: [
+            {
+              first_name: name,
+              custom_fields_values: contactCustomFields
+            }
+          ]
+        }
+      }
+    ];
+
+    const result = await kommoRequest('POST', '/api/v4/leads/complex', payload);
+    const leadId = result?.[0]?.id || result?._embedded?.leads?.[0]?.id;
+    console.log('[GreatPages KOR Webhook] Kommo response:', JSON.stringify(result));
+
+    // Update Google Sheets status in KOR tab
+    if (gsRow) await updateGoogleSheetsStatus('KOR', gsRow, 'Processado', leadId);
+
+    res.status(200).json({ success: true, message: 'Lead KOR created successfully', lead_id: leadId, data: result });
+  } catch (err) {
+    console.error('[GreatPages KOR Webhook] Error:', err.message);
+    if (gsRow) await updateGoogleSheetsStatus('KOR', gsRow, 'Erro CRM', '');
+
+    // Send Telegram alert on error
+    try {
+      await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, `🚨 *[Erro Webhook GreatPages KOR]*\nLinha na Planilha: ${gsRow || 'N/A'}\nErro: ${err.message}`);
+    } catch(tErr) { /* ignore */ }
+
+    res.status(200).json({ success: false, error: err.message, saved_in_sheets: true });
+  }
+});
+
 // Start Server when run locally (not in serverless environment)
 // ========================================================
 // Webhook: Lead Responded — Kommo Automation Trigger
@@ -3573,8 +4314,9 @@ app.post(['/api/webhook/lead-responded', '/api/lead-responded'], async (req, res
       13304659: 'KO Inbound',
       13537971: 'KO Ebooks',
       13304583: 'MLFP Inbound',
-      14173256: 'KOP',
-      13956952: 'KOR (Recuperação)',
+      14173256: 'KOP Inbound',
+      14268556: 'KOR Inbound',
+      13956952: 'Funil de Recuperação',
       13956856: 'Base de Clientes',
       8403910: 'E-book Pago',
       8403918: 'Social Selling'
@@ -3668,6 +4410,75 @@ ${kommoLeadUrl}`;
     res.status(200).json({ success: false, error: err.message });
   }
 });
+
+// --- Page Analytics API ---
+
+const PAGEVIEWS_FILE_NAME = 'pageviews.json';
+
+// Pageviews passam pela mesma camada de armazenamento: gravados só em /tmp,
+// cada acesso registrado no Vercel era descartado na invocação seguinte —
+// por isso o histórico nunca acumulava.
+async function readPageviews() {
+  try {
+    const dados = await lerCache(PAGEVIEWS_FILE_NAME, []);
+    return Array.isArray(dados) ? dados : [];
+  } catch (err) {
+    console.error('[Page Analytics] Error reading pageviews:', err.message);
+    return [];
+  }
+}
+
+async function writePageviews(data) {
+  try {
+    await gravarCache(PAGEVIEWS_FILE_NAME, data);
+  } catch (err) {
+    console.error('[Page Analytics] Error writing pageviews:', err.message);
+  }
+}
+
+// POST /api/track-pageview (with preflight)
+app.options('/api/track-pageview', (req, res) => {
+  const origin = req.headers.origin;
+  res.setHeader('Access-Control-Allow-Origin', '*'); // Allow * for testing as requested
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+
+app.post('/api/track-pageview', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*'); // Allow * for testing as requested
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    // session_id/visitor_id são opcionais, mas são o que permite contar
+    // visitante único de verdade — sem eles a LP só produz total de acessos
+    const { page, variant, device, referrer, utm_source, utm_medium, utm_campaign, utm_content, utm_term, timestamp, session_id, visitor_id } = req.body || {};
+
+    let views = await readPageviews();
+
+    // Auto-prune entries older than 90 days
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    views = views.filter(v => (v.timestamp || '') >= ninetyDaysAgo);
+
+    views.push({
+      page, variant, device, referrer, utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+      session_id: session_id || visitor_id || null,
+      timestamp: timestamp || new Date().toISOString()
+    });
+
+    await writePageviews(views);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[Page Analytics] Track error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// (Rota duplicada de /api/page-analytics removida: o Express registrava duas
+// e a segunda nunca era alcançada. O agregador ativo fica logo acima.)
+
 
 // Start Server when run locally (not in serverless environment)
 if (!isVercel) {

@@ -6,7 +6,9 @@ const state = {
   fields: [],
   filteredLeads: [],
   // Active filters
-  pipelineId: '13304583', // Default to MLFP Mentoria
+  // Precisa bater com a aba marcada como .active no index.html,
+  // senão o dashboard abre mostrando um funil diferente do botão aceso
+  pipelineId: 'all',
   dateFrom: null, // Date object
   dateTo: null,   // Date object
   activePeriod: 'this_month', // tracks which pill is active
@@ -22,8 +24,308 @@ const state = {
   eduzzCampaignSalesChart: null,
   eduzzCampaignTicketChart: null,
   // Meta Ads State
-  metaAdsData: null
+  metaAdsData: null,
+  // Cross-reference Eduzz Sales Index (contact_id -> Sale Info)
+  contactSalesIndex: new Map()
 };
+
+// ==========================================
+// FONTE ÚNICA DE VERDADE — PIPELINES E ETAPAS
+// ==========================================
+// Toda contagem de etapa do funil (pirâmide, KPIs, rankings, modal, time)
+// DEVE usar as funções deste bloco. Não duplicar IDs de status em outros lugares.
+
+const PIPELINES = {
+  MLFP: 13304583,          // [MLFP] Inbound
+  KO_INBOUND: 13304659,    // [KO] Inbound
+  KO_EBOOKS: 13537971,     // [KO] Ebooks
+  KOP: 14173256,           // [KOP] Inbound
+  KOR: 14268556,           // [KOR] Inbound
+  SOCIAL_SELLING: 14104532,// Instagram (Social Selling)
+  RECUPERACAO: 13956952,   // Funil de Recuperação
+  BASE_CLIENTES: 13956856, // Base de Clientes Eduzz — pagamento confirmado
+  MLFP_ANTIGOS: 14008652   // [MLFP] Leads Antigos
+};
+
+// Funis comerciais que compõem a visão "Todos os Funis".
+// Base de Clientes (registro de pagamento) e Leads Antigos ficam de fora:
+// não são captação do período e inflariam o topo do funil.
+const FUNIS_COMERCIAIS = [
+  PIPELINES.MLFP,
+  PIPELINES.KO_INBOUND,
+  PIPELINES.KO_EBOOKS,
+  PIPELINES.KOP,
+  PIPELINES.KOR,
+  PIPELINES.SOCIAL_SELLING,
+  PIPELINES.RECUPERACAO
+];
+
+const STATUS_GANHO = 142;
+const STATUS_PERDIDO = 143;
+
+// Etapas declaradas POR FUNIL, usando o nome real da etapa no Kommo.
+// Antes existia uma lista única de IDs aplicada a todos os funis, o que
+// rotulava "Contato inicial" (KOP) e "Em Negociação" (Recuperação) como
+// "Reunião Agendada" — daí KOP aparecer com 100% de agendamento.
+//
+// tipo:
+//   'reuniao'    → funil comercial com reunião (MLFP, KO Inbound, KO Ebooks)
+//   'negociacao' → funil sem reunião: contato → negociação (KOP, KOR, Social)
+//   'recuperacao'→ carrinho/pix/boleto pendente → contato → negociação
+const ETAPAS_POR_PIPELINE = {
+  [PIPELINES.MLFP]: {
+    tipo: 'reuniao',
+    espera: [102598995, 102598999, 108066768, 109108180], // Tentando Contato, Contato Feito, Follow Up 1/2
+    engajado: [109107608, 102599003],                     // Closer Direto, Reunião Agendada
+    noshow: [108291644],
+    avancado: [102599203],                                // Reunião Realizada
+    downsell: [108619300]
+  },
+  [PIPELINES.KO_INBOUND]: {
+    tipo: 'reuniao',
+    espera: [102599767, 102599771],
+    engajado: [102599807],                                // Reunião Agendada
+    noshow: [104280663],
+    avancado: [102599811]                                 // Reunião Realizada
+  },
+  [PIPELINES.KO_EBOOKS]: {
+    tipo: 'reuniao',
+    espera: [104452415, 104452419],
+    engajado: [104452423],                                // Reunião Agendada
+    noshow: [104457987],
+    avancado: [104458027]                                 // Reunião Realizada
+  },
+  [PIPELINES.KOP]: {
+    tipo: 'negociacao',
+    espera: [],
+    engajado: [109421448],                                // Contato inicial
+    noshow: [],
+    avancado: [109421452, 109421456]                      // Oferta feita, Negociação
+  },
+  [PIPELINES.KOR]: {
+    tipo: 'negociacao',
+    espera: [],
+    engajado: [110184132],
+    noshow: [],
+    avancado: []
+  },
+  [PIPELINES.SOCIAL_SELLING]: {
+    tipo: 'negociacao',
+    espera: [108876924],                                  // Comentários
+    engajado: [108876928],                                // Direct
+    noshow: [],
+    avancado: [108876932]                                 // Negociação
+  },
+  [PIPELINES.RECUPERACAO]: {
+    tipo: 'recuperacao',
+    espera: [107712464, 107712468, 107712472],            // Boleto Gerado, Pix Pendente, Carrinho Abandonado
+    engajado: [107712572],                                // Contato Iniciado
+    noshow: [],
+    avancado: [107712576]                                 // Em Negociação
+  }
+};
+
+const ETAPAS_VAZIAS = { tipo: 'negociacao', espera: [], engajado: [], noshow: [], avancado: [], downsell: [] };
+
+// Rótulos da pirâmide por tipo de funil — o mesmo número com o nome certo
+const ROTULOS_FUNIL = {
+  reuniao: {
+    espera: '⏳ Follow Up (Sem Resposta 1ºs Contatos)',
+    engajado: '📅 3. Reuniões Agendadas (Total SDR)',
+    avancado: '🤝 4. Reuniões Realizadas (Show-Up)',
+    dropEngajado: '🔻 SDR ➔ Agendamento:',
+    dropAvancado: '🔻 Presença / Show-Up Closer:',
+    subEngajado: 'dos MQLs',
+    subAvancado: 'show-up',
+    mostrarNoShow: true
+  },
+  negociacao: {
+    espera: '⏳ Aguardando Retorno',
+    engajado: '💬 3. Contato Iniciado',
+    avancado: '🤝 4. Em Negociação / Oferta Feita',
+    dropEngajado: '🔻 Qualificado ➔ Contato:',
+    dropAvancado: '🔻 Contato ➔ Negociação:',
+    subEngajado: 'dos MQLs',
+    subAvancado: 'avançaram',
+    mostrarNoShow: false
+  },
+  recuperacao: {
+    espera: '🧾 Pagamento Pendente (Boleto / Pix / Carrinho)',
+    engajado: '💬 3. Contato Iniciado',
+    avancado: '🤝 4. Em Negociação',
+    dropEngajado: '🔻 Pendente ➔ Contato:',
+    dropAvancado: '🔻 Contato ➔ Negociação:',
+    subEngajado: 'dos leads',
+    subAvancado: 'avançaram',
+    mostrarNoShow: false
+  },
+  misto: {
+    espera: '⏳ Aguardando Retorno / Follow Up',
+    engajado: '💬 3. Contato Ativo (Reunião ou Negociação Iniciada)',
+    avancado: '🤝 4. Estágio Avançado (Reunião Feita ou Negociação)',
+    dropEngajado: '🔻 MQL ➔ Contato Ativo:',
+    dropAvancado: '🔻 Contato ➔ Estágio Avançado:',
+    subEngajado: 'dos MQLs',
+    subAvancado: 'avançaram',
+    mostrarNoShow: true
+  }
+};
+
+const FUNNEL = {
+  etapasDe(lead) {
+    return ETAPAS_POR_PIPELINE[lead.pipeline_id] || ETAPAS_VAZIAS;
+  },
+
+  tags(lead) {
+    return (lead._embedded?.tags || []).map(t => (t.name || '').toUpperCase());
+  },
+
+  // Tipo do funil selecionado; 'misto' quando a visão agrega funis diferentes
+  tipoAtual(pipelineId) {
+    if (!pipelineId || pipelineId === 'all') return 'misto';
+    const def = ETAPAS_POR_PIPELINE[parseInt(pipelineId)];
+    return def ? def.tipo : 'misto';
+  },
+
+  // Avalia todas as etapas de uma vez (uma passada de tags e venda por lead)
+  evaluate(lead) {
+    const sale = getLeadSaleStatus(lead);
+    const sId = parseInt(lead.status_id);
+    const etapas = FUNNEL.etapasDe(lead);
+    const tags = FUNNEL.tags(lead);
+
+    const hasMqlTag = tags.includes('MQL') || tags.includes('QUALIFICADO') || tags.includes('KO_MQL');
+    const hasDesqualificado = tags.includes('DESQUALIFICADO') || tags.includes('DISQUALIFIED') || tags.includes('FORA DO PERFIL');
+
+    const isWon = sale.isWon;
+    const isNoShow = (etapas.noshow || []).includes(sId);
+    // Avançado = reunião realizada / em negociação, ou venda fechada
+    const isAvancado = (etapas.avancado || []).includes(sId) || isWon;
+    // Engajado = reunião agendada / contato iniciado, ou qualquer etapa além
+    const isEngajado = (etapas.engajado || []).includes(sId) || isNoShow || isAvancado;
+
+    return {
+      sale,
+      isWon,
+      isLost: sId === STATUS_PERDIDO && !isWon,
+      isNoShow,
+      isAvancado,
+      isEngajado,
+      isMql: hasMqlTag || isEngajado,
+      isEmEspera: (etapas.espera || []).includes(sId) || tags.includes('FOLLOW UP') || tags.includes('SEM RESPOSTA'),
+      isDownsell: tags.includes('DOWNSELL')
+        || (etapas.downsell || []).includes(sId)
+        || (hasDesqualificado && !hasMqlTag),
+      revenue: isWon ? (sale.price || lead.price || 0) : 0
+    };
+  },
+
+  // Aplica o filtro de etapa selecionada (clique numa camada da pirâmide)
+  matchesStep(lead, stepKey) {
+    if (!stepKey || stepKey === 'all') return true;
+    const e = FUNNEL.evaluate(lead);
+    switch (stepKey) {
+      case 'mql': return e.isMql;
+      case 'agendada': return e.isEngajado;
+      case 'noshow': return e.isNoShow;
+      case 'realizada': return e.isAvancado;
+      case 'followup': return e.isEmEspera;
+      case 'downsell': return e.isDownsell;
+      case 'won': return e.isWon;
+      default: return true;
+    }
+  }
+};
+
+// Indexa pagamentos CONFIRMADOS por contact_id.
+// Regra de negócio: a venda nasce no funil comercial (MLFP / KO) mas só é
+// validada quando o pagamento cai, o que é representado por um lead no funil
+// "Base de Clientes Eduzz". A tag EDUZZ sozinha marca origem, não pagamento.
+function buildContactSalesIndex(allLeads = state.leads) {
+  const salesMap = new Map();
+  (allLeads || []).forEach(l => {
+    if (l.pipeline_id !== PIPELINES.BASE_CLIENTES) return;
+
+    (l._embedded?.contacts || []).forEach(c => {
+      if (!c.id) return;
+      const existing = salesMap.get(c.id);
+      const currentPrice = l.price || 0;
+      if (!existing || currentPrice > existing.price) {
+        salesMap.set(c.id, {
+          saleLeadId: l.id,
+          price: currentPrice,
+          paidAt: l.created_at || 0,
+          statusId: l.status_id,
+          pipelineId: l.pipeline_id,
+          productName: l.name || 'Venda Eduzz',
+          tags: (l._embedded?.tags || []).map(t => t.name)
+        });
+      }
+    });
+  });
+  state.contactSalesIndex = salesMap;
+  console.log(`[Cross-Reference] ${salesMap.size} contatos com pagamento confirmado na Base de Clientes Eduzz.`);
+}
+
+// Avalia se o lead virou venda ganha.
+// Ganha = fechada no próprio funil (status 142) OU pagamento confirmado
+// na Base de Clientes Eduzz pelo mesmo contato.
+function getLeadSaleStatus(lead) {
+  if (!lead) return { isWon: false, price: 0, badgeLabel: '📥 Lead Capturado', badgeClass: 'badge-optin' };
+
+  // O próprio registro de pagamento não é um lead de funil comercial:
+  // ele é a validação, e é contabilizado através do lead de origem.
+  if (lead.pipeline_id === PIPELINES.BASE_CLIENTES) {
+    return {
+      isWon: true,
+      price: lead.price || 0,
+      badgeLabel: `🏆 Pagamento Confirmado (${formatBRL(lead.price || 0)})`,
+      badgeClass: 'badge-won-eduzz',
+      matchedLeadId: lead.id,
+      source: 'base_clientes'
+    };
+  }
+
+  if (parseInt(lead.status_id) === STATUS_GANHO) {
+    return {
+      isWon: true,
+      price: lead.price || 0,
+      badgeLabel: `🏆 Venda Ganha (${formatBRL(lead.price || 0)})`,
+      badgeClass: 'badge-won-eduzz',
+      matchedLeadId: lead.id,
+      source: 'crm'
+    };
+  }
+
+  // Cross-reference: pagamento confirmado pelo mesmo contato
+  const contacts = lead._embedded?.contacts || [];
+  for (const c of contacts) {
+    if (c.id && state.contactSalesIndex && state.contactSalesIndex.has(c.id)) {
+      const match = state.contactSalesIndex.get(c.id);
+      const price = match.price || lead.price || 0;
+      return {
+        isWon: true,
+        price,
+        badgeLabel: `🏆 Venda Eduzz (${formatBRL(price)})`,
+        badgeClass: 'badge-won-eduzz',
+        matchedLeadId: match.saleLeadId,
+        productName: match.productName,
+        paidAt: match.paidAt,
+        // Pagamento anterior à captura do lead = cliente que já era comprador
+        preExisting: match.paidAt > 0 && lead.created_at > 0 && match.paidAt < lead.created_at,
+        source: 'eduzz'
+      };
+    }
+  }
+
+  return {
+    isWon: false,
+    price: 0,
+    badgeLabel: '📥 Lead Capturado (Página)',
+    badgeClass: 'badge-captured-lead',
+    matchedLeadId: null
+  };
+}
 
 // DOM Elements
 const elements = {
@@ -53,11 +355,8 @@ const elements = {
   toastMsg: document.getElementById('toastMsg'),
   toastIcon: document.getElementById('toastIcon'),
 
-  // Tab Elements
-  tabKommo: document.getElementById('tabKommo'),
-  tabEduzz: document.getElementById('tabEduzz'),
-  kommoView: document.getElementById('kommoView'),
-  eduzzView: document.getElementById('eduzzView'),
+  // (tabKommo / tabEduzz / kommoView / eduzzView removidos junto com o
+  //  sistema de abas antigo — os dois primeiros nem existiam mais no HTML)
 
   // Eduzz Analytics Elements
   eduzzMetricRevenue: document.getElementById('eduzzMetricRevenue'),
@@ -202,35 +501,28 @@ function setupEventListeners() {
     });
   }
 
-  // Dedicated Pipeline Tabs switching
+  // Abas de funil (dentro da aba CRM).
+  // A troca de aba PRINCIPAL (CRM / VTurb / Eduzz / Pages) é responsabilidade
+  // exclusiva de switchMainTab(); aqui só muda o funil selecionado.
   document.querySelectorAll('.pipeline-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.pipeline-tab-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
 
-      const targetPipeline = btn.getAttribute('data-pipeline');
       state.selectedStep = 'all'; // Reset stage selection when changing tabs
-      if (targetPipeline === 'eduzz') {
-        elements.kommoView.classList.remove('active');
-        elements.eduzzView.classList.add('active');
-        renderEduzzDashboard();
-      } else {
-        elements.kommoView.classList.add('active');
-        elements.eduzzView.classList.remove('active');
-        state.pipelineId = targetPipeline;
-        if (elements.pipelineFilter) elements.pipelineFilter.value = targetPipeline;
-        
-        // Sync Media Paga sub-tab with selected pipeline
-        const mediaTab = PIPELINE_FUNNEL_MAP[targetPipeline] || 'all';
-        state.selectedMediaTab = mediaTab;
-        const mediaBtn = document.querySelector(`.media-tab-btn[data-media-tab="${mediaTab}"]`);
-        if (mediaBtn) {
-          document.querySelectorAll('.media-tab-btn').forEach(b => b.classList.remove('active'));
-          mediaBtn.classList.add('active');
-        }
+      state.pipelineId = btn.getAttribute('data-pipeline');
+      if (elements.pipelineFilter) elements.pipelineFilter.value = state.pipelineId;
 
-        applyFilters();
+      // Sync Media Paga sub-tab with selected pipeline
+      const mediaTab = PIPELINE_FUNNEL_MAP[state.pipelineId] || 'all';
+      state.selectedMediaTab = mediaTab;
+      const mediaBtn = document.querySelector(`.media-tab-btn[data-media-tab="${mediaTab}"]`);
+      if (mediaBtn) {
+        document.querySelectorAll('.media-tab-btn').forEach(b => b.classList.remove('active'));
+        mediaBtn.classList.add('active');
       }
+
+      applyFilters();
     });
   });
 
@@ -277,45 +569,31 @@ function setupEventListeners() {
   }
 }
 
-// Switch tabs view
-function switchTab(tabName) {
-  const tabKommo = document.getElementById('tabKommo');
-  const tabEduzz = document.getElementById('tabEduzz');
-  const kommoView = document.getElementById('kommoView');
-  const eduzzView = document.getElementById('eduzzView');
-
-  if (tabName === 'kommo') {
-    if (tabKommo) tabKommo.classList.add('active');
-    if (tabEduzz) tabEduzz.classList.remove('active');
-    if (kommoView) kommoView.classList.add('active');
-    if (eduzzView) eduzzView.classList.remove('active');
-  } else {
-    if (tabKommo) tabKommo.classList.remove('active');
-    if (tabEduzz) tabEduzz.classList.add('active');
-    if (kommoView) kommoView.classList.remove('active');
-    if (eduzzView) eduzzView.classList.add('active');
-    renderEduzzDashboard();
-  }
-}
+// switchTab() foi removida: era o sistema de abas antigo (kommoView/eduzzView),
+// substituído por switchMainTab(). Ninguém a chamava, e o toggle de .active que
+// ela e o handler de funil faziam no #eduzzView deixava a aba Eduzz em branco.
 
 // Load Cached Data from API
 async function loadData() {
   try {
-    const [leadsResponse, pipelinesResponse, usersResponse, fieldsResponse, eduzzResponse] = await Promise.all([
+    // Eduzz é carregado por fetchEduzzAnalytics(), que aplica o filtro de data
+    const [leadsResponse, pipelinesResponse, usersResponse, fieldsResponse, vturbResponse] = await Promise.all([
       fetch('/api/leads').then(res => res.json()),
       fetch('/api/pipelines').then(res => res.json()),
       fetch('/api/users').then(res => res.json()),
       fetch('/api/custom-fields').then(res => res.json()),
-      fetch('/api/eduzz-analytics').then(res => res.json())
+      fetch('/api/vturb-analytics').then(res => res.json()).catch(() => null)
     ]);
 
     state.leads = leadsResponse || [];
     state.pipelines = pipelinesResponse || {};
     state.users = usersResponse || {};
     state.fields = fieldsResponse || [];
-    
-    if (eduzzResponse && eduzzResponse.success) {
-      state.eduzzData = eduzzResponse;
+    buildContactSalesIndex(state.leads);
+
+    if (vturbResponse && vturbResponse.success) {
+      state.vturbData = vturbResponse;
+      renderVTurbSection(vturbResponse);
     }
     
     if (elements.lastSyncDate) {
@@ -330,7 +608,9 @@ async function loadData() {
     const nowSecs = Math.floor(Date.now() / 1000);
     const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const startOfMonthSecs = Math.floor(startOfMonth.getTime() / 1000);
-    const currentMonthLeads = state.leads.filter(l => l.created_at >= startOfMonthSecs && l.created_at <= nowSecs);
+    const currentMonthLeads = state.leads.filter(l =>
+      FUNIS_COMERCIAIS.includes(l.pipeline_id) && l.created_at >= startOfMonthSecs && l.created_at <= nowSecs
+    );
 
     if (currentMonthLeads.length > 0) {
       setDatePreset('this_month');
@@ -344,11 +624,8 @@ async function loadData() {
       setDatePreset('last_month');
     }
 
+    // applyFilters() dispara fetchEduzzAnalytics(), que renderiza a aba Eduzz
     applyFilters();
-    
-    if (elements.tabEduzz && elements.tabEduzz.classList.contains('active')) {
-      renderEduzzDashboard();
-    }
   } catch (error) {
     console.error('Error loading dashboard data:', error);
     showToast('❌ Erro ao carregar dados do servidor local.', 'danger');
@@ -439,6 +716,20 @@ function getCustomFieldValue(lead, fieldId) {
   return null;
 }
 
+// Extract A/B Variant value from Custom Fields (ID 494249) or Tags
+function getLeadAbVariant(lead) {
+  if (!lead) return null;
+  const cfs = lead.custom_fields_values || [];
+  const abField = cfs.find(f => f.field_id === 494249 || f.field_code === 'AB_VARIANT' || String(f.field_name || '').toLowerCase().includes('variante') || String(f.field_name || '').toLowerCase().includes('ab_variant'));
+  if (abField && abField.values && abField.values[0] && abField.values[0].value) {
+    return abField.values[0].value.trim();
+  }
+  const tags = (lead._embedded?.tags || []).map(t => t.name || '');
+  const abTag = tags.find(t => t.toUpperCase().startsWith('AB_') || t.toUpperCase().startsWith('AB:') || t.toUpperCase().startsWith('VARIANTE:'));
+  if (abTag) return abTag.replace(/^AB_/i, '').replace(/^AB:\s*/i, '').replace(/^Variante:\s*/i, '').trim();
+  return null;
+}
+
 // Map pipeline status IDs to names
 function getStatusName(statusId, pipelineId) {
   if (statusId === 142) return 'Venda ganha';
@@ -477,6 +768,10 @@ function applyFilters() {
   if (state.pipelineId && state.pipelineId !== 'all') {
     const pipeList = String(state.pipelineId).split(',').map(id => parseInt(id.trim())).filter(n => !isNaN(n));
     filtered = filtered.filter(lead => pipeList.includes(lead.pipeline_id));
+  } else {
+    // "Todos os Funis" = apenas funis comerciais.
+    // Exclui Base de Clientes (registro de pagamento) e Leads Antigos.
+    filtered = filtered.filter(lead => FUNIS_COMERCIAIS.includes(lead.pipeline_id));
   }
 
   // 2. Owner Filter
@@ -497,39 +792,12 @@ function applyFilters() {
 
   // Calculate funnel step counts on base filtered set
   const baseFiltered = [...filtered];
-  updateKPIs(baseFiltered);
   updateGraphicFunnel(baseFiltered);
   renderCampaignRankings(baseFiltered);
 
   // 4. Step Filter (if user clicked on a specific funnel stage layer)
   if (state.selectedStep && state.selectedStep !== 'all') {
-    const AGENDADA_IDS = [102599003, 102599807, 104452423];
-    const NOSHOW_IDS = [108291644, 104280663, 104457987];
-    const REALIZADA_IDS = [102599203, 102599811, 104458027];
-    const FOLLOWUP_IDS = [108066768, 109108180];
-    const DOWNSELL_IDS = [108619300];
-
-    filtered = filtered.filter(lead => {
-      const sId = parseInt(lead.status_id);
-      const tags = (lead._embedded?.tags || []).map(t => t.name.toUpperCase());
-      const hasMqlTag = tags.includes('MQL') || tags.includes('QUALIFICADO');
-      
-      const isAgendadaOrHigher = AGENDADA_IDS.includes(sId) || NOSHOW_IDS.includes(sId) || REALIZADA_IDS.includes(sId) || FOLLOWUP_IDS.includes(sId) || DOWNSELL_IDS.includes(sId) || sId === 142;
-      const isNoShow = NOSHOW_IDS.includes(sId);
-      const isRealizadaOrHigher = REALIZADA_IDS.includes(sId) || FOLLOWUP_IDS.includes(sId) || DOWNSELL_IDS.includes(sId) || sId === 142;
-      const isFollowUp = FOLLOWUP_IDS.includes(sId);
-      const isDownsell = DOWNSELL_IDS.includes(sId);
-      const isWon = sId === 142;
-
-      if (state.selectedStep === 'mql') return hasMqlTag || isAgendadaOrHigher;
-      if (state.selectedStep === 'agendada') return isAgendadaOrHigher;
-      if (state.selectedStep === 'noshow') return isNoShow;
-      if (state.selectedStep === 'realizada') return isRealizadaOrHigher;
-      if (state.selectedStep === 'followup') return isFollowUp;
-      if (state.selectedStep === 'downsell') return isDownsell;
-      if (state.selectedStep === 'won') return isWon;
-      return true;
-    });
+    filtered = filtered.filter(lead => FUNNEL.matchesStep(lead, state.selectedStep));
   }
 
   state.filteredLeads = filtered;
@@ -543,6 +811,9 @@ function applyFilters() {
 
   // Load Meta Ads insights for the selected date range
   loadMetaAdsInsights();
+
+  // Eduzz também respeita o período selecionado (no-op se o range não mudou)
+  fetchEduzzAnalytics();
 }
 
 // Render Graphic Pyramid Funnel
@@ -558,49 +829,19 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
   let wonCount = 0;
   let wonRevenue = 0;
 
-  const AGENDADA_IDS = [102599003, 102599807, 104452423];
-  const NOSHOW_IDS = [108291644, 104280663, 104457987];
-  const REALIZADA_IDS = [102599203, 102599811, 104458027];
-  const FOLLOWUP_IDS = [102598995, 102598999, 108066768, 109108180, 102599767, 102599771, 104452415, 104452419];
-  const DOWNSELL_IDS = [108619300];
-
   baseLeads.forEach(lead => {
-    const sId = parseInt(lead.status_id);
-    const tags = (lead._embedded?.tags || []).map(t => t.name.toUpperCase());
-    const hasMqlTag = tags.includes('MQL') || (tags.includes('QUALIFICADO') && lead.pipeline_id !== 13304659);
-    const hasDesqualificado = tags.includes('DESQUALIFICADO') || tags.includes('DISQUALIFIED') || tags.includes('FORA DO PERFIL');
-    const hasDownsellTag = tags.includes('DOWNSELL') || (tags.includes('EBOOK') && lead.pipeline_id !== 13304659);
-    const hasFollowUpTag = tags.includes('FOLLOW UP') || tags.includes('SEM RESPOSTA');
+    const e = FUNNEL.evaluate(lead);
 
-    const isNoShow = NOSHOW_IDS.includes(sId);
-    const isRealizadaOrHigher = REALIZADA_IDS.includes(sId) || sId === 142;
-    const isAgendadaOrHigher = AGENDADA_IDS.includes(sId) || isNoShow || isRealizadaOrHigher;
-    const isFollowUp = FOLLOWUP_IDS.includes(sId) || hasFollowUpTag;
-    const isDownsell = tags.includes('DOWNSELL') || DOWNSELL_IDS.includes(sId) || (hasDownsellTag && lead.pipeline_id !== 13304659) || (hasDesqualificado && !hasMqlTag);
-    const isWon = sId === 142;
-
-    if (isWon) {
+    if (e.isWon) {
       wonCount++;
-      wonRevenue += lead.price || 0;
+      wonRevenue += e.revenue;
     }
-    if (hasMqlTag || isAgendadaOrHigher) {
-      mqlCount++;
-    }
-    if (isAgendadaOrHigher) {
-      agendadaCount++;
-    }
-    if (isNoShow) {
-      noShowCount++;
-    }
-    if (isRealizadaOrHigher) {
-      realizadaCount++;
-    }
-    if (isFollowUp) {
-      followUpCount++;
-    }
-    if (isDownsell) {
-      downsellCount++;
-    }
+    if (e.isMql) mqlCount++;
+    if (e.isEngajado) agendadaCount++;
+    if (e.isNoShow) noShowCount++;
+    if (e.isAvancado) realizadaCount++;
+    if (e.isEmEspera) followUpCount++;
+    if (e.isDownsell) downsellCount++;
   });
 
   const mqlRate = total > 0 ? ((mqlCount / total) * 100).toFixed(1) : '0.0';
@@ -629,14 +870,31 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
   if (elMql) elMql.innerText = mqlCount.toLocaleString('pt-BR');
   if (elMqlPct) elMqlPct.innerText = `${mqlRate}% do total`;
   
-  if (elAgendada) elAgendada.innerText = agendadaCount.toLocaleString('pt-BR');
-  if (elAgendadaPct) elAgendadaPct.innerText = `${agendadaRate}% dos MQLs`;
+  // Rótulos seguem o tipo do funil selecionado: um funil sem reunião
+  // não pode exibir "Reuniões Agendadas"
+  const rot = ROTULOS_FUNIL[FUNNEL.tipoAtual(state.pipelineId)] || ROTULOS_FUNIL.misto;
+  const setLabel = (step, texto) => {
+    const el = document.querySelector(`.funnel-layer[data-step="${step}"] .layer-title`);
+    if (el) el.innerHTML = texto;
+  };
+  setLabel('followup', rot.espera);
+  setLabel('agendada', rot.engajado);
+  setLabel('realizada', rot.avancado);
 
+  if (elAgendada) elAgendada.innerText = agendadaCount.toLocaleString('pt-BR');
+  if (elAgendadaPct) elAgendadaPct.innerText = `${agendadaRate}% ${rot.subEngajado}`;
+
+  // Ramo de No Show só existe em funil com reunião
+  const noShowLayer = document.querySelector('.funnel-layer[data-step="noshow"]');
+  if (noShowLayer) {
+    const row = noShowLayer.closest('.funnel-branch-row') || noShowLayer;
+    row.style.display = rot.mostrarNoShow ? '' : 'none';
+  }
   if (elNoShow) elNoShow.innerText = noShowCount.toLocaleString('pt-BR');
   if (elNoShowPct) elNoShowPct.innerText = `${noShowRate}% ausência`;
 
   if (elRealizada) elRealizada.innerText = realizadaCount.toLocaleString('pt-BR');
-  if (elRealizadaPct) elRealizadaPct.innerText = `${realizadaRate}% show-up`;
+  if (elRealizadaPct) elRealizadaPct.innerText = `${realizadaRate}% ${rot.subAvancado}`;
 
   if (elFollowUp) elFollowUp.innerText = followUpCount.toLocaleString('pt-BR');
   if (elFollowUpPct) elFollowUpPct.innerText = `${((followUpCount / (total || 1)) * 100).toFixed(1)}% das entradas`;
@@ -649,13 +907,10 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
     ? wonRevenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
     : `${wonRate}% conv. final`;
 
+  // Funnel pyramid is ALWAYS visible for ALL tabs
   const graphicCard = document.querySelector('.graphic-funnel-card');
   if (graphicCard) {
-    if (state.pipelineId === '13304583') {
-      graphicCard.style.display = 'block';
-    } else {
-      graphicCard.style.display = 'none';
-    }
+    graphicCard.style.display = 'block';
   }
 
   const drop1 = document.getElementById('dropPct1');
@@ -668,102 +923,151 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
   if (drop3) drop3.innerText = `${realizadaRate}%`;
   if (drop4) drop4.innerText = `${wonRate}%`;
 
+  // Texto dos indicadores de queda também acompanha o tipo de funil
+  const setDropLabel = (id, texto) => {
+    const el = document.getElementById(id);
+    const span = el && el.querySelector('span');
+    const strong = el && el.querySelector('strong');
+    if (span && strong) span.childNodes[0].nodeValue = texto + ' ';
+  };
+  setDropLabel('drop2', rot.dropEngajado);
+  setDropLabel('drop3', rot.dropAvancado);
+
   const elTitle = document.getElementById('currentFunnelTitle');
   if (elTitle) {
-    if (state.pipelineId === '13304583') elTitle.innerText = 'Funil de Conversão Comercial — Mentoria MLFP';
-    else if (state.pipelineId === '13304659') elTitle.innerText = 'Painel de Rastreamento & Leads — Komando KO Inbound';
-    else if (state.pipelineId === '14173256') elTitle.innerText = 'Painel de Rastreamento & Leads — Komando KOP Inbound';
-    else if (state.pipelineId === '13537971') elTitle.innerText = 'Painel de Rastreamento & Leads — Komando KO Ebooks';
-    else elTitle.innerText = 'Painel de Rastreamento & Leads — Visão Geral';
+    const titulos = {
+      [PIPELINES.MLFP]: 'Funil Comercial & Leads — Mentoria MLFP',
+      [PIPELINES.KO_INBOUND]: 'Funil Comercial & Leads — Komando (KO Inbound)',
+      [PIPELINES.KOP]: 'Funil Comercial & Leads — Komando KOP Inbound',
+      [PIPELINES.KOR]: 'Funil Comercial & Leads — KOR Inbound',
+      [PIPELINES.KO_EBOOKS]: 'Funil Comercial & Leads — Komando KO Ebooks',
+      [PIPELINES.SOCIAL_SELLING]: 'Funil Comercial & Leads — Social Selling (Instagram)',
+      [PIPELINES.RECUPERACAO]: 'Funil Comercial & Leads — Funil de Recuperação'
+    };
+    elTitle.innerText = titulos[state.pipelineId] || 'Funil Comercial & Leads — Todos os Funis Comerciais';
+  }
+
+  const elSub = document.getElementById('currentFunnelSub');
+  if (elSub) {
+    const subs = {
+      reuniao: 'Fluxo: Captura ➔ Follow Up ➔ MQL / Downsell ➔ Agendamento ➔ (No Show) ➔ Reunião ➔ Fechamento',
+      negociacao: 'Fluxo: Captura ➔ MQL ➔ Contato Iniciado ➔ Negociação / Oferta ➔ Fechamento (funil sem reunião)',
+      recuperacao: 'Fluxo: Pagamento Pendente (Boleto / Pix / Carrinho) ➔ Contato ➔ Negociação ➔ Venda Recuperada',
+      misto: 'Visão consolidada de funis com semânticas diferentes — etapas exibidas de forma genérica'
+    };
+    elSub.innerText = subs[FUNNEL.tipoAtual(state.pipelineId)] || subs.misto;
   }
 }
 
-// Render 6 Direct Campaign Ranking Lists
+if (!state.rankingType) state.rankingType = 'campaign';
+
+function switchRankingType(type) {
+  state.rankingType = type;
+  const btnCampaigns = document.getElementById('btnRankCampaigns');
+  const btnCreatives = document.getElementById('btnRankCreatives');
+  
+  if (btnCampaigns && btnCreatives) {
+    if (type === 'campaign') {
+      btnCampaigns.classList.add('active');
+      btnCreatives.classList.remove('active');
+    } else {
+      btnCreatives.classList.add('active');
+      btnCampaigns.classList.remove('active');
+    }
+  }
+  
+  renderCampaignRankings();
+}
+
+// Render 6 Direct Campaign / Creative Ranking Lists
 function renderCampaignRankings(baseLeads = state.filteredLeads) {
-  const AGENDADA_IDS = [102599003, 102599807, 104452423];
-  const NOSHOW_IDS = [108291644, 104280663, 104457987];
-  const REALIZADA_IDS = [102599203, 102599811, 104458027];
-  const FOLLOWUP_IDS = [108066768, 109108180];
-  const DOWNSELL_IDS = [108619300];
+  const groupType = state.rankingType === 'creative' ? 'content' : 'campaign';
+  const defaultLabel = state.rankingType === 'creative' ? 'Direto / Sem Criativo' : 'Direto / Sem UTM';
 
   const campaignMap = {};
 
   baseLeads.forEach(lead => {
-    let camp = getUTMValue(lead, state.marketingGroup) || 'Direto / Sem UTM';
-    if (!campaignMap[camp]) {
-      campaignMap[camp] = { leads: 0, mql: 0, agendada: 0, noShow: 0, realizada: 0, followUp: 0, downsell: 0, won: 0 };
+    let cleanVal = getUTMValue(lead, groupType) || defaultLabel;
+    
+    if (!campaignMap[cleanVal]) {
+      campaignMap[cleanVal] = { leads: 0, mql: 0, agendada: 0, noShow: 0, realizada: 0, followUp: 0, downsell: 0, won: 0 };
     }
 
-    campaignMap[camp].leads++;
+    campaignMap[cleanVal].leads++;
 
-    const sId = parseInt(lead.status_id);
-    const tags = (lead._embedded?.tags || []).map(t => t.name.toUpperCase());
-    const hasMqlTag = tags.includes('MQL') || tags.includes('QUALIFICADO');
-    const isAgendadaOrHigher = AGENDADA_IDS.includes(sId) || NOSHOW_IDS.includes(sId) || REALIZADA_IDS.includes(sId) || FOLLOWUP_IDS.includes(sId) || DOWNSELL_IDS.includes(sId) || sId === 142;
-    const isNoShow = NOSHOW_IDS.includes(sId);
-    const isRealizadaOrHigher = REALIZADA_IDS.includes(sId) || FOLLOWUP_IDS.includes(sId) || DOWNSELL_IDS.includes(sId) || sId === 142;
-    const isFollowUp = FOLLOWUP_IDS.includes(sId);
-    const isDownsell = DOWNSELL_IDS.includes(sId);
-    const isWon = sId === 142;
-
-    if (hasMqlTag || isAgendadaOrHigher) campaignMap[camp].mql++;
-    if (isAgendadaOrHigher) campaignMap[camp].agendada++;
-    if (isNoShow) campaignMap[camp].noShow++;
-    if (isRealizadaOrHigher) campaignMap[camp].realizada++;
-    if (isFollowUp) campaignMap[camp].followUp++;
-    if (isDownsell) campaignMap[camp].downsell++;
-    if (isWon) campaignMap[camp].won++;
+    const e = FUNNEL.evaluate(lead);
+    if (e.isMql) campaignMap[cleanVal].mql++;
+    if (e.isEngajado) campaignMap[cleanVal].agendada++;
+    if (e.isNoShow) campaignMap[cleanVal].noShow++;
+    if (e.isAvancado) campaignMap[cleanVal].realizada++;
+    if (e.isEmEspera) campaignMap[cleanVal].followUp++;
+    if (e.isDownsell) campaignMap[cleanVal].downsell++;
+    if (e.isWon) campaignMap[cleanVal].won++;
   });
 
-  const campaignsArray = Object.keys(campaignMap).map(name => ({
+  const itemsArray = Object.keys(campaignMap).map(name => ({
     name,
     ...campaignMap[name]
   }));
 
-  function renderList(elementId, sortKey, unitLabel) {
+  function renderList(elementId, sortKey, unitLabel, stepKey) {
     const listEl = document.getElementById(elementId);
     if (!listEl) return;
 
-    const sorted = [...campaignsArray].sort((a, b) => b[sortKey] - a[sortKey]).slice(0, 5);
+    const sorted = [...itemsArray].sort((a, b) => b[sortKey] - a[sortKey]).slice(0, 5);
     if (sorted.length === 0 || sorted[0][sortKey] === 0) {
       listEl.innerHTML = '<li class="text-muted text-center py-2" style="font-size:0.8rem;">Nenhum lead nesta etapa</li>';
       return;
     }
 
+    const itemType = state.rankingType || 'campaign';
+
+    // Nome da campanha vai em data-attribute, não dentro de onclick="".
+    // Nomes de campanha vêm do CRM e podem conter aspas, < ou > — no onclick
+    // isso quebrava o handler e corrompia a lista.
     listEl.innerHTML = sorted.map(item => `
-      <li class="ranking-item">
-        <span class="ranking-item-name" title="${item.name}">${item.name}</span>
-        <span class="ranking-item-val">${item[sortKey].toLocaleString('pt-BR')} ${unitLabel}</span>
-      </li>
-    `).join('');
+        <li class="ranking-item clickable-rank-item"
+            data-step="${escapeHTML(stepKey)}"
+            data-tipo="${escapeHTML(itemType)}"
+            data-valor="${escapeHTML(item.name)}"
+            title="Clique para ver os ${item[sortKey]} leads e o nome completo">
+          <span class="ranking-item-name" title="${escapeHTML(item.name)}">${escapeHTML(item.name)}</span>
+          <span class="ranking-item-val">${item[sortKey].toLocaleString('pt-BR')} ${escapeHTML(unitLabel)}</span>
+        </li>
+      `).join('');
+
+    if (!listEl.dataset.delegado) {
+      listEl.dataset.delegado = '1';
+      listEl.addEventListener('click', e => {
+        const li = e.target.closest('.clickable-rank-item');
+        if (!li) return;
+        openLeadModal(li.dataset.step, li.dataset.tipo, li.dataset.valor);
+      });
+    }
   }
 
-  renderList('rankLeadsList', 'leads', 'leads');
-  renderList('rankMqlList', 'mql', 'MQLs');
-  renderList('rankAgendadaList', 'agendada', 'agendadas');
-  renderList('rankRealizadaList', 'realizada', 'feitas');
-  renderList('rankFollowUpList', 'followUp', 'follow-ups');
-  renderList('rankDownsellList', 'downsell', 'downsells');
+  renderList('rankLeadsList', 'leads', 'leads', 'all');
+  renderList('rankMqlList', 'mql', 'MQLs', 'mql');
+  renderList('rankAgendadaList', 'agendada', 'agendadas', 'agendada');
+  renderList('rankRealizadaList', 'realizada', 'feitas', 'realizada');
+  renderList('rankFollowUpList', 'followUp', 'follow-ups', 'followup');
+  renderList('rankDownsellList', 'downsell', 'downsells', 'downsell');
 }
 
 // Modal Lead Details Functions
 let currentModalStepLeads = [];
 
-function openLeadModal(stepKey) {
+function openLeadModal(stepKey, filterType = null, filterValue = null) {
   const modal = document.getElementById('leadDetailsModal');
   if (!modal) return;
 
-  const AGENDADA_IDS = [102599003, 102599807, 104452423];
-  const NOSHOW_IDS = [108291644, 104280663, 104457987];
-  const REALIZADA_IDS = [102599203, 102599811, 104458027];
-  const FOLLOWUP_IDS = [102598995, 102598999, 108066768, 109108180, 102599767, 102599771, 104452415, 104452419];
-  const DOWNSELL_IDS = [108619300];
-
   let baseLeads = [...state.leads];
 
-  if (state.pipelineId !== 'all') {
-    const pId = parseInt(state.pipelineId);
-    baseLeads = baseLeads.filter(lead => lead.pipeline_id === pId);
+  if (state.pipelineId && state.pipelineId !== 'all') {
+    const pipeList = String(state.pipelineId).split(',').map(id => parseInt(id.trim())).filter(n => !isNaN(n));
+    baseLeads = baseLeads.filter(lead => pipeList.includes(lead.pipeline_id));
+  } else {
+    baseLeads = baseLeads.filter(lead => FUNIS_COMERCIAIS.includes(lead.pipeline_id));
   }
   if (state.ownerId !== 'all') {
     const oId = parseInt(state.ownerId);
@@ -778,49 +1082,76 @@ function openLeadModal(stepKey) {
     baseLeads = baseLeads.filter(lead => lead.created_at >= fromSecs);
   }
 
-  let stepLeads = baseLeads.filter(lead => {
-    const sId = parseInt(lead.status_id);
-    const tags = (lead._embedded?.tags || []).map(t => t.name.toUpperCase());
-    const hasMqlTag = tags.includes('MQL') || (tags.includes('QUALIFICADO') && lead.pipeline_id !== 13304659);
-    const hasDesqualificado = tags.includes('DESQUALIFICADO') || tags.includes('DISQUALIFIED') || tags.includes('FORA DO PERFIL');
-    const hasDownsellTag = tags.includes('DOWNSELL') || (tags.includes('EBOOK') && lead.pipeline_id !== 13304659);
-    const hasFollowUpTag = tags.includes('FOLLOW UP') || tags.includes('SEM RESPOSTA');
-    
-    const isNoShow = NOSHOW_IDS.includes(sId);
-    const isRealizadaOrHigher = REALIZADA_IDS.includes(sId) || sId === 142;
-    const isAgendadaOrHigher = AGENDADA_IDS.includes(sId) || isNoShow || isRealizadaOrHigher;
-    const isFollowUp = FOLLOWUP_IDS.includes(sId) || hasFollowUpTag;
-    const isDownsell = tags.includes('DOWNSELL') || DOWNSELL_IDS.includes(sId) || (hasDownsellTag && lead.pipeline_id !== 13304659) || (hasDesqualificado && !hasMqlTag);
-    const isWon = sId === 142;
+  let stepLeads = baseLeads.filter(lead => FUNNEL.matchesStep(lead, stepKey));
 
-    if (stepKey === 'mql') return hasMqlTag || isAgendadaOrHigher;
-    if (stepKey === 'agendada') return isAgendadaOrHigher;
-    if (stepKey === 'noshow') return isNoShow;
-    if (stepKey === 'realizada') return isRealizadaOrHigher;
-    if (stepKey === 'followup') return isFollowUp;
-    if (stepKey === 'downsell') return isDownsell;
-    if (stepKey === 'won') return isWon;
-    return true;
-  });
+  // Filter by specific campaign or creative if passed
+  if (filterType && filterValue) {
+    const groupType = filterType === 'creative' ? 'content' : 'campaign';
+    stepLeads = stepLeads.filter(lead => {
+      const val = getUTMValue(lead, groupType);
+      return val === filterValue || (filterValue.includes('Sem ') && val.includes('Sem '));
+    });
+  }
 
   currentModalStepLeads = stepLeads;
 
+  // Títulos do modal seguem o mesmo tipo de funil da pirâmide
+  const tipo = FUNNEL.tipoAtual(state.pipelineId);
+  const porTipo = {
+    reuniao: {
+      followup: 'Follow Up (Primeiros Contatos Sem Resposta)',
+      agendada: '3. Reuniões Agendadas (Confirmadas pelo SDR)',
+      realizada: '4. Reuniões Realizadas (Show-Up Closer)'
+    },
+    negociacao: {
+      followup: 'Aguardando Retorno',
+      agendada: '3. Contato Iniciado',
+      realizada: '4. Em Negociação / Oferta Feita'
+    },
+    recuperacao: {
+      followup: 'Pagamento Pendente (Boleto / Pix / Carrinho)',
+      agendada: '3. Contato Iniciado',
+      realizada: '4. Em Negociação'
+    },
+    misto: {
+      followup: 'Aguardando Retorno / Follow Up',
+      agendada: '3. Contato Ativo (Reunião ou Negociação Iniciada)',
+      realizada: '4. Estágio Avançado'
+    }
+  };
+  const t = porTipo[tipo] || porTipo.misto;
+
   const stepTitles = {
     all: { title: '1. Entradas na Base (Todos os Leads)', icon: '📥' },
-    followup: { title: 'Follow Up (Primeiros Contatos Sem Resposta)', icon: '⏳' },
+    followup: { title: t.followup, icon: '⏳' },
     mql: { title: '2. Qualificados (MQL)', icon: '🔥' },
     downsell: { title: 'Downsell (Leads Desqualificados)', icon: '🔄' },
-    agendada: { title: '3. Reuniões Agendadas (Confirmadas pelo SDR)', icon: '📅' },
+    agendada: { title: t.agendada, icon: '📅' },
     noshow: { title: 'No Show (Ausências na Reunião)', icon: '⚠️' },
-    realizada: { title: '4. Reuniões Realizadas (Show-Up Closer)', icon: '🤝' },
-    won: { title: '5. Vendas Ganhas (Mentoria Fechada)', icon: '🏆' }
+    realizada: { title: t.realizada, icon: '🤝' },
+    won: { title: '5. Vendas Ganhas', icon: '🏆' }
   };
 
   const info = stepTitles[stepKey] || { title: 'Leads na Etapa', icon: '🔍' };
-  document.getElementById('modalStepTitle').innerText = info.title;
-  document.getElementById('modalStepIcon').innerText = info.icon;
+  let fullTitle = info.title;
+  let fullSub = 'Exibindo leads individuais correspondentes a esta etapa do funil';
+
+  if (filterType && filterValue) {
+    const labelType = filterType === 'creative' ? 'Criativo' : 'Campanha';
+    const cleanStepName = info.title.split('(')[0].replace(/^[0-9.]+\s*/, '').trim();
+    fullTitle = `${cleanStepName} — ${labelType}: ${filterValue}`;
+    fullSub = `Filtrado especificamente por ${labelType.toLowerCase()}: "${filterValue}" (${stepLeads.length} leads encontrados)`;
+  }
+
+  document.getElementById('modalStepTitle').innerText = fullTitle;
+  document.getElementById('modalStepIcon').innerText = filterType ? (filterType === 'creative' ? '🎨' : '📢') : info.icon;
+  document.getElementById('modalStepSubtitle').innerText = fullSub;
   document.getElementById('modalLeadCount').innerText = `${stepLeads.length} leads`;
   document.getElementById('modalSearchInput').value = '';
+
+  // Clean up any old ad library button if present
+  let existingAdBtn = document.getElementById('modalAdLibraryBtn');
+  if (existingAdBtn) existingAdBtn.remove();
 
   renderModalLeadList(stepLeads);
 
@@ -830,6 +1161,24 @@ function openLeadModal(stepKey) {
 function closeLeadModal() {
   const modal = document.getElementById('leadDetailsModal');
   if (modal) modal.style.display = 'none';
+}
+
+function getLeadSDR(lead) {
+  const cfs = lead.custom_fields_values || [];
+  const sdrField = cfs.find(f => f.field_id === 491903 || (f.field_name && f.field_name.toUpperCase() === 'SDR'));
+  if (sdrField && sdrField.values && sdrField.values[0] && sdrField.values[0].value) {
+    return String(sdrField.values[0].value).trim();
+  }
+  return getUserName(lead.responsible_user_id) || 'Sem SDR';
+}
+
+function getLeadCloser(lead) {
+  const cfs = lead.custom_fields_values || [];
+  const closerField = cfs.find(f => f.field_id === 491901 || (f.field_name && f.field_name.toUpperCase() === 'CLOSER'));
+  if (closerField && closerField.values && closerField.values[0] && closerField.values[0].value) {
+    return String(closerField.values[0].value).trim();
+  }
+  return getUserName(lead.responsible_user_id) || 'Sem Closer';
 }
 
 if (!state.contactsCache) state.contactsCache = {};
@@ -911,11 +1260,14 @@ function renderModalLeadList(leadsToRender) {
     const contactName = getLeadContactValue(lead, 'name');
     const phone = getLeadContactValue(lead, 'phone') || 'Sem Telefone';
     const email = getLeadContactValue(lead, 'email') || 'Sem E-mail';
+    const sdrName = getLeadSDR(lead);
+    const closerName = getLeadCloser(lead);
     const cleanPhone = phone.replace(/\D/g, '');
     const waLink = cleanPhone ? `https://wa.me/${cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone}` : '#';
 
     const campaign = getUTMValue(lead, 'campaign') || 'Sem UTM';
     const creative = getUTMValue(lead, 'content') || 'Sem Criativo';
+    const abVariant = getLeadAbVariant(lead);
     const dateStr = lead.created_at ? new Date(lead.created_at * 1000).toLocaleDateString('pt-BR') : '-';
     const ownerName = getUserName(lead.responsible_user_id);
     const statusName = getStatusName(lead.status_id, lead.pipeline_id);
@@ -924,130 +1276,54 @@ function renderModalLeadList(leadsToRender) {
     const displayName = contactName ? `${contactName}` : (lead.name || 'Lead sem nome');
     const subtitleName = contactName && lead.name && contactName !== lead.name ? `Lead: ${lead.name} · ID: ${lead.id}` : `ID: ${lead.id}`;
 
+    const saleStatus = getLeadSaleStatus(lead);
+    const saleBadgeHTML = saleStatus.isWon
+      ? `<span class="badge" style="background:linear-gradient(135deg, #10b981, #059669); color:#ffffff; font-weight:800; padding:0.3rem 0.6rem; border-radius:6px; font-size:0.75rem; box-shadow:0 2px 6px rgba(16,185,129,0.35);">🏆 Venda Eduzz (${formatBRL(saleStatus.price)})</span>`
+      : `<span class="badge" style="background:rgba(59,130,246,0.12); color:#2563eb; font-weight:700; padding:0.25rem 0.55rem; border-radius:6px; font-size:0.75rem;">📥 Lead Capturado</span>`;
+
+    const abBadgeHTML = abVariant
+      ? `<div style="margin-top:3px;"><span class="badge" style="background:rgba(168,85,247,0.14); color:#9333ea; font-size:0.72rem; font-weight:800; border:1px solid rgba(168,85,247,0.3);">⚡ LP: ${escapeHTML(abVariant)}</span></div>`
+      : '';
+
+    // Todo texto vindo do CRM passa por escapeHTML: nome de contato, campanha
+    // e criativo são digitados por pessoas e já quebravam a tabela com aspas
     return `
       <tr>
         <td>
-          <div style="font-weight:700; color:var(--color-slate-900);">${displayName}</div>
-          <div style="font-size:0.75rem; color:var(--color-slate-500);">${subtitleName}</div>
+          <div style="font-weight:700; color:var(--color-slate-900);">${escapeHTML(displayName)}</div>
+          <div style="font-size:0.75rem; color:var(--color-slate-500);">${escapeHTML(subtitleName)}</div>
         </td>
         <td>
-          ${phone !== 'Sem Telefone' 
-            ? `<a href="${waLink}" target="_blank" style="color:#10b981; font-weight:700; text-decoration:none;">📱 ${phone}</a>`
+          ${phone !== 'Sem Telefone'
+            ? `<a href="${escapeHTML(waLink)}" target="_blank" rel="noopener" style="color:#10b981; font-weight:700; text-decoration:none;">📱 ${escapeHTML(phone)}</a>`
             : '<span class="text-muted">Sem telefone</span>'
           }
         </td>
-        <td style="font-size:0.8rem;">${email !== 'Sem E-mail' ? `<a href="mailto:${email}" style="color:var(--color-primary); text-decoration:none;">📧 ${email}</a>` : '<span class="text-muted">Sem e-mail</span>'}</td>
+        <td style="font-size:0.8rem;">${email !== 'Sem E-mail' ? `<a href="mailto:${encodeURIComponent(email)}" style="color:var(--color-primary); text-decoration:none;">📧 ${escapeHTML(email)}</a>` : '<span class="text-muted">Sem e-mail</span>'}</td>
+        <td><span class="badge" style="background:rgba(59,130,246,0.12); color:#2563eb; font-size:0.75rem; font-weight:700;">📞 ${escapeHTML(sdrName)}</span></td>
+        <td><span class="badge" style="background:rgba(139,92,246,0.12); color:#7c3aed; font-size:0.75rem; font-weight:700;">🤝 ${escapeHTML(closerName)}</span></td>
+        <td>${saleBadgeHTML}</td>
         <td>${dateStr}</td>
         <td>
-          <div style="font-weight:700; font-size:0.8rem; color:var(--color-primary);">${campaign}</div>
-          <div style="font-size:0.72rem; color:var(--color-slate-500);">Criativo: <strong>${creative}</strong></div>
+          <div style="font-weight:700; font-size:0.8rem; color:var(--color-primary);">${escapeHTML(campaign)}</div>
+          <div style="font-size:0.72rem; color:var(--color-slate-500);">Criativo: <strong>${escapeHTML(creative)}</strong></div>
+          ${abBadgeHTML}
         </td>
-        <td>${ownerName}</td>
-        <td><span class="badge" style="background:rgba(226,232,240,0.8); font-size:0.75rem;">${statusName}</span></td>
+        <td>${escapeHTML(ownerName)}</td>
+        <td><span class="badge" style="background:rgba(226,232,240,0.8); font-size:0.75rem;">${escapeHTML(statusName)}</span></td>
         <td class="text-center">
-          <a href="${kommoLink}" target="_blank" class="btn btn-sm btn-outline" style="padding:0.25rem 0.6rem; font-size:0.75rem;">🔗 CRM</a>
+          <a href="${kommoLink}" target="_blank" rel="noopener" class="btn btn-sm btn-outline" style="padding:0.25rem 0.6rem; font-size:0.75rem;">🔗 CRM</a>
         </td>
       </tr>
     `;
   }).join('');
 }
 
-// Update Funnel Header Navigation & KPIs
-function updateKPIs(baseLeads = state.filteredLeads) {
-  const total = baseLeads.length;
-  
-  let active = 0;
-  let won = 0;
-  let lost = 0;
-  let wonRevenue = 0;
-  let mqlCount = 0;
-  let agendadaCount = 0;
-  let realizadaCount = 0;
+// updateKPIs() foi removida: os 11 elementos que ela alimentava
+// (funnelVal*, metric*) não existem mais no HTML — foram substituídos
+// pela pirâmide visual. A função era uma quarta cópia divergente da
+// lógica de etapas, computando tudo para descartar em seguida.
 
-  const AGENDADA_IDS = [102599003, 102599807, 104452423];
-  const REALIZADA_IDS = [102599203, 102599811, 104458027];
-
-  baseLeads.forEach(lead => {
-    const sId = parseInt(lead.status_id);
-    const tags = (lead._embedded?.tags || []).map(t => t.name.toUpperCase());
-    const hasMqlTag = tags.includes('MQL') || tags.includes('QUALIFICADO');
-
-    const isAgendadaOrHigher = AGENDADA_IDS.includes(sId) || REALIZADA_IDS.includes(sId) || sId === 142;
-    const isRealizadaOrHigher = REALIZADA_IDS.includes(sId) || sId === 142;
-    const isWon = sId === 142;
-    const isLost = sId === 143;
-
-    if (isWon) {
-      won++;
-      wonRevenue += lead.price || 0;
-    } else if (isLost) {
-      lost++;
-    } else {
-      active++;
-    }
-
-    if (hasMqlTag || isAgendadaOrHigher) {
-      mqlCount++;
-    }
-    if (isAgendadaOrHigher) {
-      agendadaCount++;
-    }
-    if (isRealizadaOrHigher) {
-      realizadaCount++;
-    }
-  });
-
-  const mqlRate = total > 0 ? ((mqlCount / total) * 100).toFixed(1) : '0.0';
-  const agendadaRate = mqlCount > 0 ? ((agendadaCount / mqlCount) * 100).toFixed(1) : '0.0';
-  const realizadaRate = agendadaCount > 0 ? ((realizadaCount / agendadaCount) * 100).toFixed(1) : '0.0';
-  const wonRate = total > 0 ? ((won / total) * 100).toFixed(1) : '0.0';
-
-  // Update Funnel Navigation Menu Header Cards
-  const elValLeads = document.getElementById('funnelValLeads');
-  const elSubLeads = document.getElementById('funnelSubLeads');
-  if (elValLeads) elValLeads.innerText = total.toLocaleString('pt-BR');
-  if (elSubLeads) elSubLeads.innerText = `${active.toLocaleString('pt-BR')} ativos no CRM`;
-
-  const elValMql = document.getElementById('funnelValMql');
-  const elSubMql = document.getElementById('funnelSubMql');
-  const elFillMql = document.getElementById('funnelFillMql');
-  if (elValMql) elValMql.innerText = mqlCount.toLocaleString('pt-BR');
-  if (elSubMql) elSubMql.innerText = `${mqlRate}% do total`;
-  if (elFillMql) elFillMql.style.width = `${Math.min(parseFloat(mqlRate), 100)}%`;
-
-  const elValAgendada = document.getElementById('funnelValAgendada');
-  const elSubAgendada = document.getElementById('funnelSubAgendada');
-  const elFillAgendada = document.getElementById('funnelFillAgendada');
-  if (elValAgendada) elValAgendada.innerText = agendadaCount.toLocaleString('pt-BR');
-  if (elSubAgendada) elSubAgendada.innerText = `${agendadaRate}% dos MQLs`;
-  if (elFillAgendada) elFillAgendada.style.width = `${Math.min(parseFloat(agendadaRate), 100)}%`;
-
-  const elValRealizada = document.getElementById('funnelValRealizada');
-  const elSubRealizada = document.getElementById('funnelSubRealizada');
-  const elFillRealizada = document.getElementById('funnelFillRealizada');
-  if (elValRealizada) elValRealizada.innerText = realizadaCount.toLocaleString('pt-BR');
-  if (elSubRealizada) elSubRealizada.innerText = `${realizadaRate}% show-up`;
-  if (elFillRealizada) elFillRealizada.style.width = `${Math.min(parseFloat(realizadaRate), 100)}%`;
-
-  const elValWon = document.getElementById('funnelValWon');
-  const elSubWon = document.getElementById('funnelSubWon');
-  const elFillWon = document.getElementById('funnelFillWon');
-  if (elValWon) elValWon.innerText = won.toLocaleString('pt-BR');
-  if (elSubWon) elSubWon.innerText = wonRevenue > 0 
-    ? wonRevenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-    : `${wonRate}% conv. final`;
-  if (elFillWon) elFillWon.style.width = `${Math.min(parseFloat(wonRate), 100)}%`;
-
-  // Update legacy KPI elements if present
-  if (elements.metricTotalLeads) elements.metricTotalLeads.innerText = total.toLocaleString('pt-BR');
-  if (elements.metricActiveLeads) elements.metricActiveLeads.innerText = `${active.toLocaleString('pt-BR')} ativos`;
-  if (elements.metricWonCount) elements.metricWonCount.innerText = won.toLocaleString('pt-BR');
-  if (elements.metricWonValue) elements.metricWonValue.innerText = wonRevenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  if (elements.metricLostCount) elements.metricLostCount.innerText = lost.toLocaleString('pt-BR');
-  if (elements.metricLostRate) elements.metricLostRate.innerText = `${((lost / (won + lost || 1)) * 100).toFixed(1)}% de perda`;
-  if (elements.metricConversionRate) elements.metricConversionRate.innerText = `${((won / (won + lost || 1)) * 100).toFixed(1)}%`;
-  if (elements.metricConversionBase) elements.metricConversionBase.innerText = `Win Rate: ${wonRate}% do total`;
-}
 
 // Render Sales Funnel / Progression Chart
 function renderFunnelChart() {
@@ -1354,10 +1630,11 @@ function renderCampaignTable() {
     }
     
     mktData[val].leads++;
-    if (lead.status_id === 142) {
+    const e = FUNNEL.evaluate(lead);
+    if (e.isWon) {
       mktData[val].won++;
-      mktData[val].revenue += lead.price || 0;
-    } else if (lead.status_id === 143) {
+      mktData[val].revenue += e.revenue;
+    } else if (e.isLost) {
       mktData[val].lost++;
     }
   });
@@ -1411,7 +1688,7 @@ function renderCampaignTable() {
   });
 }
 
-// Render Team performance cards
+// Render Team, SDR, and Closer performance tables
 function renderTeamPerformance() {
   const teamStats = {};
   const usersList = state.users._embedded?.users || [];
@@ -1420,62 +1697,139 @@ function renderTeamPerformance() {
     teamStats[u.id] = { name: u.name, leads: 0, won: 0, lost: 0, revenue: 0 };
   });
 
+  const sdrStats = {};
+  const closerStats = {};
+
   state.filteredLeads.forEach(lead => {
     const owner = lead.responsible_user_id;
     if (!teamStats[owner]) {
       teamStats[owner] = { name: getUserName(owner), leads: 0, won: 0, lost: 0, revenue: 0 };
     }
-    
+
+    const e = FUNNEL.evaluate(lead);
+
     teamStats[owner].leads++;
-    if (lead.status_id === 142) {
+    if (e.isWon) {
       teamStats[owner].won++;
-      teamStats[owner].revenue += lead.price || 0;
-    } else if (lead.status_id === 143) {
+      teamStats[owner].revenue += e.revenue;
+    } else if (e.isLost) {
       teamStats[owner].lost++;
+    }
+
+    const sdrName = getLeadSDR(lead);
+    const closerName = getLeadCloser(lead);
+
+    // SDR Stats
+    if (sdrName) {
+      if (!sdrStats[sdrName]) {
+        sdrStats[sdrName] = { total: 0, mql: 0, agendadas: 0, realizadas: 0, won: 0 };
+      }
+      sdrStats[sdrName].total++;
+      if (e.isMql) sdrStats[sdrName].mql++;
+      if (e.isEngajado) sdrStats[sdrName].agendadas++;
+      if (e.isAvancado) sdrStats[sdrName].realizadas++;
+      if (e.isWon) sdrStats[sdrName].won++;
+    }
+
+    // Closer Stats
+    if (closerName) {
+      if (!closerStats[closerName]) {
+        closerStats[closerName] = { agendadas: 0, realizadas: 0, won: 0, revenue: 0 };
+      }
+      if (e.isEngajado) closerStats[closerName].agendadas++;
+      if (e.isAvancado) closerStats[closerName].realizadas++;
+      if (e.isWon) {
+        closerStats[closerName].won++;
+        closerStats[closerName].revenue += e.revenue;
+      }
     }
   });
 
-  elements.teamCardsContainer.innerHTML = '';
+  // Render Team Owner Cards
+  if (elements.teamCardsContainer) {
+    elements.teamCardsContainer.innerHTML = '';
+    const teamList = Object.entries(teamStats).map(([id, stats]) => {
+      const closedCount = stats.won + stats.lost;
+      const winRate = closedCount > 0 ? (stats.won / closedCount) * 100 : 0;
+      return { id, ...stats, winRate };
+    }).sort((a, b) => b.revenue - a.revenue);
 
-  const teamList = Object.entries(teamStats).map(([id, stats]) => {
-    const closedCount = stats.won + stats.lost;
-    const winRate = closedCount > 0 ? (stats.won / closedCount) * 100 : 0;
-    return { id, ...stats, winRate };
-  }).sort((a, b) => b.revenue - a.revenue);
+    teamList.forEach(member => {
+      const initials = member.name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
+      const card = document.createElement('div');
+      card.className = 'team-member-card';
+      const revenueFormatted = member.revenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-  teamList.forEach(member => {
-    const initials = member.name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
-    const card = document.createElement('div');
-    card.className = 'team-member-card';
-    
-    const revenueFormatted = member.revenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+      card.innerHTML = `
+        <div class="member-info">
+          <div class="member-avatar">${initials}</div>
+          <div class="member-details">
+            <h4>${escapeHTML(member.name)}</h4>
+            <span>${member.leads.toLocaleString('pt-BR')} leads atribuídos</span>
+          </div>
+        </div>
+        <div class="member-stats">
+          <div class="member-stat-item">
+            <span class="member-stat-label">Ganhos</span>
+            <span class="member-stat-val text-success">${member.won.toLocaleString('pt-BR')}</span>
+          </div>
+          <div class="member-stat-item">
+            <span class="member-stat-label">Taxa Win</span>
+            <span class="member-stat-val" style="color: var(--color-primary);">${member.winRate.toFixed(1)}%</span>
+          </div>
+          <div class="member-stat-item">
+            <span class="member-stat-label">Vendas</span>
+            <span class="member-stat-val" style="font-weight: 800; color: var(--text-main);">${revenueFormatted}</span>
+          </div>
+        </div>
+      `;
+      elements.teamCardsContainer.appendChild(card);
+    });
+  }
 
-    card.innerHTML = `
-      <div class="member-info">
-        <div class="member-avatar">${initials}</div>
-        <div class="member-details">
-          <h4>${escapeHTML(member.name)}</h4>
-          <span>${member.leads.toLocaleString('pt-BR')} leads atribuídos</span>
-        </div>
-      </div>
-      <div class="member-stats">
-        <div class="member-stat-item">
-          <span class="member-stat-label">Ganhos</span>
-          <span class="member-stat-val text-success">${member.won.toLocaleString('pt-BR')}</span>
-        </div>
-        <div class="member-stat-item">
-          <span class="member-stat-label">Taxa Win</span>
-          <span class="member-stat-val" style="color: var(--color-primary);">${member.winRate.toFixed(1)}%</span>
-        </div>
-        <div class="member-stat-item">
-          <span class="member-stat-label">Vendas</span>
-          <span class="member-stat-val" style="font-weight: 800; color: var(--text-main);">${revenueFormatted}</span>
-        </div>
-      </div>
-    `;
+  // Render SDR Table
+  const sdrBody = document.getElementById('sdrTableBody');
+  if (sdrBody) {
+    const sdrEntries = Object.entries(sdrStats).sort((a, b) => b[1].total - a[1].total);
+    if (sdrEntries.length === 0) {
+      sdrBody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">Nenhum SDR com leads atribuídos no período.</td></tr>';
+    } else {
+      sdrBody.innerHTML = sdrEntries.map(([sdrName, st]) => `
+        <tr>
+          <td><strong style="color: var(--color-slate-900);">📞 ${escapeHTML(sdrName)}</strong></td>
+          <td class="text-right">${st.total.toLocaleString('pt-BR')}</td>
+          <td class="text-right text-warning" style="font-weight:700;">${st.mql.toLocaleString('pt-BR')}</td>
+          <td class="text-right text-primary" style="font-weight:700;">${st.agendadas.toLocaleString('pt-BR')}</td>
+          <td class="text-right">${st.realizadas.toLocaleString('pt-BR')}</td>
+          <td class="text-right text-success" style="font-weight:800;">${st.won.toLocaleString('pt-BR')}</td>
+        </tr>
+      `).join('');
+    }
+  }
 
-    elements.teamCardsContainer.appendChild(card);
-  });
+  // Render Closer Table
+  const closerBody = document.getElementById('closerTableBody');
+  if (closerBody) {
+    const closerEntries = Object.entries(closerStats).sort((a, b) => b[1].revenue - a[1].revenue);
+    if (closerEntries.length === 0) {
+      closerBody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">Nenhum Closer com reuniões no período.</td></tr>';
+    } else {
+      closerBody.innerHTML = closerEntries.map(([closerName, st]) => {
+        const convRate = st.realizadas > 0 ? ((st.won / st.realizadas) * 100).toFixed(1) : '0.0';
+        const revFormatted = st.revenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+        return `
+          <tr>
+            <td><strong style="color: var(--color-slate-900);">🤝 ${escapeHTML(closerName)}</strong></td>
+            <td class="text-right">${st.agendadas.toLocaleString('pt-BR')}</td>
+            <td class="text-right">${st.realizadas.toLocaleString('pt-BR')}</td>
+            <td class="text-right text-success" style="font-weight:800;">${st.won.toLocaleString('pt-BR')}</td>
+            <td class="text-right text-primary" style="font-weight:700;">${convRate}%</td>
+            <td class="text-right text-success" style="font-weight:800;">${revFormatted}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+  }
 }
 
 // Sync Click Handler
@@ -1517,8 +1871,10 @@ function adjustColorOpacity(hex, opacity) {
   return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
+// Coage para string: é chamada com valores do CRM que podem vir null/número
 function escapeHTML(str) {
-  return str.replace(/[&<>'"]/g, 
+  if (str === null || str === undefined) return '';
+  return String(str).replace(/[&<>'"]/g,
     tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
   );
 }
@@ -1535,6 +1891,90 @@ function showToast(msg, type = 'info') {
   setTimeout(() => {
     elements.toastNotification.classList.remove('show');
   }, 4000);
+}
+
+// Render VTurb Page & VSL Analytics Section
+function renderVTurbSection(data) {
+  if (!data || !data.success) {
+    console.warn('[VTurb Frontend] No VTurb analytics data received.');
+    return;
+  }
+
+  const liveUsersEl = document.getElementById('vturbLiveUsers');
+  const metricViewsEl = document.getElementById('vturbMetricViews');
+  const metricSessionsEl = document.getElementById('vturbMetricSessions');
+  const metricPlaysEl = document.getElementById('vturbMetricPlays');
+  const metricPlayRateEl = document.getElementById('vturbMetricPlayRate');
+  const metricPitchEl = document.getElementById('vturbMetricPitch');
+  const metricPitchRateEl = document.getElementById('vturbMetricPitchRate');
+  const metricEngagementEl = document.getElementById('vturbMetricEngagement');
+  const tableBodyEl = document.getElementById('vturbTableBody');
+
+  const totalLive = data.totalLiveUsers || 0;
+  if (liveUsersEl) liveUsersEl.innerText = `${totalLive} Ao Vivo`;
+
+  const players = data.players || [];
+  if (players.length === 0) {
+    if (tableBodyEl) tableBodyEl.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">Nenhum vídeo VTurb encontrado no período.</td></tr>';
+    return;
+  }
+
+  let totalViews = 0;
+  let totalUniqueSessions = 0;
+  let totalPlays = 0;
+  let totalPitchViews = 0;
+  let sumEngagement = 0;
+
+  const rowsHTML = players.map(p => {
+    const s = p.stats || {};
+    const views = s.total_viewed || 0;
+    const uniqSessions = s.total_viewed_session_uniq || 0;
+    const plays = s.total_started || 0;
+    const playRate = parseFloat(s.play_rate || 0).toFixed(1);
+    const pitchViews = s.total_over_pitch || 0;
+    const pitchRate = parseFloat(s.over_pitch_rate || 0).toFixed(1);
+    const engagement = parseFloat(s.engagement_rate || 0).toFixed(1);
+
+    totalViews += views;
+    totalUniqueSessions += uniqSessions;
+    totalPlays += plays;
+    totalPitchViews += pitchViews;
+    sumEngagement += parseFloat(engagement);
+
+    const durMins = p.duration ? `${Math.floor(p.duration / 60)}m ${p.duration % 60}s` : '-';
+
+    return `
+      <tr style="border-bottom: 1px solid #f1f5f9;">
+        <td style="padding: 0.75rem;">
+          <div style="font-weight:700; color:var(--color-slate-900);">🎥 ${escapeHTML(p.name || 'VSL Player')}</div>
+          <div style="font-size:0.75rem; color:var(--color-slate-500);">ID: ${p.id}</div>
+        </td>
+        <td style="padding: 0.75rem; font-size:0.85rem;">⏱️ ${durMins}</td>
+        <td style="padding: 0.75rem;" class="text-center"><strong>${views.toLocaleString('pt-BR')}</strong></td>
+        <td style="padding: 0.75rem;" class="text-center">${uniqSessions.toLocaleString('pt-BR')}</td>
+        <td style="padding: 0.75rem;" class="text-center text-primary" style="font-weight:700;">${plays.toLocaleString('pt-BR')}</td>
+        <td style="padding: 0.75rem;" class="text-center text-success" style="font-weight:800;">${playRate}%</td>
+        <td style="padding: 0.75rem;" class="text-center" style="font-weight:700; color:#7c3aed;">${pitchViews.toLocaleString('pt-BR')} (${pitchRate}%)</td>
+        <td style="padding: 0.75rem;" class="text-center">
+          <span class="badge" style="background:rgba(239,68,68,0.12); color:#dc2626; font-weight:800; font-size:0.75rem; padding:0.25rem 0.5rem; border-radius:6px;">🔴 ${p.live_users} ao vivo</span>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  if (tableBodyEl) tableBodyEl.innerHTML = rowsHTML;
+
+  const avgPlayRate = totalViews > 0 ? ((totalPlays / totalViews) * 100).toFixed(1) : '0.0';
+  const avgPitchRate = totalPlays > 0 ? ((totalPitchViews / totalPlays) * 100).toFixed(1) : '0.0';
+  const avgEngagement = players.length > 0 ? (sumEngagement / players.length).toFixed(1) : '0.0';
+
+  if (metricViewsEl) metricViewsEl.innerText = totalViews.toLocaleString('pt-BR');
+  if (metricSessionsEl) metricSessionsEl.innerText = `${totalUniqueSessions.toLocaleString('pt-BR')} visitantes únicos`;
+  if (metricPlaysEl) metricPlaysEl.innerText = totalPlays.toLocaleString('pt-BR');
+  if (metricPlayRateEl) metricPlayRateEl.innerText = `Taxa de Play: ${avgPlayRate}%`;
+  if (metricPitchEl) metricPitchEl.innerText = totalPitchViews.toLocaleString('pt-BR');
+  if (metricPitchRateEl) metricPitchRateEl.innerText = `Retenção Pitch: ${avgPitchRate}%`;
+  if (metricEngagementEl) metricEngagementEl.innerText = `${avgEngagement}%`;
 }
 
 // Render Eduzz Analytics Dashboard
@@ -1737,7 +2177,8 @@ function formatDateLocal(d) {
 const PIPELINE_FUNNEL_MAP = {
   13304659: 'komando',     // KO Inbound
   14173256: 'kop',         // KOP Inbound (produto independente)
-  13956952: 'kor',         // KOR Funil de Recuperação (produto independente)
+  14268556: 'kor',         // [KOR] Inbound (produto independente)
+  13956952: 'recuperacao', // Funil de Recuperação
   13304583: 'mlfp',        // Mentoria MLFP
   13537971: 'ebook',       // KO Ebooks
   14104532: 'engajamento'  // Instagram (Social Selling)
@@ -1747,7 +2188,8 @@ const FUNNEL_DISPLAY = {
   mlfp: { label: 'MLFP', tagClass: 'tag-mlfp', icon: '🔵' },
   komando: { label: 'Komando', tagClass: 'tag-komando', icon: '🔴' },
   kop: { label: 'KOP', tagClass: 'tag-kop', icon: '📦' },
-  kor: { label: 'KOR (Recuperação)', tagClass: 'tag-kor', icon: '🔄' },
+  kor: { label: 'KOR Inbound', tagClass: 'tag-kor', icon: '🔄' },
+  recuperacao: { label: 'Recuperação', tagClass: 'tag-kor', icon: '♻️' },
   ebook: { label: 'Ebook', tagClass: 'tag-ebook', icon: '📚' },
   engajamento: { label: 'Social Selling', tagClass: 'tag-engajamento', icon: '📲' },
   outros: { label: 'Outros', tagClass: 'tag-outros', icon: '📦' }
@@ -1768,9 +2210,11 @@ async function loadMetaAdsInsights() {
   const section = document.getElementById('mediaPagaSection');
   if (!section) return;
 
-  // Only show for commercial funnels (not eduzz tab)
-  const isEduzz = document.getElementById('eduzzView')?.classList.contains('active');
-  if (isEduzz) {
+  // Mídia Paga só faz sentido na aba CRM.
+  // Antes isso era decidido por #eduzzView.active — um container interno que
+  // fica sempre ativo, o que escondia a seção já no primeiro carregamento.
+  const abaCrmAtiva = document.getElementById('crmMainTabContent')?.classList.contains('active');
+  if (!abaCrmAtiva) {
     section.style.display = 'none';
     return;
   }
@@ -1858,22 +2302,17 @@ function renderMediaPaga(metaData) {
       kommoFunnels[funnelKey] = { leads: 0, mqls: 0, wonRevenue: 0, wonCount: 0 };
     }
     kommoFunnels[funnelKey].leads++;
-    
-    // Check MQL tag
-    const tags = (lead._embedded?.tags || []).map(t => t.name.toUpperCase());
-    if (tags.includes('MQL') || tags.includes('QUALIFICADO')) {
-      kommoFunnels[funnelKey].mqls++;
-    }
-    
-    // Check won (for ROAS)
-    if (parseInt(lead.status_id) === 142) {
+
+    const e = FUNNEL.evaluate(lead);
+    if (e.isMql) kommoFunnels[funnelKey].mqls++;
+    if (e.isWon) {
       kommoFunnels[funnelKey].wonCount++;
-      kommoFunnels[funnelKey].wonRevenue += (lead.price || 0);
+      kommoFunnels[funnelKey].wonRevenue += e.revenue;
     }
   }
 
   // Build metrics for each funnel
-  const funnelOrder = ['mlfp', 'komando', 'kop', 'kor', 'ebook', 'engajamento', 'outros'];
+  const funnelOrder = ['mlfp', 'komando', 'kop', 'kor', 'recuperacao', 'ebook', 'engajamento', 'outros'];
   const funnelMetrics = {};
   let totalSpend = 0, totalImpressions = 0, totalClicks = 0;
   let totalKommoLeads = 0, totalMQLs = 0, totalWonRevenue = 0;
@@ -1891,10 +2330,8 @@ function renderMediaPaga(metaData) {
     const mqls = kommo.mqls;   // ALWAYS from Kommo
     const cpl = leads > 0 ? spend / leads : null;
     const cpmql = mqls > 0 ? spend / mqls : null;
-    let roas = null;
-    if (fKey === 'ebook' && kommo.wonRevenue > 0 && spend > 0) {
-      roas = kommo.wonRevenue / spend;
-    }
+    // ROAS para qualquer funil com investimento: receita confirmada ÷ spend
+    const roas = spend > 0 ? kommo.wonRevenue / spend : null;
 
     totalSpend += spend;
     totalImpressions += impressions;
@@ -1965,9 +2402,9 @@ function renderMediaPaga(metaData) {
           const row = funnelMetrics[fKey];
           if (!row || (row.spend === 0 && row.leads === 0)) continue;
 
-          const roasCell = row.roas !== null 
+          const roasCell = row.roas !== null
             ? `<span class="roas-badge ${row.roas >= 1 ? 'roas-positive' : 'roas-negative'}">${row.roas.toFixed(2)}x</span>`
-            : (row.fKey === 'ebook' ? `<span style="color:var(--text-muted)">—</span>` : `<span style="color:var(--text-muted)">n/a</span>`);
+            : `<span style="color:var(--text-muted)" title="Sem investimento no período">—</span>`;
 
           html += `<tr>
             <td><span class="funnel-tag ${row.display.tagClass}">${row.display.icon} ${row.display.label}</span></td>
@@ -2038,7 +2475,7 @@ function renderMediaPaga(metaData) {
         const cpcVal = c.clicks > 0 ? (c.spend / c.clicks) : 0;
 
         cHtml += `<tr>
-          <td style="font-weight: 600; color: var(--text-main);">${c.name}</td>
+          <td style="font-weight: 600; color: var(--text-main);">${escapeHTML(c.name)}</td>
           <td><span class="funnel-tag ${display.tagClass}">${display.icon} ${display.label}</span></td>
           <td>${formatBRL(c.spend)}</td>
           <td>${formatNumber(c.impressions)}</td>
@@ -2053,3 +2490,466 @@ function renderMediaPaga(metaData) {
   }
 }
 
+// ============================================================
+//  PAGES ANALYTICS TAB
+// ============================================================
+
+let pagesVariantChart = null;
+let pagesDailyChart = null;
+let pagesAutoRefreshInterval = null;
+let pagesActivePeriod = 'today';
+
+// Enquanto true, a aba Pages usa o período do filtro principal.
+// Ela tem pills próprias, e antes elas começavam em "Hoje" independentemente
+// do período do dashboard — duas datas diferentes na mesma tela, sem aviso.
+// Clicar numa pill da aba desliga o vínculo até trocar de aba de novo.
+let pagesSegueFiltroGlobal = true;
+
+// Traduz o período do filtro principal para a pill equivalente da aba Pages
+function sincronizarPeriodoPages() {
+  if (!pagesSegueFiltroGlobal) return;
+
+  const equivalentes = ['today', '7', '30', 'this_month', 'all'];
+  pagesActivePeriod = equivalentes.includes(state.activePeriod) ? state.activePeriod : 'global';
+
+  const pills = document.getElementById('pagesDatePills');
+  if (pills) {
+    pills.querySelectorAll('.pill-btn').forEach(b => b.classList.remove('active'));
+    const alvo = pills.querySelector(`.pill-btn[data-period="${pagesActivePeriod}"]`);
+    if (alvo) alvo.classList.add('active');
+  }
+}
+
+function getPagesDateRange(preset) {
+  const now = new Date();
+  const formatZero = num => String(num).padStart(2, '0');
+  const todayStr = `${now.getFullYear()}-${formatZero(now.getMonth()+1)}-${formatZero(now.getDate())}`;
+
+  // 'global' = período do filtro principal que não tem pill equivalente
+  // aqui (mês passado / personalizado)
+  if (preset === 'global' && state.dateFrom && state.dateTo) {
+    return {
+      since: `${formatDateLocal(state.dateFrom)}T00:00:00-03:00`,
+      until: `${formatDateLocal(state.dateTo)}T23:59:59-03:00`
+    };
+  }
+
+  let since = '';
+  let until = `${todayStr}T23:59:59-03:00`;
+
+  if (preset === 'today') {
+    since = `${todayStr}T00:00:00-03:00`;
+  } else if (preset === 'this_month') {
+    since = `${now.getFullYear()}-${formatZero(now.getMonth()+1)}-01T00:00:00-03:00`;
+  } else if (preset === 'all') {
+    since = '2026-01-01T00:00:00-03:00';
+  } else {
+    const days = parseInt(preset) || 7;
+    const pastDate = new Date(now.getTime() - (days * 24 * 60 * 60 * 1000));
+    const pastStr = `${pastDate.getFullYear()}-${formatZero(pastDate.getMonth()+1)}-${formatZero(pastDate.getDate())}`;
+    since = `${pastStr}T00:00:00-03:00`;
+  }
+
+  return { since, until };
+}
+
+// Fetch and render Eduzz Analytics dynamically in real time with date filter
+let lastEduzzRange = null;
+
+async function fetchEduzzAnalytics() {
+  try {
+    let url = '/api/eduzz-analytics';
+    let rangeKey = 'all';
+
+    if (state.dateFrom && state.dateTo) {
+      const fromStr = formatDateLocal(state.dateFrom);
+      const toStr = formatDateLocal(state.dateTo);
+      rangeKey = `${fromStr}..${toStr}`;
+      url += `?from=${fromStr}&to=${toStr}`;
+    }
+
+    // Evita refetch quando só mudou funil/responsável
+    if (rangeKey === lastEduzzRange) return;
+    lastEduzzRange = rangeKey;
+
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data && data.success) {
+      state.eduzzData = data;
+      renderEduzzDashboard();
+    }
+  } catch (err) {
+    console.error('[Eduzz Realtime] Error fetching Eduzz analytics:', err);
+  }
+}
+
+async function loadPageAnalytics() {
+    try {
+        const { since, until } = getPagesDateRange(pagesActivePeriod);
+        let url = '/api/page-analytics?';
+        if (since) url += `since=${encodeURIComponent(since)}&`;
+        if (until) url += `until=${encodeURIComponent(until)}&`;
+        
+        const res = await fetch(url);
+        const json = await res.json();
+        
+        if (!json.success) {
+            console.error('[Pages] Error loading analytics:', json);
+            return;
+        }
+        
+        renderPagesKPIs(json.data);
+        renderAllPagesTable(json.data);
+        renderPagesVariantChart(json.data);
+        renderPagesDailyChart(json.data);
+        renderPagesVariantTable(json.data);
+        renderPagesUtmTable(json.data);
+    } catch (err) {
+        console.error('[Pages] Error fetching page analytics:', err);
+    }
+}
+
+function renderAllPagesTable(data) {
+  const tbody = document.getElementById('allPagesTableBody');
+  if (!tbody) return;
+  
+  const pages = data.by_page || [];
+  if (pages.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-3">Nenhuma página encontrada.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = pages.map(p => {
+    const livePill = p.live_users > 0 
+      ? `<span class="badge" style="background:rgba(239,68,68,0.12); color:#dc2626; font-weight:800; font-size:0.75rem; padding:0.25rem 0.5rem; border-radius:6px;">🔴 ${p.live_users} ao vivo</span>`
+      : `<span style="color:#94a3b8; font-size:0.8rem;">0 ao vivo</span>`;
+
+    return `
+      <tr>
+        <td style="font-weight:700; color:#0f172a;">${escapeHTML(p.name)}</td>
+        <td style="font-size:0.85rem; color:#2563eb; font-weight:600;"><a href="https://${escapeHTML(p.url)}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;">🔗 ${escapeHTML(p.url)}</a></td>
+        <td class="text-center" style="font-weight:600;">${ouTraco(p.views)}</td>
+        <td class="text-center">${ouTraco(p.uniq_visitors)}</td>
+        <td class="text-center" style="font-weight:700; color:#10b981;">${p.play_rate || '—'}</td>
+        <td class="text-center" style="font-weight:700; color:#7c3aed;">${p.pitch_rate || '—'}</td>
+        <td class="text-center" style="font-weight:800; color:#ff6b00;">${ouTraco(p.leads)}</td>
+        <td class="text-center" style="font-weight:800; color:#059669; background:rgba(16,185,129,0.08);"${p.conversion_obs ? ` title="${escapeHTML(p.conversion_obs)}"` : ''}>${p.conversion_rate || (p.conversion_obs ? '⚠️ —' : '—')}</td>
+        <td class="text-center">${livePill}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+// "—" quando a métrica não foi medida; distingue de um zero real
+function ouTraco(valor, formatador = v => v.toLocaleString('pt-BR')) {
+    return (valor === null || valor === undefined) ? '—' : formatador(valor);
+}
+
+function renderPagesKPIs(data) {
+    const totalEl = document.getElementById('pagesKpiTotal');
+    const leadsEl = document.getElementById('pagesKpiLeads');
+    const convEl = document.getElementById('pagesKpiConversion');
+    const deviceEl = document.getElementById('pagesKpiDevice');
+
+    if (totalEl) totalEl.innerText = ouTraco(data.total_pageviews);
+
+    const totalLeads = data.total_leads || 0;
+    if (leadsEl) leadsEl.innerText = totalLeads.toLocaleString('pt-BR');
+
+    if (convEl) convEl.innerText = data.conversion_rate || '—';
+
+    const desktop = (data.by_device && data.by_device.desktop) || 0;
+    const mobile = (data.by_device && data.by_device.mobile) || 0;
+    if (deviceEl) deviceEl.innerText = (desktop || mobile) ? `${desktop} / ${mobile}` : '—';
+
+    // Aviso visível quando o tracker das LPs não registrou nada no período:
+    // sem isso, tabelas vazias parecem "zero acessos" em vez de "sem medição"
+    let aviso = document.getElementById('pagesTrackerWarning');
+    if (!aviso) {
+        const host = document.getElementById('pagesMainTabContent');
+        if (host) {
+            aviso = document.createElement('div');
+            aviso.id = 'pagesTrackerWarning';
+            aviso.style.cssText = 'margin:0 0 1rem; padding:0.75rem 1rem; border-radius:8px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.35); color:#b45309; font-size:0.85rem; font-weight:600;';
+            host.prepend(aviso);
+        }
+    }
+    if (aviso) {
+        if (data.tracker_ativo) {
+            aviso.style.display = 'none';
+        } else {
+            aviso.style.display = '';
+            aviso.innerHTML = '⚠️ O tracker de pageview não registrou acessos neste período. Views, conversão e teste A/B aparecem como “—” porque não há medição — não porque deram zero. Verifique se o script <code>/api/track-pageview</code> está instalado nas landing pages.';
+        }
+    }
+}
+
+function renderPagesVariantChart(data) {
+    const ctx = document.getElementById('pagesVariantChart');
+    if (!ctx) return;
+    
+    if (pagesVariantChart) pagesVariantChart.destroy();
+    
+    const variants = data.by_variant || {};
+    const labels = [];
+    const values = [];
+    const colors = ['#d4af37', '#e8c860', '#a88a2a', '#f0d878', '#8b7020', '#c4a030'];
+    
+    for (let i = 1; i <= 6; i++) {
+        const v = variants[i.toString()] || { views: 0, label: `Variação ${i}` };
+        labels.push(`V${i}: ${v.label}`);
+        values.push(v.views);
+    }
+    
+    pagesVariantChart = new Chart(ctx.getContext('2d'), {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: values,
+                backgroundColor: colors,
+                borderColor: 'rgba(0,0,0,0.3)',
+                borderWidth: 1,
+                hoverOffset: 6
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'right',
+                    labels: {
+                        color: '#e2e8f0',
+                        font: { family: 'Plus Jakarta Sans', size: 10 },
+                        boxWidth: 12,
+                        padding: 10
+                    }
+                },
+                tooltip: {
+                    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                    titleColor: '#f8fafc',
+                    bodyColor: '#cbd5e1',
+                    titleFont: { family: 'Outfit', size: 13, weight: 'bold' },
+                    bodyFont: { family: 'Plus Jakarta Sans', size: 12 },
+                    borderColor: 'rgba(212, 175, 55, 0.3)',
+                    borderWidth: 1,
+                    padding: 10,
+                    callbacks: {
+                        label: function(context) {
+                            const val = context.raw;
+                            const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                            const pct = total > 0 ? ((val / total) * 100).toFixed(1) : '0';
+                            return ` ${val} acessos (${pct}%)`;
+                        }
+                    }
+                }
+            },
+            cutout: '65%'
+        }
+    });
+}
+
+function renderPagesDailyChart(data) {
+    const ctx = document.getElementById('pagesDailyChart');
+    if (!ctx) return;
+    
+    if (pagesDailyChart) pagesDailyChart.destroy();
+    
+    const byDay = data.by_day || [];
+    const labels = byDay.map(d => {
+        const parts = d.date.split('-');
+        return `${parts[2]}/${parts[1]}`;
+    });
+    const values = byDay.map(d => d.views);
+    
+    pagesDailyChart = new Chart(ctx.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Acessos',
+                data: values,
+                borderColor: '#d4af37',
+                backgroundColor: 'rgba(212, 175, 55, 0.1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.3,
+                pointBackgroundColor: '#d4af37',
+                pointBorderColor: '#d4af37',
+                pointRadius: 3,
+                pointHoverRadius: 5
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: {
+                    ticks: { color: '#94a3b8', font: { size: 10 } },
+                    grid: { color: 'rgba(148, 163, 184, 0.1)' }
+                },
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: '#94a3b8', font: { size: 10 } },
+                    grid: { color: 'rgba(148, 163, 184, 0.1)' }
+                }
+            },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                    titleColor: '#f8fafc',
+                    bodyColor: '#cbd5e1',
+                    borderColor: 'rgba(212, 175, 55, 0.3)',
+                    borderWidth: 1
+                }
+            }
+        }
+    });
+}
+
+function renderPagesVariantTable(data) {
+    const tbody = document.getElementById('pagesVariantTableBody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    
+    const variants = data.by_variant || {};
+    const variantMeta = {
+        '1': { vsl: 'Travada (7:33)', headline: 'Headline 1' },
+        '2': { vsl: 'Travada (7:33)', headline: 'Headline 2' },
+        '3': { vsl: 'Aberta', headline: 'Headline 1' },
+        '4': { vsl: 'Aberta', headline: 'Headline 2' },
+        '5': { vsl: 'Sem VSL', headline: 'Headline 1' },
+        '6': { vsl: 'Sem VSL', headline: 'Headline 2' }
+    };
+    
+    // Amostra mínima para declarar um vencedor. Abaixo disso a diferença
+    // entre variações é ruído, e o selo "MELHOR" engana mais do que informa.
+    const MIN_VIEWS_PARA_VENCEDOR = 30;
+
+    let bestConv = 0;
+    const rows = [];
+    for (let i = 1; i <= 6; i++) {
+        const v = variants[i.toString()] || { views: 0, leads: 0 };
+        const views = v.views || 0;
+        const conv = views > 0 ? ((v.leads || 0) / views) * 100 : null;
+        if (views >= MIN_VIEWS_PARA_VENCEDOR && conv !== null && conv > bestConv) bestConv = conv;
+        rows.push({ i, v, views, conv });
+    }
+
+    rows.forEach(({ i, v, views, conv }) => {
+        const meta = variantMeta[i.toString()];
+        const tr = document.createElement('tr');
+        const isBest = bestConv > 0 && views >= MIN_VIEWS_PARA_VENCEDOR && conv === bestConv;
+        const badge = isBest ? ' <span style="background:#d4af37;color:#000;padding:2px 6px;border-radius:4px;font-size:0.7rem;font-weight:700;">MELHOR</span>' : '';
+        tr.innerHTML = `
+            <td style="font-weight:600;">Variação ${i}${badge}</td>
+            <td class="text-center">${meta.vsl}</td>
+            <td class="text-center">${meta.headline}</td>
+            <td class="text-center" style="font-weight:600;">${views > 0 ? views.toLocaleString('pt-BR') : '—'}</td>
+            <td class="text-center" style="font-weight:600;">${(v.leads || 0).toLocaleString('pt-BR')}</td>
+            <td class="text-center" style="font-weight:700;color:${conv ? '#d4af37' : '#64748b'};">${conv !== null ? conv.toFixed(1) + '%' : '—'}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function renderPagesUtmTable(data) {
+    const tbody = document.getElementById('pagesUtmTableBody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    
+    const sources = data.by_utm_source || {};
+    const total = data.total_pageviews || 0;
+    const sorted = Object.entries(sources).sort((a, b) => b[1] - a[1]);
+    
+    if (sorted.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="text-center" style="color:#64748b;">Nenhum dado de UTM disponível.</td></tr>';
+        return;
+    }
+    
+    sorted.forEach(([source, views]) => {
+        const pct = total > 0 ? ((views / total) * 100).toFixed(1) : null;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td style="font-weight:500;">${escapeHTML(source || '(direto)')}</td>
+            <td class="text-center" style="font-weight:600;">${views.toLocaleString('pt-BR')}</td>
+            <td class="text-center" style="color:#d4af37;font-weight:600;">${pct !== null ? pct + '%' : '—'}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+// Switch Main Executive Top Navigation Tabs (CRM, VTurb, Eduzz, Pages)
+function switchMainTab(tabName) {
+  state.activeMainTab = tabName;
+
+  // 1. Update main nav buttons
+  const navBtns = document.querySelectorAll('#mainExecutiveNav .main-nav-btn');
+  navBtns.forEach(btn => {
+    if (btn.getAttribute('data-main-tab') === tabName) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+
+  // 2. Hide all main tab content containers and show target
+  const tabContents = document.querySelectorAll('.main-tab-content');
+  tabContents.forEach(content => content.classList.remove('active'));
+
+  const targetContent = document.getElementById(`${tabName}MainTabContent`);
+  if (targetContent) {
+    targetContent.classList.add('active');
+  }
+
+  // 3. Auto-refresh da aba Pages só roda enquanto ela está visível.
+  // (Antes ficava no handler das abas de funil, que nem sempre era acionado —
+  //  o intervalo continuava rodando em segundo plano nas outras abas.)
+  if (pagesAutoRefreshInterval) {
+    clearInterval(pagesAutoRefreshInterval);
+    pagesAutoRefreshInterval = null;
+  }
+
+  // 4. Trigger specific renderers if needed
+  if (tabName === 'eduzz' && state.eduzzData) {
+    renderEduzzDashboard();
+  } else if (tabName === 'vturb' && state.vturbData) {
+    renderVTurbSection(state.vturbData);
+  } else if (tabName === 'pages') {
+    pagesSegueFiltroGlobal = true; // ao reabrir a aba, volta a seguir o filtro principal
+    sincronizarPeriodoPages();
+    loadPageAnalytics();
+    pagesAutoRefreshInterval = setInterval(loadPageAnalytics, 60000);
+  }
+
+  // Mídia Paga é exclusiva da aba CRM — reavalia a visibilidade na troca
+  if (tabName === 'crm') loadMetaAdsInsights();
+}
+
+// Pages date pills listener & Main Executive Nav tabs
+document.addEventListener('DOMContentLoaded', () => {
+    const mainNav = document.getElementById('mainExecutiveNav');
+    if (mainNav) {
+      mainNav.querySelectorAll('.main-nav-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const tabName = btn.getAttribute('data-main-tab');
+          if (tabName) switchMainTab(tabName);
+        });
+      });
+    }
+
+    const pagesDatePills = document.getElementById('pagesDatePills');
+    if (pagesDatePills) {
+        pagesDatePills.addEventListener('click', (e) => {
+            const btn = e.target.closest('.pill-btn');
+            if (!btn) return;
+            pagesDatePills.querySelectorAll('.pill-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            pagesSegueFiltroGlobal = false; // escolha manual sobrepõe o filtro principal
+            pagesActivePeriod = btn.getAttribute('data-period');
+            loadPageAnalytics();
+        });
+    }
+});
