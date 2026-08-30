@@ -39,6 +39,10 @@
           <span>Última Sincronização:</span>
           <strong id="lastSyncDate">Carregando...</strong>
         </div>
+        <button id="aiAssistantHeaderBtn" class="btn btn-ai-sparkle">
+          <span class="ai-sparkle-icon">✨</span>
+          Assistente IA
+        </button>
         <button id="syncBtn" class="btn btn-primary btn-glow">
           <svg class="icon-spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
           Sincronizar CRM
@@ -52,17 +56,17 @@
         <span class="nav-icon">📊</span>
         <span class="nav-label">Visão Geral Comercial & CRM</span>
       </button>
-      <button id="navTabVTurb" class="main-nav-btn" data-main-tab="vturb">
+      <button id="navTabTrafficSales" class="main-nav-btn" data-main-tab="trafficSales">
+        <span class="nav-icon">🎯</span>
+        <span class="nav-label">Tráfego × Comercial (Semanal)</span>
+      </button>
+      <button id="navTabPages" class="main-nav-btn" data-main-tab="pages">
         <span class="nav-icon">🎬</span>
-        <span class="nav-label">Páginas & VSLs (VTurb)</span>
+        <span class="nav-label">Páginas, VSL & Teste A/B</span>
       </button>
       <button id="navTabEduzz" class="main-nav-btn" data-main-tab="eduzz">
         <span class="nav-icon">💳</span>
         <span class="nav-label">Vendas & Faturamento (Eduzz)</span>
-      </button>
-      <button id="navTabPages" class="main-nav-btn" data-main-tab="pages">
-        <span class="nav-icon">📄</span>
-        <span class="nav-label">Relatório de Páginas & A/B</span>
       </button>
     </nav>
 
@@ -78,6 +82,10 @@
         <button id="tabMlfp" class="pipeline-tab-btn" data-pipeline="13304583">
           <span class="tab-dot dot-mlfp"></span>
           🔵 Mentoria [MLFP]
+        </button>
+        <button id="tabMlfpAntigos" class="pipeline-tab-btn" data-pipeline="14008652">
+          <span class="tab-dot dot-mlfp-antigos"></span>
+          ⏳ MLFP Leads Antigos (Repescagem)
         </button>
         <button id="tabKoInbound" class="pipeline-tab-btn" data-pipeline="13304659">
           <span class="tab-dot dot-ko"></span>
@@ -152,14 +160,35 @@
             <option value="term">Termo (utm_term)</option>
           </select>
         </div>
+
+        <div class="filter-actions-group">
+          <label>&nbsp;</label>
+          <button id="btnExportFilteredLeadsCsv" class="btn btn-export-csv" title="Exportar leads filtrados para arquivo CSV (Excel / Planilha)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span>Exportar CSV</span>
+            <span class="badge-export-count" id="exportLeadsCount">0</span>
+          </button>
+        </div>
       </section>
 
       <!-- Real Graphic Visual Funnel Pyramid -->
       <section class="graphic-funnel-card glass-card">
         <div class="funnel-header-info">
-          <div class="funnel-badge-live">VISUAL FUNNEL FLOW</div>
-          <h2 id="currentFunnelTitle">Funil de Conversão Comercial — Mentoria MLFP</h2>
-          <p id="currentFunnelSub">Fluxo Comercial: Captura ➔ (Follow Up 1º Contatos) ➔ MQL / (Downsell Desqualificados) ➔ Agendamento ➔ (No Show) ➔ Reunião ➔ Fechamento</p>
+          <div class="funnel-header-left">
+            <div class="funnel-badge-live">VISUAL FUNNEL FLOW</div>
+            <h2 id="currentFunnelTitle">Funil de Conversão Comercial — Mentoria MLFP</h2>
+            <p id="currentFunnelSub">Fluxo Comercial: Captura ➔ (Follow Up 1º Contatos) ➔ MQL / (Downsell Desqualificados) ➔ Agendamento ➔ (No Show) ➔ Reunião ➔ Fechamento</p>
+          </div>
+          <div class="funnel-header-actions">
+            <button id="btnExportFunnelHeaderCsv" class="btn btn-export-csv-alt" title="Exportar leads deste funil em CSV">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Exportar Funil (CSV)
+            </button>
+          </div>
         </div>
 
         <div class="visual-pyramid-funnel">
@@ -729,75 +758,157 @@
     </div> <!-- Close kommoView -->
     </div> <!-- Close crmMainTabContent -->
 
-    <!-- MAIN TAB 2: VTurb Analytics View -->
-    <div id="vturbMainTabContent" class="main-tab-content">
-      <section class="vturb-section glass-card" style="padding: 1.5rem; border-radius: 16px; background: rgba(255, 255, 255, 0.9);">
-        <div class="section-header" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.25rem;">
+    <!-- MAIN TAB: Tráfego x Comercial (Executivo) -->
+    <div id="trafficSalesMainTabContent" class="main-tab-content">
+      <!-- Section Header -->
+      <section class="section-header-banner glass-card" style="padding: 1.5rem 2rem; margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+        <div>
+          <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+            <span style="font-size: 1.5rem;">🎯</span>
+            <h2 style="font-size: 1.35rem; font-weight: 800; color: var(--text-main); margin: 0;">Painel Executivo: Tráfego × Comercial</h2>
+          </div>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Acompanhamento semanal de Meta vs Realizado, CAC, CPL, ROAS e Criativos Campeões.</p>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+          <select id="trafficSalesMonthSelect" class="form-select" style="padding: 0.45rem 1rem; border-radius: 10px; border: 1.5px solid #cbd5e1; font-weight: 700; font-size: 0.85rem; color: var(--text-main); background: #fff;">
+            <option value="2026-08">Agosto / 2026</option>
+            <option value="2026-07">Julho / 2026</option>
+            <option value="2026-06">Junho / 2026</option>
+            <option value="2026-05">Maio / 2026</option>
+            <option value="2026-04">Abril / 2026</option>
+            <option value="2026-03">Março / 2026</option>
+          </select>
+          <button id="btnSaveTrafficGoals" class="btn btn-outline" style="font-size: 0.8rem; font-weight: 700; padding: 0.45rem 1rem; border-radius: 10px; background: rgba(37,99,235,0.08); color: #2563eb; border: 1px solid rgba(37,99,235,0.3); cursor: pointer;">
+            💾 Salvar Metas
+          </button>
+        </div>
+      <!-- Product / Funnel Sub-Navigation Bar -->
+      <div class="pipeline-navigation-tabs glass-card" id="trafficProductNav" style="margin-bottom: 1.5rem;">
+        <button class="pipeline-tab-btn active" data-traffic-funnel="all">
+          <span class="tab-dot" style="background:#ff6b00;"></span>
+          📊 Consolidado (Todos)
+        </button>
+        <button class="pipeline-tab-btn" data-traffic-funnel="mlfp">
+          <span class="tab-dot dot-mlfp"></span>
+          🔵 Mentoria [MLFP]
+        </button>
+        <button class="pipeline-tab-btn" data-traffic-funnel="komando">
+          <span class="tab-dot dot-ko"></span>
+          🔴 Komando [KO]
+        </button>
+        <button class="pipeline-tab-btn" data-traffic-funnel="kop">
+          <span class="tab-dot dot-kop"></span>
+          ⚙️ KOP Operação
+        </button>
+        <button class="pipeline-tab-btn" data-traffic-funnel="kor">
+          <span class="tab-dot" style="background:#a855f7;"></span>
+          🔄 KOR Inbound
+        </button>
+        <button class="pipeline-tab-btn" data-traffic-funnel="ebook">
+          <span class="tab-dot dot-ebooks"></span>
+          📚 Ebooks
+        </button>
+      </div>
+
+      <!-- 1. Tabela Semanal & Mensal Inbound (Meta vs Realizado) -->
+      <div class="table-card glass-card" style="margin-bottom: 2rem;">
+        <div class="table-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
           <div>
-            <h2 style="font-size: 1.3rem; font-weight: 800; color: var(--color-slate-900); margin: 0; display: flex; align-items: center; gap: 0.6rem;">
-              🎬 Performance de Páginas & VSL (VTurb Analytics)
-              <span class="live-pill" style="display: inline-flex; align-items: center; gap: 6px; background: rgba(239, 68, 68, 0.12); color: #dc2626; padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 800; border: 1px solid rgba(239, 68, 68, 0.25);">
-                <span style="width: 8px; height: 8px; background: #ef4444; border-radius: 50%; box-shadow: 0 0 8px #ef4444;"></span>
-                <span id="vturbLiveUsers">0 Ao Vivo</span>
-              </span>
-            </h2>
-            <p style="font-size: 0.85rem; color: var(--color-slate-500); margin: 0.2rem 0 0 0;">
-              Métricas de acessos às páginas, visualizações e retenção de vídeo em tempo real (VTurb)
-            </p>
+            <h2 style="font-size: 1.15rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.2rem;">📊 Resultado Semanal & Mensal Inbound</h2>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">Investimento no Meta Ads cruzado com os resultados comerciais de cada semana.</p>
           </div>
+          <span class="badge" style="background: rgba(16,185,129,0.12); color: #059669; font-weight: 800; font-size: 0.75rem; padding: 0.3rem 0.75rem; border-radius: 20px;">Atualização Automática em Tempo Real</span>
         </div>
-
-        <!-- VTurb KPI Cards -->
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
-          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
-            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">👁️ Visualizações da Página</div>
-            <div id="vturbMetricViews" style="font-size: 1.6rem; font-weight: 900; color: var(--color-slate-900); margin-top: 4px;">0</div>
-            <div id="vturbMetricSessions" style="font-size: 0.75rem; color: var(--color-slate-500);">0 visitantes únicos</div>
-          </div>
-          
-          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
-            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">▶️ Plays Iniciados na VSL</div>
-            <div id="vturbMetricPlays" style="font-size: 1.6rem; font-weight: 900; color: var(--color-primary); margin-top: 4px;">0</div>
-            <div id="vturbMetricPlayRate" style="font-size: 0.75rem; color: #10b981; font-weight: 700;">Taxa de Play: 0.0%</div>
-          </div>
-
-          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
-            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">🔥 Assistiram até o Pitch</div>
-            <div id="vturbMetricPitch" style="font-size: 1.6rem; font-weight: 900; color: #7c3aed; margin-top: 4px;">0</div>
-            <div id="vturbMetricPitchRate" style="font-size: 0.75rem; color: #7c3aed; font-weight: 700;">Retenção Pitch: 0.0%</div>
-          </div>
-
-          <div class="metric-card glass-card" style="padding: 1.2rem; border-radius: 12px; background: rgba(248, 250, 252, 0.8);">
-            <div style="font-size: 0.75rem; font-weight: 700; color: var(--color-slate-500); text-transform: uppercase;">📈 Engajamento Médio</div>
-            <div id="vturbMetricEngagement" style="font-size: 1.6rem; font-weight: 900; color: #059669; margin-top: 4px;">0.0%</div>
-            <div style="font-size: 0.75rem; color: var(--color-slate-500);">Retenção média da VSL</div>
-          </div>
-        </div>
-
-        <!-- VTurb Pages & Players Table -->
         <div class="table-responsive">
-          <table style="width: 100%; border-collapse: collapse;">
+          <table class="data-table traffic-weekly-table" id="trafficWeeklyTable">
             <thead>
-              <tr style="border-bottom: 2px solid #e2e8f0; font-size: 0.8rem; text-align: left;">
-                <th style="padding: 0.75rem;">Vídeo / Página VSL</th>
-                <th style="padding: 0.75rem;">Duração</th>
-                <th style="padding: 0.75rem;" class="text-center">Visualizações</th>
-                <th style="padding: 0.75rem;" class="text-center">Visitantes Únicos</th>
-                <th style="padding: 0.75rem;" class="text-center">Plays</th>
-                <th style="padding: 0.75rem;" class="text-center">Taxa de Play</th>
-                <th style="padding: 0.75rem;" class="text-center">Assistiram ao Pitch</th>
-                <th style="padding: 0.75rem;" class="text-center">Ao Vivo</th>
+              <tr>
+                <th style="min-width: 220px;">MÉTRICA</th>
+                <th colspan="2" class="text-center" style="background: rgba(59,130,246,0.08); border-left: 2px solid rgba(59,130,246,0.2);">Semana 1 (01-05)</th>
+                <th colspan="2" class="text-center" style="background: rgba(139,92,246,0.08); border-left: 2px solid rgba(139,92,246,0.2);">Semana 2 (06-12)</th>
+                <th colspan="2" class="text-center" style="background: rgba(16,185,129,0.08); border-left: 2px solid rgba(16,185,129,0.2);">Semana 3 (13-19)</th>
+                <th colspan="2" class="text-center" style="background: rgba(245,158,11,0.08); border-left: 2px solid rgba(245,158,11,0.2);">Semana 4 (20-26)</th>
+                <th colspan="2" class="text-center" style="background: rgba(239,68,68,0.08); border-left: 2px solid rgba(239,68,68,0.2);">Semana 5 (27-31)</th>
+                <th colspan="3" class="text-center" style="background: rgba(15,23,42,0.08); border-left: 2px solid rgba(15,23,42,0.3);">TOTAL DO MÊS</th>
+              </tr>
+              <tr class="subhead-row" style="font-size: 0.72rem;">
+                <th></th>
+                <th class="text-center col-meta" style="border-left: 2px solid rgba(59,130,246,0.2);">META</th>
+                <th class="text-center col-real">REAL</th>
+                <th class="text-center col-meta" style="border-left: 2px solid rgba(139,92,246,0.2);">META</th>
+                <th class="text-center col-real">REAL</th>
+                <th class="text-center col-meta" style="border-left: 2px solid rgba(16,185,129,0.2);">META</th>
+                <th class="text-center col-real">REAL</th>
+                <th class="text-center col-meta" style="border-left: 2px solid rgba(245,158,11,0.2);">META</th>
+                <th class="text-center col-real">REAL</th>
+                <th class="text-center col-meta" style="border-left: 2px solid rgba(239,68,68,0.2);">META</th>
+                <th class="text-center col-real">REAL</th>
+                <th class="text-center col-meta" style="border-left: 2px solid rgba(15,23,42,0.3);">META</th>
+                <th class="text-center col-real">REAL</th>
+                <th class="text-center col-pct">% REAL</th>
               </tr>
             </thead>
-            <tbody id="vturbTableBody">
-              <tr>
-                <td colspan="8" class="text-center text-muted py-3">Carregando métricas da VTurb...</td>
-              </tr>
+            <tbody id="trafficWeeklyTableBody">
+              <tr><td colspan="14" class="text-center py-4 text-muted">Carregando métricas de tráfego e comercial...</td></tr>
             </tbody>
           </table>
         </div>
-      </section>
+      </div>
+
+      <!-- 2. Quadro de Criativos Campeões -->
+      <div class="table-card glass-card" style="margin-bottom: 2rem;">
+        <div class="table-header" style="margin-bottom: 1rem;">
+          <h2 style="font-size: 1.15rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.2rem;">🏆 Quadro de Criativos Campeões</h2>
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">Performance detalhada por criativo, custo por lead e plano de melhorias de copy/design.</p>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th class="text-center">#</th>
+                <th>Nome do Criativo</th>
+                <th>Campanha / Público</th>
+                <th class="text-center">Investimento</th>
+                <th class="text-center">Impressões</th>
+                <th class="text-center">Leads Gerados</th>
+                <th class="text-center">Custo / Lead</th>
+                <th>Diagnóstico & Melhorias</th>
+                <th class="text-center">Link Anúncio</th>
+              </tr>
+            </thead>
+            <tbody id="championCreativesTableBody">
+              <tr><td colspan="9" class="text-center py-4 text-muted">Carregando criativos campeões...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 3. Investimento x Faturado Mensal -->
+      <div class="table-card glass-card">
+        <div class="table-header" style="margin-bottom: 1rem;">
+          <h2 style="font-size: 1.15rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.2rem;">📈 Investimento × Faturamento Anual (Mês a Mês)</h2>
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">Histórico e evolução do retorno sobre o investimento (ROAS) ao longo do ano.</p>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Mês</th>
+                <th class="text-center">Valor Investido (Meta Ads)</th>
+                <th class="text-center">Valor Faturado (Vendas)</th>
+                <th class="text-center">ROAS</th>
+                <th class="text-center">Eficiência</th>
+              </tr>
+            </thead>
+            <tbody id="annualTrafficSalesTableBody">
+              <tr><td colspan="5" class="text-center py-4 text-muted">Carregando histórico anual...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
+
+    <!-- MAIN TAB 2: Pages, VSL & A/B Analytics View -->
 
     <!-- MAIN TAB 3: Eduzz Analytics View -->
     <div id="eduzzMainTabContent" class="main-tab-content">
@@ -965,10 +1076,12 @@
       </div>
     </div>
 
-    <!-- MAIN TAB 4: Pages Analytics View -->
+    <!-- MAIN TAB 2: Pages, VSL & Teste A/B Analytics View -->
     <div id="pagesMainTabContent" class="main-tab-content">
         <div class="pages-header">
-            <h2 class="section-title">📄 Relatório de Páginas</h2>
+            <h2 class="section-title" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+              🎬 Páginas, VSL & Teste A/B
+            </h2>
             <div class="pages-date-pills" id="pagesDatePills">
                 <button class="pill-btn active" data-period="today">Hoje</button>
                 <button class="pill-btn" data-period="7">7D</button>
@@ -978,108 +1091,213 @@
             </div>
         </div>
 
-        <!-- KPI Cards Row -->
-        <div class="pages-kpi-row">
-            <div class="pages-kpi-card">
-                <div class="pages-kpi-label">Total de Acessos</div>
-                <div class="pages-kpi-value" id="pagesKpiTotal">—</div>
-            </div>
-            <div class="pages-kpi-card">
-                <div class="pages-kpi-label">Leads Gerados</div>
-                <div class="pages-kpi-value" id="pagesKpiLeads">—</div>
-            </div>
-            <div class="pages-kpi-card">
-                <div class="pages-kpi-label">Taxa de Conversão</div>
-                <div class="pages-kpi-value" id="pagesKpiConversion">—</div>
-            </div>
-            <div class="pages-kpi-card">
-                <div class="pages-kpi-label">Desktop / Mobile</div>
-                <div class="pages-kpi-value" id="pagesKpiDevice">—</div>
-            </div>
+        <!-- Sub-Tabs Navigation (Komando vs Outras Páginas) -->
+        <div class="pages-subnav-bar" id="pagesSubnavBar">
+            <button class="pages-subnav-btn active" data-subtab="komando">👑 Komando (VSL, Teste A/B & UTMs)</button>
+            <button class="pages-subnav-btn" data-subtab="ecosystem">🌐 Outras Páginas (MLFP, KOP, KOR, Ebooks)</button>
         </div>
 
-        <!-- Charts Row -->
-        <div class="pages-charts-row">
-            <div class="pages-chart-card">
-                <h3 class="pages-chart-title">Distribuição por Variação A/B</h3>
-                <div class="pages-chart-container">
-                    <canvas id="pagesVariantChart"></canvas>
+        <!-- SUBTAB 1: KOMANDO VSL & TESTE A/B -->
+        <div id="pagesSubtabKomando" class="pages-subtab-pane active">
+            <!-- Komando Live & Top KPIs -->
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+                <h3 style="font-family: var(--font-heading); font-size: 1.1rem; font-weight: 700; color: var(--text-main); margin: 0;">
+                  👑 Consultoria Komando (<a href="https://consultoriakomando.com.br" target="_blank" rel="noopener" style="color: #2563eb; text-decoration: none;">consultoriakomando.com.br</a>)
+                </h3>
+                <span class="live-pill" style="display: inline-flex; align-items: center; gap: 6px; background: rgba(239, 68, 68, 0.12); color: #dc2626; padding: 4px 12px; border-radius: 20px; font-size: 0.78rem; font-weight: 800; border: 1px solid rgba(239, 68, 68, 0.25);">
+                    <span style="width: 8px; height: 8px; background: #ef4444; border-radius: 50%; box-shadow: 0 0 8px #ef4444;"></span>
+                    <span id="vturbLiveUsers">0 Ao Vivo</span>
+                </span>
+            </div>
+
+            <!-- VTurb Player Detail -->
+            <div class="pages-table-card" style="margin-bottom: 1.5rem;">
+                <h3 class="pages-chart-title">🎬 Player VSL Oficial (VTurb Analytics)</h3>
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Vídeo / Página VSL</th>
+                                <th>Duração</th>
+                                <th class="text-center">Visualizações</th>
+                                <th class="text-center">Visitantes Únicos</th>
+                                <th class="text-center">Plays</th>
+                                <th class="text-center">Taxa de Play</th>
+                                <th class="text-center">Assistiram ao Pitch</th>
+                                <th class="text-center">Ao Vivo</th>
+                            </tr>
+                        </thead>
+                        <tbody id="vturbTableBody">
+                          <tr>
+                            <td colspan="8" class="text-center text-muted">Carregando métricas da VTurb...</td>
+                          </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
-            <div class="pages-chart-card">
-                <h3 class="pages-chart-title">Acessos por Dia</h3>
-                <div class="pages-chart-container">
-                    <canvas id="pagesDailyChart"></canvas>
+
+            <!-- A/B Test Charts Row -->
+            <div class="pages-charts-row">
+                <div class="pages-chart-card">
+                    <h3 class="pages-chart-title">Distribuição de Acessos por Variação A/B</h3>
+                    <div class="pages-chart-container">
+                        <canvas id="pagesVariantChart"></canvas>
+                    </div>
+                </div>
+                <div class="pages-chart-card">
+                    <h3 class="pages-chart-title">Acessos por Dia</h3>
+                    <div class="pages-chart-container">
+                        <canvas id="pagesDailyChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- A/B Comparison Table with CRM Lead Cross-Reference -->
+            <div class="pages-table-card" style="margin-bottom: 1.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+                    <div>
+                        <h3 class="pages-chart-title" style="margin-bottom: 0.2rem;">🧪 Comparativo de Variações A/B (Komando)</h3>
+                        <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">Cruzamento automático: Acessos da página × Leads taggeados no CRM (Campo 494249 / Tags AB_1 a AB_6)</p>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Variação</th>
+                                <th class="text-center">Tipo VSL</th>
+                                <th class="text-center">Headline</th>
+                                <th class="text-center">Acessos</th>
+                                <th class="text-center">Leads (CRM)</th>
+                                <th class="text-center">Conversão</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pagesVariantTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- UTM Sources Table -->
+            <div class="pages-table-card">
+                <h3 class="pages-chart-title">🔍 Origens de Tráfego & Campanhas (Komando)</h3>
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Origem / Campanha</th>
+                                <th class="text-center">Acessos</th>
+                                <th class="text-center">% do Total</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pagesUtmTableBody"></tbody>
+                    </table>
                 </div>
             </div>
         </div>
 
-        <!-- All Ecosystem Pages Table -->
-        <div class="pages-table-card" style="margin-bottom: 1.5rem;">
-            <h3 class="pages-chart-title">🌐 Desempenho Geral de Páginas & LPs (Ecossistema)</h3>
-            <div class="table-responsive">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Página / Produto</th>
-                            <th>Domínio / URL</th>
-                            <th class="text-center">Visualizações</th>
-                            <th class="text-center">Visitantes Únicos</th>
-                            <th class="text-center">Plays VSL %</th>
-                            <th class="text-center">Retenção Pitch %</th>
-                            <th class="text-center">Leads Gerados</th>
-                            <th class="text-center">Taxa de Conversão LP</th>
-                            <th class="text-center">Ao Vivo</th>
-                        </tr>
-                    </thead>
-                    <tbody id="allPagesTableBody">
-                      <tr>
-                        <td colspan="9" class="text-center text-muted">Carregando métricas de todas as páginas...</td>
-                      </tr>
-                    </tbody>
-                </table>
+        <!-- SUBTAB 2: OUTRAS PÁGINAS DO ECOSSISTEMA -->
+        <div id="pagesSubtabEcosystem" class="pages-subtab-pane">
+            <!-- Product KPI Cards Grid -->
+            <div class="ecosystem-product-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+                <div class="pages-kpi-card" style="border-left: 4px solid #3b82f6;">
+                    <div class="pages-kpi-label">🎓 Mentoria Líder Faixa Preta</div>
+                    <div class="pages-kpi-value" id="ecoMetricMlfp" style="color: #2563eb;">—</div>
+                    <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">chefkaka.com · Funil [MLFP] Inbound</div>
+                </div>
+                <div class="pages-kpi-card" style="border-left: 4px solid #10b981;">
+                    <div class="pages-kpi-label">📚 Ebooks & Iscas Digitais</div>
+                    <div class="pages-kpi-value" id="ecoMetricEbooks" style="color: #059669;">—</div>
+                    <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">consultoriakomando.com.br/ebooks · Funil [KO] Ebooks</div>
+                </div>
+                <div class="pages-kpi-card" style="border-left: 4px solid #f59e0b;">
+                    <div class="pages-kpi-label">⚙️ KOP Komando Operação</div>
+                    <div class="pages-kpi-value" id="ecoMetricKop" style="color: #d97706;">—</div>
+                    <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">chefkakagomes.com/kop · Funil [KOP] Inbound</div>
+                </div>
+                <div class="pages-kpi-card" style="border-left: 4px solid #8b5cf6;">
+                    <div class="pages-kpi-label">🔄 KOR Inbound / Downsell</div>
+                    <div class="pages-kpi-value" id="ecoMetricKor" style="color: #7c3aed;">—</div>
+                    <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">chefkakagomes.com/kor · Funil [KOR] Inbound</div>
+                </div>
+            </div>
+
+            <!-- Ecosystem Table -->
+            <div class="pages-table-card" style="margin-bottom: 1.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.5rem;">
+                    <div>
+                        <h3 class="pages-chart-title" style="margin-bottom: 0.25rem;">🌐 Desempenho dos Funis & Páginas do Ecossistema</h3>
+                        <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">Volume de captação e performance comercial integrados ao Kommo CRM.</p>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Produto / Oferta</th>
+                                <th>URL da Landing Page</th>
+                                <th>Funil CRM</th>
+                                <th class="text-center">Leads no Período</th>
+                                <th class="text-center">Total Histórico</th>
+                                <th class="text-center">Vendas Ganhas</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ecosystemTableBody">
+                          <tr>
+                            <td colspan="6" class="text-center text-muted">Carregando métricas de todas as páginas...</td>
+                          </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- GA4 Live Analytics Table -->
+            <div class="pages-table-card" style="margin-bottom: 1.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.5rem;">
+                    <div>
+                        <h3 class="pages-chart-title" style="margin-bottom: 0.25rem;">📊 Tráfego Web & Conversão por Página (Google Analytics 4)</h3>
+                        <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">Sessões e visitantes únicos medidos via GA4 cruzados com os leads do Kommo CRM.</p>
+                    </div>
+                    <span class="badge" style="background:rgba(16,185,129,0.12); color:#059669; font-weight:800; font-size:0.75rem; padding:0.35rem 0.75rem; border-radius:20px;">🟢 GA4 Conectado (ID: 436068393)</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Domínio / Página</th>
+                                <th class="text-center">Sessões (GA4)</th>
+                                <th class="text-center">Visitantes Únicos</th>
+                                <th class="text-center">Visualizações</th>
+                                <th class="text-center">Leads (CRM)</th>
+                                <th class="text-center">Conversão</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ga4PagesTableBody">
+                          <tr>
+                            <td colspan="6" class="text-center text-muted">Carregando métricas do Google Analytics 4...</td>
+                          </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- GA4 Charts Row -->
+            <div class="pages-charts-row" style="margin-bottom: 1.5rem;">
+                <div class="pages-chart-card">
+                    <h3 class="pages-chart-title">Acessos Diários (Google Analytics 4)</h3>
+                    <div class="pages-chart-container">
+                        <canvas id="ga4DailyChart"></canvas>
+                    </div>
+                </div>
+                <div class="pages-chart-card">
+                    <h3 class="pages-chart-title">Principais Origens de Tráfego (GA4)</h3>
+                    <div class="pages-chart-container">
+                        <canvas id="ga4SourcesChart"></canvas>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- A/B Comparison Table -->
-        <div class="pages-table-card">
-            <h3 class="pages-chart-title">Comparativo de Variações A/B</h3>
-            <div class="table-responsive">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Variação</th>
-                            <th class="text-center">Tipo VSL</th>
-                            <th class="text-center">Headline</th>
-                            <th class="text-center">Acessos</th>
-                            <th class="text-center">Leads</th>
-                            <th class="text-center">Conversão</th>
-                        </tr>
-                    </thead>
-                    <tbody id="pagesVariantTableBody"></tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- UTM Sources Table -->
-        <div class="pages-table-card">
-            <h3 class="pages-chart-title">Acessos por Origem (UTM Source)</h3>
-            <div class="table-responsive">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Origem</th>
-                            <th class="text-center">Acessos</th>
-                            <th class="text-center">% do Total</th>
-                        </tr>
-                    </thead>
-                    <tbody id="pagesUtmTableBody"></tbody>
-                </table>
-            </div>
-        </div>
-
-        <p class="pages-footer-note">Dados atualizados em tempo real. Auto-refresh a cada 60s.</p>
-    </div> <!-- Close pagesView -->
+        <p class="pages-footer-note">Dados sincronizados em tempo real com Kommo CRM e VTurb Analytics. Auto-refresh a cada 60s.</p>
     </div> <!-- Close pagesMainTabContent -->
   </div> <!-- Close app-container -->
 
@@ -1119,8 +1337,14 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
           <input type="text" id="modalSearchInput" placeholder="Buscar lead por nome, telefone, e-mail ou criativo..." />
         </div>
-        <div class="modal-count-badge">
-          Total: <strong id="modalLeadCount">0 leads</strong>
+        <div class="modal-actions-right">
+          <button id="btnExportModalLeadsCsv" class="btn btn-export-csv-modal" title="Exportar leads desta etapa para CSV">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Exportar Etapa (CSV)
+          </button>
+          <div class="modal-count-badge">
+            Total: <strong id="modalLeadCount">0 leads</strong>
+          </div>
         </div>
       </div>
 
@@ -1152,6 +1376,91 @@
       </div>
     </div>
   </div>
+
+  <!-- Floating AI Assistant Trigger -->
+  <div class="ai-fab-container" id="aiFabContainer">
+    <button class="ai-fab-btn" id="aiFabBtn" title="Abrir Assistente de Inteligência Artificial">
+      <span class="ai-fab-icon">✨</span>
+      <span class="ai-fab-label">Assistente IA</span>
+      <span class="ai-fab-pulse"></span>
+    </button>
+  </div>
+
+  <!-- AI Assistant Drawer / Offcanvas -->
+  <div class="ai-drawer-overlay" id="aiDrawerOverlay"></div>
+  <aside class="ai-drawer glass-card" id="aiDrawer">
+    <!-- Header -->
+    <div class="ai-drawer-header">
+      <div class="ai-drawer-title-group">
+        <div class="ai-avatar-badge">
+          <span>✨</span>
+        </div>
+        <div>
+          <h3>Assistente IA Komando</h3>
+          <p class="ai-status"><span class="status-dot-pulse"></span> Inteligência de Vendas & CRM</p>
+        </div>
+      </div>
+      <div class="ai-header-controls">
+        <button class="ai-icon-btn" id="aiClearChatBtn" title="Limpar conversa">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+        <button class="ai-icon-btn" id="aiCloseDrawerBtn" title="Fechar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Suggested Questions Chips -->
+    <div class="ai-chips-wrapper" id="aiChipsWrapper">
+      <div class="ai-chips-scroll">
+        <button class="ai-chip-btn" data-query="Resumo executivo do mês atual: leads, vendas, faturamento e ROAS">
+          📊 Resumo do Mês
+        </button>
+        <button class="ai-chip-btn" data-query="Quantos leads MQL entraram na Komando esta semana e quais seus faturamentos?">
+          🔥 MQLs da Komando
+        </button>
+        <button class="ai-chip-btn" data-query="Qual o desempenho das campanhas de Meta Ads este mês por produto?">
+          🎯 Meta Ads & ROAS
+        </button>
+        <button class="ai-chip-btn" data-query="Quais são os maiores gargalos e desafios citados pelos leads no formulário?">
+          🚧 Gargalos dos Leads
+        </button>
+        <button class="ai-chip-btn" data-query="Quantas vendas foram confirmadas na Eduzz para KOP e KOR?">
+          💳 Vendas KOP / KOR
+        </button>
+      </div>
+    </div>
+
+    <!-- Chat Messages Container -->
+    <div class="ai-messages-container" id="aiMessagesContainer">
+      <div class="ai-message ai-message-system">
+        <div class="ai-msg-avatar">✨</div>
+        <div class="ai-msg-bubble">
+          <p>Olá! Sou o <strong>Assistente IA da Komando</strong>. 🚀</p>
+          <p>Posso analisar métricas em tempo real, localizar leads no Kommo CRM, consultar respostas de formulários, vendas da Eduzz e dados de tráfego.</p>
+          <p class="ai-tip">💡 <em>Você pode clicar em uma das sugestões acima ou fazer qualquer pergunta sobre o negócio.</em></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input Bar -->
+    <div class="ai-input-wrapper">
+      <form id="aiChatForm" class="ai-input-form">
+        <textarea 
+          id="aiChatInput" 
+          placeholder="Pergunte sobre leads, métricas, vendas, campanhas..." 
+          rows="1"
+          maxlength="1000"
+        ></textarea>
+        <button type="submit" id="aiSendBtn" class="ai-send-btn" title="Enviar pergunta">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+        </button>
+      </form>
+      <div class="ai-footer-note">
+        <span>Alimentado por Kommo CRM, Meta Ads & Eduzz Data Engine</span>
+      </div>
+    </div>
+  </aside>
 
   <!-- App Main Logic Script -->
   <script src="app.js"></script>

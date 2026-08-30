@@ -48,15 +48,14 @@ const PIPELINES = {
 };
 
 // Funis comerciais que compõem a visão "Todos os Funis".
-// Base de Clientes (registro de pagamento) e Leads Antigos ficam de fora:
-// não são captação do período e inflariam o topo do funil.
+// Base de Clientes (registro de pagamento), Leads Antigos e Instagram DMs (Social Selling) ficam de fora:
+// não são captação do Inbound comercial e inflariam/distorceriam as métricas de campanha.
 const FUNIS_COMERCIAIS = [
   PIPELINES.MLFP,
   PIPELINES.KO_INBOUND,
   PIPELINES.KO_EBOOKS,
   PIPELINES.KOP,
   PIPELINES.KOR,
-  PIPELINES.SOCIAL_SELLING,
   PIPELINES.RECUPERACAO
 ];
 
@@ -80,6 +79,14 @@ const ETAPAS_POR_PIPELINE = {
     noshow: [108291644],
     avancado: [102599203],                                // Reunião Realizada
     downsell: [108619300]
+  },
+  [PIPELINES.MLFP_ANTIGOS]: {
+    tipo: 'reuniao',
+    espera: [108121856, 108123248, 108121868, 110155540], // Etapa de entrada, Tentando Contato, Contatos Dia - Jac, Respondidos
+    engajado: [108123252],                                // Reunião Agendada
+    noshow: [110341428],                                  // No show
+    avancado: [108123256, 108123260],                     // Reunião Realizada, Negociação
+    downsell: []
   },
   [PIPELINES.KO_INBOUND]: {
     tipo: 'reuniao',
@@ -194,15 +201,33 @@ const FUNNEL = {
     const etapas = FUNNEL.etapasDe(lead);
     const tags = FUNNEL.tags(lead);
 
-    const hasMqlTag = tags.includes('MQL') || tags.includes('QUALIFICADO') || tags.includes('KO_MQL');
-    const hasDesqualificado = tags.includes('DESQUALIFICADO') || tags.includes('DISQUALIFIED') || tags.includes('FORA DO PERFIL');
+    // Regra MLFP: Auxiliares de cozinha NÃO entram como MQL mesmo com faturamento acima do recomendado
+    const isMlfpLead = lead.pipeline_id === 13304583 || lead.pipeline_id === 14008652 || lead.pipeline_id === 14290224;
+    let isAuxiliar = false;
+    if (isMlfpLead) {
+      const cfs = lead.custom_fields_values || [];
+      for (const f of cfs) {
+        const fn = String(f.field_name || '').toLowerCase();
+        const val = String(f.values?.[0]?.value || '').toUpperCase();
+        if (f.field_id === 128884 || f.field_id === 128474 || fn.includes('cargo') || fn.includes('perfil')) {
+          if (val.includes('AUXILIAR') || val.includes('AJUDANTE') || val.includes('BUSCO EVOLUÇÃO') || val.includes('BUSCO EVOLUCAO')) {
+            isAuxiliar = true;
+            break;
+          }
+        }
+      }
+    }
+
+    const hasMqlTag = !isAuxiliar && (tags.includes('MQL') || tags.includes('QUALIFICADO') || tags.includes('KO_MQL'));
+    const hasDesqualificado = isAuxiliar || tags.includes('DESQUALIFICADO') || tags.includes('DISQUALIFIED') || tags.includes('FORA DO PERFIL');
 
     const isWon = sale.isWon;
     const isNoShow = (etapas.noshow || []).includes(sId);
     // Avançado = reunião realizada / em negociação, ou venda fechada
     const isAvancado = (etapas.avancado || []).includes(sId) || isWon;
     // Engajado = reunião agendada / contato iniciado, ou qualquer etapa além
-    const isEngajado = (etapas.engajado || []).includes(sId) || isNoShow || isAvancado;
+    const isEngajado = !isAuxiliar && ((etapas.engajado || []).includes(sId) || isNoShow || isAvancado);
+    const isMql = !isAuxiliar && (hasMqlTag || isEngajado);
 
     return {
       sale,
@@ -211,9 +236,10 @@ const FUNNEL = {
       isNoShow,
       isAvancado,
       isEngajado,
-      isMql: hasMqlTag || isEngajado,
+      isMql,
       isEmEspera: (etapas.espera || []).includes(sId) || tags.includes('FOLLOW UP') || tags.includes('SEM RESPOSTA'),
-      isDownsell: tags.includes('DOWNSELL')
+      isDownsell: isAuxiliar
+        || tags.includes('DOWNSELL')
         || (etapas.downsell || []).includes(sId)
         || (hasDesqualificado && !hasMqlTag),
       revenue: isWon ? (sale.price || lead.price || 0) : 0
@@ -567,6 +593,31 @@ function setupEventListeners() {
       renderModalLeadList(filteredModalLeads);
     });
   }
+
+  // CSV Export Buttons
+  const btnExportFiltered = document.getElementById('btnExportFilteredLeadsCsv');
+  if (btnExportFiltered) {
+    btnExportFiltered.addEventListener('click', () => {
+      exportLeadsToCSV(state.filteredLeads);
+    });
+  }
+
+  const btnExportFunnelHeader = document.getElementById('btnExportFunnelHeaderCsv');
+  if (btnExportFunnelHeader) {
+    btnExportFunnelHeader.addEventListener('click', () => {
+      exportLeadsToCSV(state.filteredLeads);
+    });
+  }
+
+  const btnExportModal = document.getElementById('btnExportModalLeadsCsv');
+  if (btnExportModal) {
+    btnExportModal.addEventListener('click', () => {
+      const stepTitle = document.getElementById('modalStepTitle')?.innerText || 'etapa';
+      const cleanTitle = stepTitle.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_');
+      const todayStr = new Date().toISOString().split('T')[0];
+      exportLeadsToCSV(currentModalStepLeads, `leads_${cleanTitle}_${todayStr}.csv`);
+    });
+  }
 }
 
 // switchTab() foi removida: era o sistema de abas antigo (kommoView/eduzzView),
@@ -685,11 +736,17 @@ function getMarketingValue(lead, groupType) {
   const targetCode = 'UTM_' + groupType.toUpperCase();
   
   if (!lead.custom_fields_values) return 'Orgânico/Direto';
-  const field = lead.custom_fields_values.find(cf => cf.field_id === targetId || cf.field_code === targetCode);
+  const field = lead.custom_fields_values.find(cf => cf.field_id === targetId || cf.field_code === targetCode || (cf.field_name && cf.field_name.toLowerCase().includes('utm_' + groupType)));
   if (field && field.values && field.values[0] && field.values[0].value) {
-    let val = field.values[0].value.trim();
+    let val = String(field.values[0].value).trim();
     if (val.includes('|')) {
       val = val.split('|')[0];
+    }
+
+    try {
+      val = decodeURIComponent(val.replace(/\+/g, ' '));
+    } catch(e) {
+      val = val.replace(/\+/g, ' ');
     }
     
     if (groupType === 'campaign' && val.includes('LF_EBOOK')) {
@@ -716,17 +773,29 @@ function getCustomFieldValue(lead, fieldId) {
   return null;
 }
 
+// Helper to normalize variant key (1 to 6)
+function normalizeVariantKey(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim().toLowerCase();
+  const match = s.match(/(?:ab[_\s:]*|var(?:ia[çc][ãa]o|iante)?[_\s:]*|v)?([1-6])/i);
+  if (match && match[1]) return match[1];
+  return null;
+}
+
 // Extract A/B Variant value from Custom Fields (ID 494249) or Tags
 function getLeadAbVariant(lead) {
   if (!lead) return null;
   const cfs = lead.custom_fields_values || [];
   const abField = cfs.find(f => f.field_id === 494249 || f.field_code === 'AB_VARIANT' || String(f.field_name || '').toLowerCase().includes('variante') || String(f.field_name || '').toLowerCase().includes('ab_variant'));
   if (abField && abField.values && abField.values[0] && abField.values[0].value) {
-    return abField.values[0].value.trim();
+    const norm = normalizeVariantKey(abField.values[0].value);
+    if (norm) return norm;
   }
   const tags = (lead._embedded?.tags || []).map(t => t.name || '');
-  const abTag = tags.find(t => t.toUpperCase().startsWith('AB_') || t.toUpperCase().startsWith('AB:') || t.toUpperCase().startsWith('VARIANTE:'));
-  if (abTag) return abTag.replace(/^AB_/i, '').replace(/^AB:\s*/i, '').replace(/^Variante:\s*/i, '').trim();
+  for (const t of tags) {
+    const norm = normalizeVariantKey(t);
+    if (norm) return norm;
+  }
   return null;
 }
 
@@ -758,6 +827,15 @@ function getUserName(userId) {
   const usersList = state.users._embedded?.users || [];
   const user = usersList.find(u => u.id === parseInt(userId));
   return user ? user.name : `Usuário #${userId}`;
+}
+
+// Map pipeline IDs to names
+function getPipelineName(pipelineId) {
+  if (!pipelineId || pipelineId === 'all') return 'Todos os Funis';
+  if (parseInt(pipelineId) === 14008652) return 'MLFP Leads Antigos (Repescagem)';
+  const pipelinesList = state.pipelines._embedded?.pipelines || [];
+  const pipe = pipelinesList.find(p => p.id === parseInt(pipelineId));
+  return pipe ? pipe.name : `Funil #${pipelineId}`;
 }
 
 // Apply Filters to Leads list
@@ -801,6 +879,12 @@ function applyFilters() {
   }
 
   state.filteredLeads = filtered;
+
+  // Update export leads count badge
+  const exportCountEl = document.getElementById('exportLeadsCount');
+  if (exportCountEl) {
+    exportCountEl.innerText = state.filteredLeads.length;
+  }
   
   // Update UI Elements
   renderFunnelChart();
@@ -814,6 +898,11 @@ function applyFilters() {
 
   // Eduzz também respeita o período selecionado (no-op se o range não mudou)
   fetchEduzzAnalytics();
+
+  // Pages analytics também respeita o período selecionado
+  if (state.activeMainTab === 'pages' || pagesSegueFiltroGlobal) {
+    loadPageAnalytics();
+  }
 }
 
 // Render Graphic Pyramid Funnel
@@ -937,6 +1026,7 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
   if (elTitle) {
     const titulos = {
       [PIPELINES.MLFP]: 'Funil Comercial & Leads — Mentoria MLFP',
+      [PIPELINES.MLFP_ANTIGOS]: 'Funil Comercial & Leads — MLFP Leads Antigos (Repescagem)',
       [PIPELINES.KO_INBOUND]: 'Funil Comercial & Leads — Komando (KO Inbound)',
       [PIPELINES.KOP]: 'Funil Comercial & Leads — Komando KOP Inbound',
       [PIPELINES.KOR]: 'Funil Comercial & Leads — KOR Inbound',
@@ -1185,24 +1275,43 @@ if (!state.contactsCache) state.contactsCache = {};
 
 function getLeadContactValue(lead, type) {
   const contacts = lead._embedded?.contacts || [];
-  if (contacts.length === 0) return '';
-  const contactId = contacts[0].id || contacts[0];
-  const cached = state.contactsCache[contactId];
+  let contactId = null;
+  if (contacts.length > 0) {
+    contactId = contacts[0].id || contacts[0];
+  }
+
+  const cached = contactId ? state.contactsCache[contactId] : null;
 
   if (cached) {
-    if (type === 'name') return cached.name || '';
-    if (type === 'phone') return cached.phone || '';
-    if (type === 'email') return cached.email || '';
+    if (type === 'name' && cached.name) return cached.name;
+    if (type === 'phone' && cached.phone) return cached.phone;
+    if (type === 'email' && cached.email) return cached.email;
   }
 
-  const c = contacts[0];
-  if (type === 'name') return c.name || '';
+  if (contacts.length > 0) {
+    const c = contacts[0];
+    if (type === 'name' && c.name) return c.name;
+    if (type === 'phone') {
+      const p = c.phone || (c.custom_fields_values || []).find(f => f.field_code === 'PHONE' || f.field_id === 110074 || f.field_id === 110080 || String(f.field_name || '').toLowerCase().includes('tel') || String(f.field_name || '').toLowerCase().includes('phone') || String(f.field_name || '').toLowerCase().includes('whats'))?.values?.[0]?.value;
+      if (p) return p;
+    }
+    if (type === 'email') {
+      const em = c.email || (c.custom_fields_values || []).find(f => f.field_code === 'EMAIL' || f.field_id === 110076 || String(f.field_name || '').toLowerCase().includes('mail'))?.values?.[0]?.value;
+      if (em) return em;
+    }
+  }
+
+  // Fallback: check custom fields on the lead itself!
+  const leadCfs = lead.custom_fields_values || [];
   if (type === 'phone') {
-    return c.phone || (c.custom_fields_values || []).find(f => f.field_code === 'PHONE' || f.field_id === 110074)?.values?.[0]?.value || '';
+    const pLead = leadCfs.find(f => f.field_code === 'PHONE' || f.field_id === 110074 || f.field_id === 110080 || String(f.field_name || '').toLowerCase().includes('tel') || String(f.field_name || '').toLowerCase().includes('phone') || String(f.field_name || '').toLowerCase().includes('whats'))?.values?.[0]?.value;
+    if (pLead) return pLead;
   }
   if (type === 'email') {
-    return c.email || (c.custom_fields_values || []).find(f => f.field_code === 'EMAIL' || f.field_id === 110076)?.values?.[0]?.value || '';
+    const emLead = leadCfs.find(f => f.field_code === 'EMAIL' || f.field_id === 110076 || String(f.field_name || '').toLowerCase().includes('mail'))?.values?.[0]?.value;
+    if (emLead) return emLead;
   }
+
   return '';
 }
 
@@ -1319,10 +1428,238 @@ function renderModalLeadList(leadsToRender) {
   }).join('');
 }
 
-// updateKPIs() foi removida: os 11 elementos que ela alimentava
-// (funnelVal*, metric*) não existem mais no HTML — foram substituídos
-// pela pirâmide visual. A função era uma quarta cópia divergente da
-// lógica de etapas, computando tudo para descartar em seguida.
+// Extract any custom field from lead or contact with multiple fallback IDs and keyword searches
+function getLeadCustomFieldValue(lead, fieldIds = [], fieldNameKeywords = []) {
+  const cfs = lead.custom_fields_values || [];
+  for (const f of cfs) {
+    const val = f.values?.[0]?.value;
+    if (val === undefined || val === null || String(val).trim() === '') continue;
+    if (fieldIds.includes(f.field_id)) return String(val).trim();
+    const fName = String(f.field_name || f.name || '').toLowerCase();
+    const fCode = String(f.field_code || f.code || '').toLowerCase();
+    if (fieldNameKeywords.some(kw => fName.includes(kw) || fCode.includes(kw))) {
+      return String(val).trim();
+    }
+  }
+
+  // Also check linked cached contact custom fields
+  const contacts = lead._embedded?.contacts || [];
+  if (contacts.length > 0) {
+    const cId = contacts[0].id || contacts[0];
+    const cached = cId ? state.contactsCache?.[cId] : null;
+    const contactCfs = cached?.custom_fields_values || [];
+    for (const f of contactCfs) {
+      const val = f.values?.[0]?.value;
+      if (val === undefined || val === null || String(val).trim() === '') continue;
+      if (fieldIds.includes(f.field_id)) return String(val).trim();
+      const fName = String(f.field_name || f.name || '').toLowerCase();
+      const fCode = String(f.field_code || f.code || '').toLowerCase();
+      if (fieldNameKeywords.some(kw => fName.includes(kw) || fCode.includes(kw))) {
+        return String(val).trim();
+      }
+    }
+  }
+
+  return '';
+}
+
+// Export filtered leads to CSV (Excel-ready with UTF-8 BOM and semicolon delimiters)
+async function exportLeadsToCSV(leadsArray, customFilename = null) {
+  const leadsToExport = (Array.isArray(leadsArray) && leadsArray.length > 0) ? leadsArray : state.filteredLeads;
+
+  if (!leadsToExport || leadsToExport.length === 0) {
+    alert('Nenhum lead encontrado com os filtros atuais para exportação.');
+    return;
+  }
+
+  // 1. Identify missing contacts that need phone and email details
+  if (!state.contactsCache) state.contactsCache = {};
+  const missingContactIds = [];
+  leadsToExport.forEach(lead => {
+    const contacts = lead._embedded?.contacts || [];
+    if (contacts.length > 0) {
+      const cId = contacts[0].id || contacts[0];
+      if (cId && !state.contactsCache[cId]) {
+        missingContactIds.push(cId);
+      }
+    }
+  });
+
+  // 2. Pre-fetch missing contact details in batch before CSV compilation
+  const btn = document.getElementById('btnExportFilteredLeadsCsv');
+  const btnAlt = document.getElementById('btnExportFunnelHeaderCsv');
+  const btnModal = document.getElementById('btnExportModalLeadsCsv');
+  const activeBtn = btn || btnAlt || btnModal;
+  const originalBtnHTML = activeBtn ? activeBtn.innerHTML : '';
+
+  if (missingContactIds.length > 0) {
+    if (activeBtn) {
+      activeBtn.innerHTML = `<span>⏳ Carregando telefones (${missingContactIds.length})...</span>`;
+      activeBtn.disabled = true;
+    }
+
+    try {
+      const batchSize = 200;
+      for (let i = 0; i < missingContactIds.length; i += batchSize) {
+        const chunk = missingContactIds.slice(i, i + batchSize);
+        if (activeBtn) {
+          activeBtn.innerHTML = `<span>⏳ Carregando telefones (${Math.min(i + batchSize, missingContactIds.length)}/${missingContactIds.length})...</span>`;
+        }
+        const res = await fetch('/api/contacts/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contactIds: chunk })
+        });
+        const data = await res.json();
+        if (data.success && data.contacts) {
+          Object.assign(state.contactsCache, data.contacts);
+        }
+      }
+    } catch (err) {
+      console.error('[Export CSV] Error batch fetching contacts:', err);
+    } finally {
+      if (activeBtn) {
+        activeBtn.innerHTML = originalBtnHTML;
+        activeBtn.disabled = false;
+      }
+    }
+  }
+
+  const kommoDomain = 'chefkakagomes.kommo.com';
+
+  // CSV Columns Header
+  const headers = [
+    'ID Lead CRM',
+    'Nome do Lead',
+    'Nome do Contato',
+    'Telefone / WhatsApp',
+    'Link WhatsApp (wa.me)',
+    'E-mail',
+    'Funil / Pipeline',
+    'Etapa do Funil (Status)',
+    'Qualificação (MQL)',
+    'Valor do Lead (R$)',
+    'Venda Eduzz Confirmada',
+    'Valor Venda Eduzz (R$)',
+    'Data de Criação',
+    'SDR',
+    'Closer',
+    'Responsável CRM',
+    'Cargo / Perfil',
+    'Faturamento Médio',
+    'Tamanho da Equipe',
+    'Maior Gargalo',
+    'Possui Líder Operacional',
+    'Possui Sócios',
+    'Instagram',
+    'Variante A/B (LP)',
+    'Tags',
+    'UTM Campanha (utm_campaign)',
+    'UTM Origem (utm_source)',
+    'UTM Mídia (utm_medium)',
+    'UTM Conteúdo (utm_content)',
+    'UTM Termo (utm_term)',
+    'Link Direto Kommo CRM'
+  ];
+
+  // Helper to escape CSV values
+  const escapeCSV = (val) => {
+    if (val === null || val === undefined) return '""';
+    const str = String(val).replace(/"/g, '""');
+    return `"${str}"`;
+  };
+
+  const rows = leadsToExport.map(lead => {
+    const contactName = getLeadContactValue(lead, 'name');
+    const phone = getLeadContactValue(lead, 'phone');
+    const email = getLeadContactValue(lead, 'email');
+    const sdrName = getLeadSDR(lead);
+    const closerName = getLeadCloser(lead);
+    const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+    const waLink = cleanPhone ? `https://wa.me/${cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone}` : '';
+
+    const campaign = getUTMValue(lead, 'campaign');
+    const source = getUTMValue(lead, 'source');
+    const medium = getUTMValue(lead, 'medium');
+    const content = getUTMValue(lead, 'content');
+    const term = getUTMValue(lead, 'term');
+    const abVariant = getLeadAbVariant(lead);
+    const dateStr = lead.created_at ? new Date(lead.created_at * 1000).toLocaleString('pt-BR') : '';
+    const ownerName = getUserName(lead.responsible_user_id);
+    const statusName = getStatusName(lead.status_id, lead.pipeline_id);
+    const pipelineName = getPipelineName(lead.pipeline_id);
+    const kommoLink = `https://${kommoDomain}/leads/detail/${lead.id}`;
+
+    const tags = (lead._embedded?.tags || []).map(t => t.name);
+    const isMql = FUNNEL.matchesStep(lead, 'mql');
+    const saleStatus = getLeadSaleStatus(lead);
+
+    const cargo = getLeadCustomFieldValue(lead, [128884, 128474], ['cargo', 'perfil']);
+    const faturamento = getLeadCustomFieldValue(lead, [128886, 128476], ['faturamento', 'renda']);
+    const equipe = getLeadCustomFieldValue(lead, [492035], ['equipe', 'time', 'colaborador']);
+    const gargalo = getLeadCustomFieldValue(lead, [492037], ['gargalo', 'desafio']);
+    const lider = getLeadCustomFieldValue(lead, [492039], ['lider', 'líder']);
+    const socios = getLeadCustomFieldValue(lead, [128888], ['socio']);
+    const instagram = getLeadCustomFieldValue(lead, [311994], ['instagram']);
+
+    return [
+      lead.id,
+      contactName ? `${contactName} (${lead.name || ''})` : (lead.name || ''),
+      contactName || '',
+      phone || '',
+      waLink || '',
+      email || '',
+      pipelineName || '',
+      statusName || '',
+      isMql ? 'Sim (MQL)' : 'Não',
+      lead.price || 0,
+      saleStatus.isWon ? 'Sim' : 'Não',
+      saleStatus.price || 0,
+      dateStr,
+      sdrName || '',
+      closerName || '',
+      ownerName || '',
+      cargo || '',
+      faturamento || '',
+      equipe || '',
+      gargalo || '',
+      lider || '',
+      socios || '',
+      instagram || '',
+      abVariant || '',
+      tags.join('; '),
+      campaign || '',
+      source || '',
+      medium || '',
+      content || '',
+      term || '',
+      kommoLink
+    ].map(escapeCSV).join(';');
+  });
+
+  // UTF-8 BOM (\uFEFF) ensures Excel opens Latin/Portuguese accents properly
+  const csvContent = '\uFEFF' + headers.map(escapeCSV).join(';') + '\n' + rows.join('\n');
+
+  // Dynamic filename
+  let filename = customFilename;
+  if (!filename) {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const pipeName = getPipelineName(state.pipelineId) || 'todos_os_funis';
+    const cleanPipe = pipeName.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_');
+    filename = `leads_crm_${cleanPipe}_${todayStr}.csv`;
+  }
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
 
 
 // Render Sales Funnel / Progression Chart
@@ -2180,6 +2517,7 @@ const PIPELINE_FUNNEL_MAP = {
   14268556: 'kor',         // [KOR] Inbound (produto independente)
   13956952: 'recuperacao', // Funil de Recuperação
   13304583: 'mlfp',        // Mentoria MLFP
+  14008652: 'mlfp',        // [MLFP] Leads Antigos (Repescagem)
   13537971: 'ebook',       // KO Ebooks
   14104532: 'engajamento'  // Instagram (Social Selling)
 };
@@ -2587,53 +2925,278 @@ async function loadPageAnalytics() {
     try {
         const { since, until } = getPagesDateRange(pagesActivePeriod);
         let url = '/api/page-analytics?';
-        if (since) url += `since=${encodeURIComponent(since)}&`;
-        if (until) url += `until=${encodeURIComponent(until)}&`;
-        
-        const res = await fetch(url);
-        const json = await res.json();
-        
-        if (!json.success) {
-            console.error('[Pages] Error loading analytics:', json);
-            return;
+        let ga4Url = '/api/ga4-analytics?';
+        if (since) {
+            url += `since=${encodeURIComponent(since)}&`;
+            ga4Url += `since=${encodeURIComponent(since)}&`;
+        }
+        if (until) {
+            url += `until=${encodeURIComponent(until)}&`;
+            ga4Url += `until=${encodeURIComponent(until)}&`;
         }
         
-        renderPagesKPIs(json.data);
-        renderAllPagesTable(json.data);
-        renderPagesVariantChart(json.data);
-        renderPagesDailyChart(json.data);
-        renderPagesVariantTable(json.data);
-        renderPagesUtmTable(json.data);
+        const [res, ga4Res] = await Promise.all([
+            fetch(url).catch(() => null),
+            fetch(ga4Url).catch(() => null)
+        ]);
+
+        if (res && res.ok) {
+            const json = await res.json();
+            if (json.success) {
+                renderPagesKPIs(json.data);
+                renderVTurbPlayersTable(json.data.vturb_players);
+                renderPagesVariantChart(json.data);
+                renderPagesDailyChart(json.data);
+                renderPagesVariantTable(json.data);
+                renderPagesUtmTable(json.data);
+                renderEcosystemTable();
+            }
+        }
+
+        if (ga4Res && ga4Res.ok) {
+            const ga4Json = await ga4Res.json();
+            if (ga4Json.success) {
+                renderGA4Analytics(ga4Json);
+            }
+        }
     } catch (err) {
         console.error('[Pages] Error fetching page analytics:', err);
     }
 }
 
-function renderAllPagesTable(data) {
-  const tbody = document.getElementById('allPagesTableBody');
+let ga4DailyChartInstance = null;
+let ga4SourcesChartInstance = null;
+
+function renderGA4Analytics(ga4Data) {
+  if (!ga4Data || !ga4Data.pages) return;
+  const tbody = document.getElementById('ga4PagesTableBody');
+  const allLeads = state.leads || [];
+  const leadsBase = (state.filteredLeads && state.filteredLeads.length > 0) ? state.filteredLeads : allLeads;
+
+  function matchLeadsForUrl(host, path) {
+    const full = `${host}${path}`.toLowerCase();
+    if (full.includes('consultoriakomando')) {
+      if (full.includes('ebook')) return leadsBase.filter(l => l.pipeline_id === 13537971).length;
+      return leadsBase.filter(l => l.pipeline_id === 13304659).length;
+    }
+    if (full.includes('typebot.co') && full.includes('komando')) {
+      return leadsBase.filter(l => l.pipeline_id === 13304659).length;
+    }
+    if (full.includes('kop') || full.includes('kit-de-operacao')) {
+      return leadsBase.filter(l => l.pipeline_id === 14173256).length;
+    }
+    if (full.includes('kor') || full.includes('recuperacao') || full.includes('restaurante')) {
+      return leadsBase.filter(l => l.pipeline_id === 14268556 || l.pipeline_id === 13956952 || (l.pipeline_id === 13956856 && (l._embedded?.tags || []).some(t => t.name.toUpperCase().includes('KOR') || t.name.toUpperCase().includes('RESTAURANTE')))).length;
+    }
+    if (full.includes('eduzz')) {
+      return leadsBase.filter(l => (l._embedded?.tags || []).some(t => t.name.toLowerCase().includes('eduzz'))).length;
+    }
+    if (full.includes('chefkaka') || full.includes('diagnostico') || full.includes('faixapreta')) {
+      return leadsBase.filter(l => l.pipeline_id === 13304583).length;
+    }
+    return null;
+  }
+
+  if (tbody) {
+    const pages = (ga4Data.pages || []).slice(0, 15);
+    if (pages.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">Nenhum dado registrado no GA4 para o período.</td></tr>';
+    } else {
+      tbody.innerHTML = pages.map(p => {
+        const matchedLeads = matchLeadsForUrl(p.host, p.path);
+        let convStr = '—';
+        if (matchedLeads !== null && p.sessions > 0) {
+          const r = (matchedLeads / p.sessions) * 100;
+          if (r <= 100) convStr = `${r.toFixed(1)}%`;
+        }
+        return `
+          <tr>
+            <td style="font-weight:600; color:#0f172a;">
+              <span style="color:#2563eb;">${escapeHTML(p.host)}</span><span style="color:#64748b;">${escapeHTML(p.path)}</span>
+            </td>
+            <td class="text-center" style="font-weight:700; color:#0f172a;">${p.sessions.toLocaleString('pt-BR')}</td>
+            <td class="text-center" style="font-weight:600; color:#475569;">${p.users.toLocaleString('pt-BR')}</td>
+            <td class="text-center" style="color:#64748b;">${p.views.toLocaleString('pt-BR')}</td>
+            <td class="text-center" style="font-weight:800; color:${matchedLeads > 0 ? '#ff6b00' : '#64748b'};">${matchedLeads !== null ? matchedLeads.toLocaleString('pt-BR') : '—'}</td>
+            <td class="text-center" style="font-weight:800; color:${convStr !== '—' ? '#059669' : '#64748b'};">${convStr}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+  }
+
+  // Daily Sessions Chart
+  const ctxDaily = document.getElementById('ga4DailyChart');
+  if (ctxDaily && ga4Data.daily) {
+    if (ga4DailyChartInstance) ga4DailyChartInstance.destroy();
+    const labels = ga4Data.daily.map(d => {
+      const parts = d.date.split('-');
+      return parts.length === 3 ? `${parts[2]}/${parts[1]}` : d.date;
+    });
+    const values = ga4Data.daily.map(d => d.sessions);
+
+    ga4DailyChartInstance = new Chart(ctxDaily.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Sessões (GA4)',
+          data: values,
+          borderColor: '#2563eb',
+          backgroundColor: 'rgba(37, 99, 235, 0.08)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.3,
+          pointBackgroundColor: '#2563eb',
+          pointRadius: 3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: 'rgba(148, 163, 184, 0.1)' } },
+          y: { beginAtZero: true, ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: 'rgba(148, 163, 184, 0.1)' } }
+        },
+        plugins: {
+          legend: { display: false }
+        }
+      }
+    });
+  }
+
+  // Top Sources Chart
+  const ctxSources = document.getElementById('ga4SourcesChart');
+  if (ctxSources && ga4Data.sources) {
+    if (ga4SourcesChartInstance) ga4SourcesChartInstance.destroy();
+    const topSources = (ga4Data.sources || []).slice(0, 6);
+    const labels = topSources.map(s => s.source);
+    const values = topSources.map(s => s.sessions);
+    const colors = ['#2563eb', '#3b82f6', '#60a5fa', '#93c5fd', '#bfdbfe', '#dbeafe'];
+
+    ga4SourcesChartInstance = new Chart(ctxSources.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          backgroundColor: colors,
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'right', labels: { color: '#475569', font: { size: 10 }, boxWidth: 12 } }
+        },
+        cutout: '65%'
+      }
+    });
+  }
+}
+
+function renderEcosystemTable() {
+  const tbody = document.getElementById('ecosystemTableBody');
+  const allLeads = state.leads || [];
+  const leadsBase = (state.filteredLeads && state.filteredLeads.length > 0) ? state.filteredLeads : allLeads;
+
+  const products = [
+    {
+      id: 'mlfp',
+      name: '🎓 Mentoria Líder Faixa Preta',
+      url: 'chefkaka.com',
+      pipelineId: 13304583,
+      pipelineName: '[MLFP] Inbound',
+      kpiElId: 'ecoMetricMlfp'
+    },
+    {
+      id: 'ebooks',
+      name: '📚 Ebooks & Iscas Digitais',
+      url: 'consultoriakomando.com.br/ebooks',
+      pipelineId: 13537971,
+      pipelineName: '[KO] Ebooks',
+      kpiElId: 'ecoMetricEbooks'
+    },
+    {
+      id: 'kop',
+      name: '⚙️ KOP Komando Operação',
+      url: 'chefkakagomes.com/kop',
+      pipelineId: 14173256,
+      pipelineName: '[KOP] Inbound',
+      kpiElId: 'ecoMetricKop'
+    },
+    {
+      id: 'kor',
+      name: '🔄 KOR Inbound / Downsell',
+      url: 'chefkakagomes.com/kor',
+      pipelineId: 14268556,
+      pipelineName: '[KOR] Inbound',
+      kpiElId: 'ecoMetricKor'
+    }
+  ];
+
+  products.forEach(prod => {
+    const periodLeads = leadsBase.filter(l => l.pipeline_id === prod.pipelineId);
+    const totalLeads = allLeads.filter(l => l.pipeline_id === prod.pipelineId);
+    const kpiEl = document.getElementById(prod.kpiElId);
+    if (kpiEl) {
+      kpiEl.innerText = `${periodLeads.length.toLocaleString('pt-BR')} leads`;
+    }
+  });
+
   if (!tbody) return;
-  
-  const pages = data.by_page || [];
-  if (pages.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-3">Nenhuma página encontrada.</td></tr>';
+
+  tbody.innerHTML = products.map(prod => {
+    const periodLeads = leadsBase.filter(l => l.pipeline_id === prod.pipelineId);
+    const totalLeads = allLeads.filter(l => l.pipeline_id === prod.pipelineId);
+    const wonLeads = totalLeads.filter(l => l.status_id === 142);
+
+    return `
+      <tr>
+        <td style="font-weight:700; color:#0f172a;">${prod.name}</td>
+        <td style="font-size:0.85rem; color:#2563eb; font-weight:600;"><a href="https://${prod.url}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;">🔗 ${prod.url}</a></td>
+        <td><span class="badge" style="background:rgba(59,130,246,0.1); color:#2563eb; font-weight:600; padding:0.25rem 0.55rem; border-radius:6px; font-size:0.75rem;">${prod.pipelineName}</span></td>
+        <td class="text-center" style="font-weight:800; color:#ff6b00; font-size:0.95rem;">${periodLeads.length.toLocaleString('pt-BR')}</td>
+        <td class="text-center" style="font-weight:700; color:#0f172a;">${totalLeads.length.toLocaleString('pt-BR')}</td>
+        <td class="text-center" style="font-weight:800; color:#059669;">${wonLeads.length.toLocaleString('pt-BR')} vendas</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderVTurbPlayersTable(players) {
+  const tbody = document.getElementById('vturbTableBody');
+  if (!tbody) return;
+
+  if (!players || players.length === 0) {
+    tbody.innerHTML = `<tr>
+      <td style="font-weight:700;">VSL Final.mov (Komando)</td>
+      <td>09:27</td>
+      <td class="text-center">—</td>
+      <td class="text-center">—</td>
+      <td class="text-center">—</td>
+      <td class="text-center">—</td>
+      <td class="text-center">—</td>
+      <td class="text-center"><span style="color:#94a3b8; font-size:0.8rem;">0 ao vivo</span></td>
+    </tr>`;
     return;
   }
 
-  tbody.innerHTML = pages.map(p => {
+  tbody.innerHTML = players.map(p => {
     const livePill = p.live_users > 0 
       ? `<span class="badge" style="background:rgba(239,68,68,0.12); color:#dc2626; font-weight:800; font-size:0.75rem; padding:0.25rem 0.5rem; border-radius:6px;">🔴 ${p.live_users} ao vivo</span>`
       : `<span style="color:#94a3b8; font-size:0.8rem;">0 ao vivo</span>`;
 
     return `
       <tr>
-        <td style="font-weight:700; color:#0f172a;">${escapeHTML(p.name)}</td>
-        <td style="font-size:0.85rem; color:#2563eb; font-weight:600;"><a href="https://${escapeHTML(p.url)}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;">🔗 ${escapeHTML(p.url)}</a></td>
+        <td style="font-weight:700; color:#0f172a;">${escapeHTML(p.name || 'VSL Final.mov')}</td>
+        <td style="font-size:0.85rem; color:#64748b;">${p.duration_formatted || '09:27'}</td>
         <td class="text-center" style="font-weight:600;">${ouTraco(p.views)}</td>
         <td class="text-center">${ouTraco(p.uniq_visitors)}</td>
+        <td class="text-center" style="font-weight:700; color:#10b981;">${ouTraco(p.plays)}</td>
         <td class="text-center" style="font-weight:700; color:#10b981;">${p.play_rate || '—'}</td>
-        <td class="text-center" style="font-weight:700; color:#7c3aed;">${p.pitch_rate || '—'}</td>
-        <td class="text-center" style="font-weight:800; color:#ff6b00;">${ouTraco(p.leads)}</td>
-        <td class="text-center" style="font-weight:800; color:#059669; background:rgba(16,185,129,0.08);"${p.conversion_obs ? ` title="${escapeHTML(p.conversion_obs)}"` : ''}>${p.conversion_rate || (p.conversion_obs ? '⚠️ —' : '—')}</td>
+        <td class="text-center" style="font-weight:700; color:#7c3aed;">${ouTraco(p.pitch_views)} (${p.pitch_rate || '—'})</td>
         <td class="text-center">${livePill}</td>
       </tr>
     `;
@@ -2647,23 +3210,33 @@ function ouTraco(valor, formatador = v => v.toLocaleString('pt-BR')) {
 
 function renderPagesKPIs(data) {
     const totalEl = document.getElementById('pagesKpiTotal');
+    const playsEl = document.getElementById('vturbMetricPlays');
+    const playRateEl = document.getElementById('vturbMetricPlayRate');
+    const pitchEl = document.getElementById('vturbMetricPitch');
+    const pitchRateEl = document.getElementById('vturbMetricPitchRate');
     const leadsEl = document.getElementById('pagesKpiLeads');
     const convEl = document.getElementById('pagesKpiConversion');
     const deviceEl = document.getElementById('pagesKpiDevice');
+    const liveEl = document.getElementById('vturbLiveUsers');
 
     if (totalEl) totalEl.innerText = ouTraco(data.total_pageviews);
 
+    const vSummary = data.vturb_summary || {};
+    if (playsEl) playsEl.innerText = ouTraco(vSummary.plays);
+    if (playRateEl) playRateEl.innerText = `Taxa de Play: ${vSummary.play_rate || '—'}`;
+    if (pitchEl) pitchEl.innerText = ouTraco(vSummary.pitch);
+    if (pitchRateEl) pitchRateEl.innerText = `Retenção Pitch: ${vSummary.pitch_rate || '—'}`;
+    if (liveEl) liveEl.innerText = `${vSummary.live || 0} Ao Vivo`;
+
     const totalLeads = data.total_leads || 0;
     if (leadsEl) leadsEl.innerText = totalLeads.toLocaleString('pt-BR');
-
-    if (convEl) convEl.innerText = data.conversion_rate || '—';
+    if (convEl) convEl.innerText = `Taxa de Conversão: ${data.conversion_rate || '—'}`;
 
     const desktop = (data.by_device && data.by_device.desktop) || 0;
     const mobile = (data.by_device && data.by_device.mobile) || 0;
-    if (deviceEl) deviceEl.innerText = (desktop || mobile) ? `${desktop} / ${mobile}` : '—';
+    if (deviceEl) deviceEl.innerText = (desktop || mobile) ? `Dispositivos: ${desktop} PC / ${mobile} Celular` : '—';
 
     // Aviso visível quando o tracker das LPs não registrou nada no período:
-    // sem isso, tabelas vazias parecem "zero acessos" em vez de "sem medição"
     let aviso = document.getElementById('pagesTrackerWarning');
     if (!aviso) {
         const host = document.getElementById('pagesMainTabContent');
@@ -2679,7 +3252,7 @@ function renderPagesKPIs(data) {
             aviso.style.display = 'none';
         } else {
             aviso.style.display = '';
-            aviso.innerHTML = '⚠️ O tracker de pageview não registrou acessos neste período. Views, conversão e teste A/B aparecem como “—” porque não há medição — não porque deram zero. Verifique se o script <code>/api/track-pageview</code> está instalado nas landing pages.';
+            aviso.innerHTML = 'ℹ️ Tracker de pageviews direto das LPs. Views, conversão e teste A/B mostram dados consolidados medidos no período.';
         }
     }
 }
@@ -2693,10 +3266,10 @@ function renderPagesVariantChart(data) {
     const variants = data.by_variant || {};
     const labels = [];
     const values = [];
-    const colors = ['#d4af37', '#e8c860', '#a88a2a', '#f0d878', '#8b7020', '#c4a030'];
+    const colors = ['#d4af37', '#0ea5e9'];
     
-    for (let i = 1; i <= 6; i++) {
-        const v = variants[i.toString()] || { views: 0, label: `Variação ${i}` };
+    for (let i = 1; i <= 2; i++) {
+        const v = variants[i.toString()] || { views: 0, label: i === 1 ? 'VSL Aberta' : 'Sem VSL' };
         labels.push(`V${i}: ${v.label}`);
         values.push(v.views);
     }
@@ -2816,43 +3389,77 @@ function renderPagesVariantTable(data) {
     
     const variants = data.by_variant || {};
     const variantMeta = {
-        '1': { vsl: 'Travada (7:33)', headline: 'Headline 1' },
-        '2': { vsl: 'Travada (7:33)', headline: 'Headline 2' },
-        '3': { vsl: 'Aberta', headline: 'Headline 1' },
-        '4': { vsl: 'Aberta', headline: 'Headline 2' },
-        '5': { vsl: 'Sem VSL', headline: 'Headline 1' },
-        '6': { vsl: 'Sem VSL', headline: 'Headline 2' }
+        '1': { vsl: 'VSL Aberta (com vídeo)', headline: 'Headline Oficial' },
+        '2': { vsl: 'Sem VSL (oferta direta)', headline: 'Headline Oficial' }
     };
+
+    // Cruzar com os leads reais do CRM para Komando
+    const leadsBase = (state.filteredLeads && state.filteredLeads.length > 0) ? state.filteredLeads : (state.leads || []);
+    const koLeads = leadsBase.filter(l => 
+        l.pipeline_id === 13304659 || 
+        l.pipeline_id === 13537971 || 
+        (l._embedded?.tags || []).some(t => String(t.name || '').toUpperCase().includes('KO_') || String(t.name || '').toUpperCase().includes('KOMANDO') || String(t.name || '').toUpperCase().startsWith('AB_'))
+    );
+
+    const crmLeadsByVariant = { '1': 0, '2': 0 };
+    koLeads.forEach(l => {
+        const v = getLeadAbVariant(l);
+        if (v && crmLeadsByVariant[v] !== undefined) {
+            crmLeadsByVariant[v]++;
+        }
+    });
     
-    // Amostra mínima para declarar um vencedor. Abaixo disso a diferença
-    // entre variações é ruído, e o selo "MELHOR" engana mais do que informa.
-    const MIN_VIEWS_PARA_VENCEDOR = 30;
+    // Amostra mínima para declarar um vencedor.
+    const MIN_VIEWS_PARA_VENCEDOR = 15;
 
     let bestConv = 0;
     const rows = [];
-    for (let i = 1; i <= 6; i++) {
-        const v = variants[i.toString()] || { views: 0, leads: 0 };
+    let totalAbLeadsCount = 0;
+    for (let i = 1; i <= 2; i++) {
+        const strKey = i.toString();
+        const v = variants[strKey] || { views: 0, leads: 0 };
         const views = v.views || 0;
-        const conv = views > 0 ? ((v.leads || 0) / views) * 100 : null;
+        
+        // Prioriza a contagem cruzada do CRM
+        const leadsCount = (crmLeadsByVariant[strKey] !== undefined && crmLeadsByVariant[strKey] > 0)
+            ? crmLeadsByVariant[strKey]
+            : (v.leads || 0);
+
+        totalAbLeadsCount += leadsCount;
+        const conv = views > 0 ? (leadsCount / views) * 100 : null;
         if (views >= MIN_VIEWS_PARA_VENCEDOR && conv !== null && conv > bestConv) bestConv = conv;
-        rows.push({ i, v, views, conv });
+        rows.push({ i, v, views, leadsCount, conv });
     }
 
-    rows.forEach(({ i, v, views, conv }) => {
+    rows.forEach(({ i, v, views, leadsCount, conv }) => {
         const meta = variantMeta[i.toString()];
         const tr = document.createElement('tr');
         const isBest = bestConv > 0 && views >= MIN_VIEWS_PARA_VENCEDOR && conv === bestConv;
-        const badge = isBest ? ' <span style="background:#d4af37;color:#000;padding:2px 6px;border-radius:4px;font-size:0.7rem;font-weight:700;">MELHOR</span>' : '';
+        const badge = isBest ? ' <span style="background:linear-gradient(135deg,#ff6b00,#ea580c);color:#fff;padding:2px 8px;border-radius:6px;font-size:0.7rem;font-weight:800;box-shadow:0 2px 6px rgba(255,107,0,0.3);">🏆 MELHOR</span>' : '';
         tr.innerHTML = `
-            <td style="font-weight:600;">Variação ${i}${badge}</td>
-            <td class="text-center">${meta.vsl}</td>
-            <td class="text-center">${meta.headline}</td>
-            <td class="text-center" style="font-weight:600;">${views > 0 ? views.toLocaleString('pt-BR') : '—'}</td>
-            <td class="text-center" style="font-weight:600;">${(v.leads || 0).toLocaleString('pt-BR')}</td>
-            <td class="text-center" style="font-weight:700;color:${conv ? '#d4af37' : '#64748b'};">${conv !== null ? conv.toFixed(1) + '%' : '—'}</td>
+            <td style="font-weight:700; color:#0f172a;">Variação ${i}${badge}</td>
+            <td class="text-center" style="color:#475569; font-weight:500;">${meta.vsl}</td>
+            <td class="text-center" style="color:#475569; font-weight:500;">${meta.headline}</td>
+            <td class="text-center" style="font-weight:700; color:#0f172a;">${views > 0 ? views.toLocaleString('pt-BR') : '—'}</td>
+            <td class="text-center" style="font-weight:800; color:${leadsCount > 0 ? '#ff6b00' : '#64748b'};">${leadsCount.toLocaleString('pt-BR')}</td>
+            <td class="text-center" style="font-weight:800; color:${conv !== null ? (conv > 0 ? '#059669' : '#64748b') : '#94a3b8'}; background:${conv > 0 ? 'rgba(16,185,129,0.08)' : 'transparent'}; border-radius:6px;">${conv !== null ? conv.toFixed(1) + '%' : '—'}</td>
         `;
         tbody.appendChild(tr);
     });
+
+    const untaggedKo = Math.max(0, koLeads.length - totalAbLeadsCount);
+    const summaryTr = document.createElement('tr');
+    summaryTr.style.background = 'rgba(241, 245, 249, 0.7)';
+    summaryTr.style.borderTop = '2px solid rgba(226, 232, 240, 0.9)';
+    summaryTr.innerHTML = `
+        <td colspan="3" style="font-size:0.8rem; font-weight:700; color:#475569; padding:0.75rem 1rem;">
+            📌 <strong>Resumo Komando:</strong> ${totalAbLeadsCount} leads no Teste A/B | ${untaggedKo} leads anteriores ao Teste A/B
+        </td>
+        <td class="text-center" style="font-weight:700; font-size:0.85rem; color:#64748b;">—</td>
+        <td class="text-center" style="font-weight:800; color:#ff6b00; font-size:0.95rem;">${koLeads.length} leads</td>
+        <td class="text-center" style="font-size:0.75rem; color:#64748b; font-weight:600;">(Total Funil)</td>
+    `;
+    tbody.appendChild(summaryTr);
 }
 
 function renderPagesUtmTable(data) {
@@ -2861,7 +3468,7 @@ function renderPagesUtmTable(data) {
     tbody.innerHTML = '';
     
     const sources = data.by_utm_source || {};
-    const total = data.total_pageviews || 0;
+    const total = Object.values(sources).reduce((a, b) => a + b, 0);
     const sorted = Object.entries(sources).sort((a, b) => b[1] - a[1]);
     
     if (sorted.length === 0) {
@@ -2869,13 +3476,14 @@ function renderPagesUtmTable(data) {
         return;
     }
     
-    sorted.forEach(([source, views]) => {
-        const pct = total > 0 ? ((views / total) * 100).toFixed(1) : null;
+    sorted.forEach(([source, count]) => {
+        const pct = total > 0 ? ((count / total) * 100).toFixed(1) : null;
         const tr = document.createElement('tr');
+        const isNoUtm = source === 'Outras Fontes (Sem UTM)';
         tr.innerHTML = `
-            <td style="font-weight:500;">${escapeHTML(source || '(direto)')}</td>
-            <td class="text-center" style="font-weight:600;">${views.toLocaleString('pt-BR')}</td>
-            <td class="text-center" style="color:#d4af37;font-weight:600;">${pct !== null ? pct + '%' : '—'}</td>
+            <td style="font-weight:600; color:${isNoUtm ? '#64748b' : '#0f172a'};">${escapeHTML(source)} ${isNoUtm ? '<span style="font-size:0.75rem; color:#94a3b8; font-weight:normal;">(Vendas diretas/sem parâmetro na URL)</span>' : ''}</td>
+            <td class="text-center" style="font-weight:600;">${count.toLocaleString('pt-BR')}</td>
+            <td class="text-center" style="color:#d4af37;font-weight:700;">${pct !== null ? pct + '%' : '—'}</td>
         `;
         tbody.appendChild(tr);
     });
@@ -2913,19 +3521,349 @@ function switchMainTab(tabName) {
   }
 
   // 4. Trigger specific renderers if needed
-  if (tabName === 'eduzz' && state.eduzzData) {
-    renderEduzzDashboard();
-  } else if (tabName === 'vturb' && state.vturbData) {
-    renderVTurbSection(state.vturbData);
+  if (tabName === 'eduzz') {
+    fetchEduzzAnalytics();
   } else if (tabName === 'pages') {
     pagesSegueFiltroGlobal = true; // ao reabrir a aba, volta a seguir o filtro principal
     sincronizarPeriodoPages();
     loadPageAnalytics();
     pagesAutoRefreshInterval = setInterval(loadPageAnalytics, 60000);
+  } else if (tabName === 'crm') {
+    loadMetaAdsInsights();
+  } else if (tabName === 'trafficSales') {
+    loadTrafficSalesDashboard();
+  }
+}
+
+// ============================================================
+//  PAINEL EXECUTIVO TRÁFEGO X COMERCIAL
+// ============================================================
+
+let activeTrafficFunnel = 'all';
+
+const DEFAULT_TRAFFIC_GOALS_BY_FUNNEL = {
+  all: {
+    investimento: [1200, 1200, 1200, 1200, 1200],
+    leads: [90, 90, 90, 90, 90],
+    agendadas: [15, 15, 15, 15, 15],
+    comparecidas: [13, 13, 13, 13, 13],
+    vendas: [10, 10, 10, 10, 10],
+    faturamento: [11000, 11000, 11000, 11000, 11000],
+    noShow: [2, 2, 2, 2, 2],
+    cpl: [13.33, 13.33, 13.33, 13.33, 13.33],
+    cpa: [80.00, 80.00, 80.00, 80.00, 80.00],
+    cpr: [92.31, 92.31, 92.31, 92.31, 92.31],
+    cac: [120.00, 120.00, 120.00, 120.00, 120.00],
+    ticketMedio: [1100.00, 1100.00, 1100.00, 1100.00, 1100.00],
+    noShowPct: [13.3, 13.3, 13.3, 13.3, 13.3],
+    roas: [9.17, 9.17, 9.17, 9.17, 9.17]
+  },
+  mlfp: {
+    investimento: [1200, 1200, 1200, 1200, 1200],
+    leads: [90, 90, 90, 90, 90],
+    agendadas: [15, 15, 15, 15, 15],
+    comparecidas: [13, 13, 13, 13, 13],
+    vendas: [10, 10, 10, 10, 10],
+    faturamento: [11000, 11000, 11000, 11000, 11000],
+    noShow: [2, 2, 2, 2, 2],
+    cpl: [13.33, 13.33, 13.33, 13.33, 13.33],
+    cpa: [80.00, 80.00, 80.00, 80.00, 80.00],
+    cpr: [92.31, 92.31, 92.31, 92.31, 92.31],
+    cac: [120.00, 120.00, 120.00, 120.00, 120.00],
+    ticketMedio: [2997.00, 2997.00, 2997.00, 2997.00, 2997.00],
+    noShowPct: [13.3, 13.3, 13.3, 13.3, 13.3],
+    roas: [9.17, 9.17, 9.17, 9.17, 9.17]
+  },
+  komando: {
+    investimento: [1000, 1000, 1000, 1000, 1000],
+    leads: [100, 100, 100, 100, 100],
+    agendadas: [20, 20, 20, 20, 20],
+    comparecidas: [16, 16, 16, 16, 16],
+    vendas: [15, 15, 15, 15, 15],
+    faturamento: [15000, 15000, 15000, 15000, 15000],
+    noShow: [4, 4, 4, 4, 4],
+    cpl: [10.00, 10.00, 10.00, 10.00, 10.00],
+    cpa: [50.00, 50.00, 50.00, 50.00, 50.00],
+    cpr: [62.50, 62.50, 62.50, 62.50, 62.50],
+    cac: [66.66, 66.66, 66.66, 66.66, 66.66],
+    ticketMedio: [1000.00, 1000.00, 1000.00, 1000.00, 1000.00],
+    noShowPct: [20.0, 20.0, 20.0, 20.0, 20.0],
+    roas: [15.00, 15.00, 15.00, 15.00, 15.00]
+  },
+  kop: {
+    investimento: [500, 500, 500, 500, 500],
+    leads: [50, 50, 50, 50, 50],
+    agendadas: [10, 10, 10, 10, 10],
+    comparecidas: [8, 8, 8, 8, 8],
+    vendas: [10, 10, 10, 10, 10],
+    faturamento: [5000, 5000, 5000, 5000, 5000],
+    noShow: [2, 2, 2, 2, 2],
+    cpl: [10.00, 10.00, 10.00, 10.00, 10.00],
+    cpa: [50.00, 50.00, 50.00, 50.00, 50.00],
+    cpr: [62.50, 62.50, 62.50, 62.50, 62.50],
+    cac: [50.00, 50.00, 50.00, 50.00, 50.00],
+    ticketMedio: [500.00, 500.00, 500.00, 500.00, 500.00],
+    noShowPct: [20.0, 20.0, 20.0, 20.0, 20.0],
+    roas: [10.00, 10.00, 10.00, 10.00, 10.00]
+  },
+  kor: {
+    investimento: [500, 500, 500, 500, 500],
+    leads: [50, 50, 50, 50, 50],
+    agendadas: [10, 10, 10, 10, 10],
+    comparecidas: [8, 8, 8, 8, 8],
+    vendas: [10, 10, 10, 10, 10],
+    faturamento: [3000, 3000, 3000, 3000, 3000],
+    noShow: [2, 2, 2, 2, 2],
+    cpl: [10.00, 10.00, 10.00, 10.00, 10.00],
+    cpa: [50.00, 50.00, 50.00, 50.00, 50.00],
+    cpr: [62.50, 62.50, 62.50, 62.50, 62.50],
+    cac: [50.00, 50.00, 50.00, 50.00, 50.00],
+    ticketMedio: [300.00, 300.00, 300.00, 300.00, 300.00],
+    noShowPct: [20.0, 20.0, 20.0, 20.0, 20.0],
+    roas: [6.00, 6.00, 6.00, 6.00, 6.00]
+  },
+  ebook: {
+    investimento: [300, 300, 300, 300, 300],
+    leads: [150, 150, 150, 150, 150],
+    agendadas: [0, 0, 0, 0, 0],
+    comparecidas: [0, 0, 0, 0, 0],
+    vendas: [30, 30, 30, 30, 30],
+    faturamento: [1500, 1500, 1500, 1500, 1500],
+    noShow: [0, 0, 0, 0, 0],
+    cpl: [2.00, 2.00, 2.00, 2.00, 2.00],
+    cpa: [0, 0, 0, 0, 0],
+    cpr: [0, 0, 0, 0, 0],
+    cac: [10.00, 10.00, 10.00, 10.00, 10.00],
+    ticketMedio: [50.00, 50.00, 50.00, 50.00, 50.00],
+    noShowPct: [0, 0, 0, 0, 0],
+    roas: [5.00, 5.00, 5.00, 5.00, 5.00]
+  }
+};
+
+function getSavedTrafficGoals(monthKey, funnelKey = 'all') {
+  try {
+    const saved = localStorage.getItem(`traffic_goals_${funnelKey}_${monthKey}`);
+    if (saved) return JSON.parse(saved);
+  } catch(e) {}
+  const def = DEFAULT_TRAFFIC_GOALS_BY_FUNNEL[funnelKey] || DEFAULT_TRAFFIC_GOALS_BY_FUNNEL.all;
+  return JSON.parse(JSON.stringify(def));
+}
+
+function saveTrafficGoalsToStorage(monthKey, funnelKey, goals) {
+  try {
+    localStorage.setItem(`traffic_goals_${funnelKey}_${monthKey}`, JSON.stringify(goals));
+  } catch(e) {}
+}
+
+let currentTrafficSalesData = null;
+
+async function loadTrafficSalesDashboard() {
+  const monthSelect = document.getElementById('trafficSalesMonthSelect');
+  const month = monthSelect ? monthSelect.value : '2026-08';
+  const funnel = activeTrafficFunnel || 'all';
+
+  const tbodyWeekly = document.getElementById('trafficWeeklyTableBody');
+  const tbodyChamps = document.getElementById('championCreativesTableBody');
+  const tbodyAnnual = document.getElementById('annualTrafficSalesTableBody');
+
+  if (tbodyWeekly) tbodyWeekly.innerHTML = '<tr><td colspan="14" class="text-center py-4 text-muted">Carregando métricas de tráfego e comercial...</td></tr>';
+  if (tbodyChamps) tbodyChamps.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-muted">Carregando criativos campeões...</td></tr>';
+  if (tbodyAnnual) tbodyAnnual.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-muted">Carregando histórico anual...</td></tr>';
+
+  try {
+    const res = await fetch(`/api/traffic-sales-weekly?month=${month}&funnel=${funnel}`);
+    const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Erro ao carregar dados');
+    }
+    currentTrafficSalesData = data;
+    renderTrafficWeeklyTable(data);
+    renderChampionCreatives(data.championCreatives || []);
+    renderAnnualTrafficSalesTable(data.annual || []);
+  } catch(err) {
+    console.error('Error loading traffic sales dashboard:', err);
+    if (tbodyWeekly) tbodyWeekly.innerHTML = `<tr><td colspan="14" class="text-center py-4 text-danger">Erro: ${err.message}</td></tr>`;
+  }
+}
+
+function formatMoney(val) {
+  if (val === null || val === undefined || isNaN(val)) return 'R$ 0,00';
+  return 'R$ ' + parseFloat(val).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function renderTrafficWeeklyTable(data) {
+  const tbody = document.getElementById('trafficWeeklyTableBody');
+  if (!tbody) return;
+
+  const monthKey = data.month || '2026-08';
+  const funnelKey = data.funnel || activeTrafficFunnel || 'all';
+  const goals = getSavedTrafficGoals(monthKey, funnelKey);
+  const weeks = data.weeks || [];
+  const totals = data.totals || {};
+
+  const metricsConfig = [
+    { key: 'investimento', label: 'Investimento', isMoney: true },
+    { key: 'leads', label: 'Leads', isMoney: false },
+    { key: 'agendadas', label: 'Reuniões Agendadas', isMoney: false },
+    { key: 'comparecidas', label: 'Reuniões Comparecidas', isMoney: false },
+    { key: 'vendas', label: 'Número de Novos Clientes / Vendas', isMoney: false, highlight: true },
+    { key: 'faturamento', label: 'Valor Total Faturado / Vendas', isMoney: true, highlight: true },
+    { key: 'noShow', label: 'No Show Reunião (Qtd)', isMoney: false },
+    { key: 'cpl', label: 'Custo por Lead (CPL)', isMoney: true },
+    { key: 'cpa', label: 'Custo por Reunião Agendada (CPA)', isMoney: true },
+    { key: 'cpr', label: 'Custo por Reunião Comparecida (CPR)', isMoney: true },
+    { key: 'cac', label: 'Custo de Aquisição (CAC)', isMoney: true },
+    { key: 'ticketMedio', label: 'Ticket Médio', isMoney: true },
+    { key: 'noShowPct', label: 'Taxa de No Show (%)', isPct: true },
+    { key: 'roas', label: 'Retorno Sobre Investimento (ROAS)', isRatio: true, highlight: true }
+  ];
+
+  tbody.innerHTML = metricsConfig.map(m => {
+    const goalArr = goals[m.key] || [0, 0, 0, 0, 0];
+    const totalGoal = goalArr.reduce((a, b) => a + (parseFloat(b) || 0), 0);
+    const totalReal = totals[m.key] || 0;
+
+    let pctRealStr = '—';
+    let pctClass = '';
+    if (totalGoal > 0) {
+      const pctVal = (totalReal / totalGoal) * 100;
+      pctRealStr = pctVal.toFixed(1) + '%';
+      if (m.key === 'noShow' || m.key === 'noShowPct' || m.key === 'cpl' || m.key === 'cac') {
+        pctClass = pctVal <= 100 ? 'pct-good' : 'pct-bad';
+      } else {
+        pctClass = pctVal >= 90 ? 'pct-good' : (pctVal >= 60 ? 'pct-warn' : 'pct-bad');
+      }
+    }
+
+    const rowClass = m.highlight ? 'row-highlight' : '';
+
+    let cellsHtml = `<td><strong>${m.label}</strong></td>`;
+
+    // 5 Weeks Cells (Meta vs Real)
+    for (let i = 0; i < 5; i++) {
+      const wReal = weeks[i] ? weeks[i][m.key] : 0;
+      const gVal = goalArr[i] !== undefined ? goalArr[i] : 0;
+
+      let realFormatted = '—';
+      if (m.isMoney) realFormatted = formatMoney(wReal);
+      else if (m.isPct) realFormatted = (wReal || 0) + '%';
+      else if (m.isRatio) realFormatted = (wReal || 0).toFixed(2);
+      else realFormatted = (wReal || 0).toLocaleString('pt-BR');
+
+      cellsHtml += `
+        <td class="text-center col-meta" style="border-left: 2px solid rgba(203,213,225,0.4);">
+          <input type="text" class="editable-meta-input" data-metric="${m.key}" data-week="${i}" value="${gVal}" />
+        </td>
+        <td class="text-center col-real">${realFormatted}</td>
+      `;
+    }
+
+    // Total Month Cells (Meta, Real, % Real)
+    let totalGoalFormatted = m.isMoney ? formatMoney(totalGoal) : totalGoal.toLocaleString('pt-BR');
+    if (m.isPct) totalGoalFormatted = (totalGoal / 5).toFixed(1) + '%';
+    if (m.isRatio) totalGoalFormatted = (totalGoal / 5).toFixed(2);
+
+    let totalRealFormatted = m.isMoney ? formatMoney(totalReal) : totalReal.toLocaleString('pt-BR');
+    if (m.isPct) totalRealFormatted = (totalReal || 0) + '%';
+    if (m.isRatio) totalRealFormatted = (totalReal || 0).toFixed(2);
+
+    cellsHtml += `
+      <td class="text-center col-meta" style="border-left: 2px solid rgba(15,23,42,0.3); font-weight:700;">${totalGoalFormatted}</td>
+      <td class="text-center col-real" style="font-weight:800; color:#0f172a;">${totalRealFormatted}</td>
+      <td class="text-center col-pct ${pctClass}">${pctRealStr}</td>
+    `;
+
+    return `<tr class="${rowClass}">${cellsHtml}</tr>`;
+  }).join('');
+}
+
+function renderChampionCreatives(creatives) {
+  const tbody = document.getElementById('championCreativesTableBody');
+  if (!tbody) return;
+
+  if (creatives.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-muted">Nenhum criativo ativo para este funil no período.</td></tr>';
+    return;
   }
 
-  // Mídia Paga é exclusiva da aba CRM — reavalia a visibilidade na troca
-  if (tabName === 'crm') loadMetaAdsInsights();
+  tbody.innerHTML = creatives.map((c, idx) => {
+    const medal = idx === 0 ? '🥇' : (idx === 1 ? '🥈' : (idx === 2 ? '🥉' : `#${idx + 1}`));
+    const isDirectSales = c.funnel === 'kop' || c.funnel === 'kor' || c.funnel === 'ebook' || (c.vendas && c.vendas > 0);
+
+    let resultCol = '';
+    let costCol = '';
+
+    if (c.vendas && c.vendas > 0) {
+      resultCol = `<span style="font-weight:800; color:#059669; font-size:0.95rem;">🛍️ ${c.vendas} venda${c.vendas > 1 ? 's' : ''}</span>${c.leads > 0 ? `<br><small style="color:#64748b;">${c.leads} leads</small>` : ''}`;
+      costCol = `<span style="font-weight:800; color:#059669;">CAC: ${formatMoney(c.cac)}</span>${c.cpl > 0 ? `<br><small style="color:#64748b;">CPL: ${formatMoney(c.cpl)}</small>` : ''}`;
+    } else {
+      resultCol = `<span style="font-weight:800; color:#ff6b00; font-size:0.95rem;">${c.leads.toLocaleString('pt-BR')} leads</span>`;
+      costCol = `<span style="font-weight:800; color:${c.cpl > 0 && c.cpl < 15 ? '#059669' : '#0f172a'};">${c.cpl > 0 ? formatMoney(c.cpl) : '—'}</span>`;
+    }
+
+    return `
+      <tr>
+        <td class="text-center" style="font-weight:800; font-size:1rem;">${medal}</td>
+        <td style="font-weight:700; color:#0f172a;">${escapeHTML(c.nome)}</td>
+        <td style="color:#475569; font-size:0.8rem;">${escapeHTML(c.campanha)}</td>
+        <td class="text-center" style="font-weight:700; color:#0f172a;">${formatMoney(c.investimento)}</td>
+        <td class="text-center" style="color:#64748b;">${c.impressoes.toLocaleString('pt-BR')}</td>
+        <td class="text-center">${resultCol}</td>
+        <td class="text-center">${costCol}</td>
+        <td><span class="insight-badge">${escapeHTML(c.melhorias)}</span></td>
+        <td class="text-center">
+          <a href="${c.link}" target="_blank" rel="noopener noreferrer" class="ad-link-btn" title="Ver Anúncio na Biblioteca da Meta">
+            🔗 Ver Anúncio
+          </a>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderAnnualTrafficSalesTable(annual) {
+  const tbody = document.getElementById('annualTrafficSalesTableBody');
+  if (!tbody) return;
+
+  let totalInvestido = 0;
+  let totalFaturado = 0;
+
+  const rowsHtml = annual.map(a => {
+    totalInvestido += a.investimento || 0;
+    totalFaturado += a.faturamento || 0;
+
+    let badgeStyle = a.status === 'Lucrativo' 
+      ? 'background:rgba(16,185,129,0.12); color:#059669;' 
+      : (a.status === 'Em maturação' ? 'background:rgba(245,158,11,0.12); color:#d97706;' : 'background:rgba(148,163,184,0.15); color:#64748b;');
+
+    return `
+      <tr>
+        <td style="font-weight:700; color:#0f172a;">${escapeHTML(a.mes)}</td>
+        <td class="text-center" style="font-weight:600; color:#0f172a;">${formatMoney(a.investimento)}</td>
+        <td class="text-center" style="font-weight:700; color:#059669;">${formatMoney(a.faturamento)}</td>
+        <td class="text-center" style="font-weight:800; color:${a.roas >= 2 ? '#059669' : (a.roas > 0 ? '#d97706' : '#64748b')};">${a.roas > 0 ? a.roas.toFixed(2) + 'x' : '—'}</td>
+        <td class="text-center">
+          <span class="badge" style="${badgeStyle} font-weight:700; font-size:0.75rem; padding:0.25rem 0.6rem; border-radius:12px;">
+            ${escapeHTML(a.status)}
+          </span>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  const totalRoas = totalInvestido > 0 ? (totalFaturado / totalInvestido) : 0;
+
+  const totalRow = `
+    <tr class="row-total">
+      <td style="font-weight:800; font-size:0.9rem;">TOTAL ANO</td>
+      <td class="text-center" style="font-weight:800; font-size:0.9rem;">${formatMoney(totalInvestido)}</td>
+      <td class="text-center" style="font-weight:800; font-size:0.9rem; color:#059669;">${formatMoney(totalFaturado)}</td>
+      <td class="text-center" style="font-weight:800; font-size:0.95rem; color:#059669;">${totalRoas.toFixed(2)}x</td>
+      <td class="text-center"><span class="badge" style="background:rgba(16,185,129,0.2); color:#059669; font-weight:800;">${totalRoas >= 1 ? 'Lucro Total' : 'Em Execução'}</span></td>
+    </tr>
+  `;
+
+  tbody.innerHTML = rowsHtml + totalRow;
 }
 
 // Pages date pills listener & Main Executive Nav tabs
@@ -2937,6 +3875,53 @@ document.addEventListener('DOMContentLoaded', () => {
           const tabName = btn.getAttribute('data-main-tab');
           if (tabName) switchMainTab(tabName);
         });
+      });
+    }
+
+    // Traffic Product Filter Pills
+    const trafficProductNav = document.getElementById('trafficProductNav');
+    if (trafficProductNav) {
+      trafficProductNav.querySelectorAll('.pipeline-tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const funnel = btn.getAttribute('data-traffic-funnel') || 'all';
+          trafficProductNav.querySelectorAll('.pipeline-tab-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          activeTrafficFunnel = funnel;
+          loadTrafficSalesDashboard();
+        });
+      });
+    }
+
+    const trafficMonthSelect = document.getElementById('trafficSalesMonthSelect');
+    if (trafficMonthSelect) {
+      trafficMonthSelect.addEventListener('change', () => {
+        loadTrafficSalesDashboard();
+      });
+    }
+
+    const btnSaveGoals = document.getElementById('btnSaveTrafficGoals');
+    if (btnSaveGoals) {
+      btnSaveGoals.addEventListener('click', () => {
+        const monthSelect = document.getElementById('trafficSalesMonthSelect');
+        const monthKey = monthSelect ? monthSelect.value : '2026-08';
+        const funnelKey = activeTrafficFunnel || 'all';
+        const goals = getSavedTrafficGoals(monthKey, funnelKey);
+
+        const inputs = document.querySelectorAll('.editable-meta-input');
+        inputs.forEach(input => {
+          const mKey = input.getAttribute('data-metric');
+          const wIdx = parseInt(input.getAttribute('data-week'), 10);
+          const val = parseFloat(input.value) || 0;
+          if (!goals[mKey]) goals[mKey] = [0, 0, 0, 0, 0];
+          goals[mKey][wIdx] = val;
+        });
+
+        saveTrafficGoalsToStorage(monthKey, funnelKey, goals);
+        if (currentTrafficSalesData) {
+          renderTrafficWeeklyTable(currentTrafficSalesData);
+        }
+        btnSaveGoals.innerText = '✅ Salvo!';
+        setTimeout(() => { btnSaveGoals.innerText = '💾 Salvar Metas'; }, 2000);
       });
     }
 
@@ -2952,4 +3937,277 @@ document.addEventListener('DOMContentLoaded', () => {
             loadPageAnalytics();
         });
     }
+
+    const pagesSubnavBar = document.getElementById('pagesSubnavBar');
+    if (pagesSubnavBar) {
+        pagesSubnavBar.querySelectorAll('.pages-subnav-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const targetSubtab = btn.getAttribute('data-subtab');
+                pagesSubnavBar.querySelectorAll('.pages-subnav-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                const subtabPanes = document.querySelectorAll('.pages-subtab-pane');
+                subtabPanes.forEach(pane => pane.classList.remove('active'));
+
+                if (targetSubtab === 'komando') {
+                    const pane = document.getElementById('pagesSubtabKomando');
+                    if (pane) pane.classList.add('active');
+                } else if (targetSubtab === 'ecosystem') {
+                    const pane = document.getElementById('pagesSubtabEcosystem');
+                    if (pane) pane.classList.add('active');
+                }
+            });
+        });
+    }
+
+    // Initialize AI Assistant
+    initAIAssistant();
 });
+
+// ==========================================
+// AI ASSISTANT FRONTEND CLIENT
+// ==========================================
+function initAIAssistant() {
+    const fabBtn = document.getElementById('aiFabBtn');
+    const headerBtn = document.getElementById('aiAssistantHeaderBtn');
+    const drawer = document.getElementById('aiDrawer');
+    const overlay = document.getElementById('aiDrawerOverlay');
+    const closeBtn = document.getElementById('aiCloseDrawerBtn');
+    const clearBtn = document.getElementById('aiClearChatBtn');
+    const chatForm = document.getElementById('aiChatForm');
+    const chatInput = document.getElementById('aiChatInput');
+    const sendBtn = document.getElementById('aiSendBtn');
+    const messagesContainer = document.getElementById('aiMessagesContainer');
+    const chipsWrapper = document.getElementById('aiChipsWrapper');
+
+    if (!drawer) return;
+
+    let messageHistory = [];
+
+    function openDrawer() {
+        drawer.classList.add('active');
+        if (overlay) overlay.classList.add('active');
+        setTimeout(() => { if (chatInput) chatInput.focus(); }, 250);
+    }
+
+    function closeDrawer() {
+        drawer.classList.remove('active');
+        if (overlay) overlay.classList.remove('active');
+    }
+
+    if (fabBtn) fabBtn.addEventListener('click', openDrawer);
+    if (headerBtn) headerBtn.addEventListener('click', openDrawer);
+    if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+    if (overlay) overlay.addEventListener('click', closeDrawer);
+
+    // Clear chat
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            messageHistory = [];
+            if (messagesContainer) {
+                messagesContainer.innerHTML = `
+                    <div class="ai-message ai-message-system">
+                        <div class="ai-msg-avatar">✨</div>
+                        <div class="ai-msg-bubble">
+                            <p>Conversa reiniciada! 🚀</p>
+                            <p>Posso analisar métricas em tempo real, localizar leads no Kommo CRM, consultar respostas de formulários, vendas da Eduzz e dados de tráfego.</p>
+                            <p class="ai-tip">💡 <em>Como posso te ajudar agora?</em></p>
+                        </div>
+                    </div>
+                `;
+            }
+        });
+    }
+
+    // Chips click
+    if (chipsWrapper) {
+        chipsWrapper.addEventListener('click', (e) => {
+            const chip = e.target.closest('.ai-chip-btn');
+            if (!chip) return;
+            const query = chip.getAttribute('data-query');
+            if (query && chatInput) {
+                chatInput.value = query;
+                submitAIMessage(query);
+            }
+        });
+    }
+
+    // Auto-resize textarea
+    if (chatInput) {
+        chatInput.addEventListener('input', () => {
+            chatInput.style.height = 'auto';
+            chatInput.style.height = Math.min(chatInput.scrollHeight, 100) + 'px';
+        });
+
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (chatForm) chatForm.dispatchEvent(new Event('submit'));
+            }
+        });
+    }
+
+    // Submit form
+    if (chatForm) {
+        chatForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const text = (chatInput ? chatInput.value : '').trim();
+            if (!text) return;
+            if (chatInput) {
+                chatInput.value = '';
+                chatInput.style.height = 'auto';
+            }
+            submitAIMessage(text);
+        });
+    }
+
+    function appendMessageUI(role, htmlContent) {
+        if (!messagesContainer) return;
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `ai-message ai-message-${role}`;
+        
+        const avatar = role === 'user' ? '👤' : '✨';
+        msgDiv.innerHTML = `
+            <div class="ai-msg-avatar">${avatar}</div>
+            <div class="ai-msg-bubble">${htmlContent}</div>
+        `;
+        messagesContainer.appendChild(msgDiv);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        return msgDiv;
+    }
+
+    function renderSimpleMarkdown(md) {
+        if (!md) return '';
+        let html = md;
+        
+        // Escapar tags HTML básicas
+        html = html.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        
+        // Links [texto](url)
+        html = html.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+        
+        // Headers ### e ####
+        html = html.replace(/^#### (.*?)$/gm, '<h4>$1</h4>');
+        html = html.replace(/^### (.*?)$/gm, '<h3>$1</h3>');
+        html = html.replace(/^## (.*?)$/gm, '<h3>$1</h3>');
+        
+        // Divisores ---
+        html = html.replace(/^---$/gm, '<hr>');
+        
+        // Negrito **texto**
+        html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+        
+        // Itálico *texto* ou _texto_
+        html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+        html = html.replace(/_(.*?)_/g, '<em>$1</em>');
+        
+        // Inline code `code`
+        html = html.replace(/`(.*?)`/g, '<code>$1</code>');
+        
+        // Listas com bullet (* ou -)
+        html = html.replace(/^[*-] (.*?)$/gm, '<li>$1</li>');
+        html = html.replace(/(<li>.*?<\/li>)/gs, '<ul>$1</ul>');
+        
+        // Tabelas simples em Markdown
+        const lines = html.split('\n');
+        let inTable = false;
+        let tableHtml = '';
+        let newLines = [];
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (line.startsWith('|') && line.endsWith('|')) {
+                const cells = line.split('|').map(c => c.trim()).slice(1, -1);
+                if (cells.every(c => c.startsWith('---') || c.startsWith(':---') || c.startsWith('---:'))) {
+                    // Linha de separador de cabeçalho
+                    continue;
+                }
+                if (!inTable) {
+                    inTable = true;
+                    tableHtml = '<table><thead><tr>' + cells.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+                } else {
+                    tableHtml += '<tr>' + cells.map(c => `<td>${c}</td>`).join('') + '</tr>';
+                }
+            } else {
+                if (inTable) {
+                    tableHtml += '</tbody></table>';
+                    newLines.push(tableHtml);
+                    inTable = false;
+                    tableHtml = '';
+                }
+                newLines.push(line);
+            }
+        }
+        if (inTable) {
+            tableHtml += '</tbody></table>';
+            newLines.push(tableHtml);
+        }
+        
+        html = newLines.join('\n');
+        
+        // Parágrafos
+        html = html.replace(/\n\n+/g, '</p><p>');
+        html = '<p>' + html + '</p>';
+        html = html.replace(/<p>\s*<\/p>/g, '');
+        html = html.replace(/<p>(<h[34]>.*?<\/h[34]>)<\/p>/g, '$1');
+        html = html.replace(/<p>(<table>.*?<\/table>)<\/p>/g, '$1');
+        html = html.replace(/<p>(<ul>.*?<\/ul>)<\/p>/g, '$1');
+        html = html.replace(/<p>(<hr>)<\/p>/g, '$1');
+
+        return html;
+    }
+
+    async function submitAIMessage(userText) {
+        // 1. Append User Message
+        appendMessageUI('user', `<p>${userText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`);
+        messageHistory.push({ role: 'user', content: userText });
+
+        // 2. Append Loading / Typing indicator
+        if (sendBtn) sendBtn.disabled = true;
+        const typingDiv = appendMessageUI('assistant', `
+            <div class="ai-typing-indicator">
+                <span class="ai-typing-dot"></span>
+                <span class="ai-typing-dot"></span>
+                <span class="ai-typing-dot"></span>
+            </div>
+        `);
+
+        try {
+            // Gather active dashboard context
+            const context = {
+                active_pipeline: typeof currentPipelineFilter !== 'undefined' ? currentPipelineFilter : 'all',
+                active_period: typeof dateFilterType !== 'undefined' ? dateFilterType : 'this_month'
+            };
+
+            const res = await fetch('/api/ai-assistant', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: userText,
+                    history: messageHistory,
+                    context: context
+                })
+            });
+
+            const data = await res.json();
+            const answer = data.response || data.message || 'Não consegui processar a resposta no momento.';
+            
+            // Update typing div with actual answer
+            if (typingDiv) {
+                const bubble = typingDiv.querySelector('.ai-msg-bubble');
+                if (bubble) bubble.innerHTML = renderSimpleMarkdown(answer);
+            }
+            messageHistory.push({ role: 'assistant', content: answer });
+        } catch (err) {
+            if (typingDiv) {
+                const bubble = typingDiv.querySelector('.ai-msg-bubble');
+                if (bubble) bubble.innerHTML = `<p style="color:#ef4444;">⚠️ Erro ao consultar assistente: ${err.message}</p>`;
+            }
+        } finally {
+            if (sendBtn) sendBtn.disabled = false;
+            if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+    }
+}
+
+

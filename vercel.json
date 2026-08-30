@@ -5,7 +5,7 @@
   "crons": [
     {
       "path": "/api/cron/mlfp-weekly-report",
-      "schedule": "0 11 * * 1"
+      "schedule": "0 21 * * 5"
     },
     {
       "path": "/api/cron/daily-report-morning",

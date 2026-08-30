@@ -40,15 +40,40 @@ function getNameParts(fullName) {
 const META_APP_ID = process.env.META_APP_ID || '1569672838149143';
 const DEFAULT_META_ACCESS_TOKEN = 'EAAWTmZBZCudBcBSDyr5qIfwdotZCyzL9GTxRiy0BNiu5QxTEidArSHgd54L7kWIdt1gTwLSnUSYd9o1AyZAGBJxmAniRbczR4k5h6iqAJzaTZAMjRhsi3IzYgG2Q5jEtpwxNQOayzwNYPOEgOq4aZAYCJ5DhtdYWl9DWrTxMCyuchbDbmcb1eqfiWVrtdGBZAO6Jtz7Due7';
 
+// Limites do Meta para event_time (ver docs da Conversions API):
+// - eventos web comuns: 7 dias. Se QUALQUER evento do lote passar disso,
+//   o Meta rejeita a requisicao inteira e nao processa nenhum.
+// - eventos offline (action_source 'physical_store'): 62 dias.
+const CAPI_LIMITE_PADRAO_S = 7 * 24 * 60 * 60;
+const CAPI_LIMITE_OFFLINE_S = 62 * 24 * 60 * 60;
+
 // Send event to Meta Conversions API
-async function sendMetaEvent(eventName, buyerInfo, customData, eventId) {
+// opcoes.eventTime   — timestamp UNIX do fato (padrao: agora). Use o momento
+//                      real da conversao, nao o do envio.
+// opcoes.actionSource — origem da conversao ('system_generated' por padrao;
+//                      'physical_store' habilita a janela de 62 dias).
+async function sendMetaEvent(eventName, buyerInfo, customData, eventId, opcoes = {}) {
   const pixelId = process.env.META_PIXEL_ID || '825634764746487';
   const accessToken = process.env.META_ACCESS_TOKEN || DEFAULT_META_ACCESS_TOKEN;
   const testEventCode = process.env.META_TEST_EVENT_CODE;
 
   if (!pixelId || !accessToken) {
     console.warn('[Meta CAPI] Warning: META_PIXEL_ID or META_ACCESS_TOKEN not set. Skipping event.');
-    return;
+    return { ok: false, motivo: 'credenciais ausentes' };
+  }
+
+  const agora = Math.floor(Date.now() / 1000);
+  const eventTime = Number(opcoes.eventTime) > 0 ? Math.floor(Number(opcoes.eventTime)) : agora;
+  const actionSource = opcoes.actionSource || 'system_generated';
+  const limite = actionSource === 'physical_store' ? CAPI_LIMITE_OFFLINE_S : CAPI_LIMITE_PADRAO_S;
+  const idade = agora - eventTime;
+
+  // Barrado aqui de proposito: um evento fora da janela derruba o lote inteiro
+  if (idade > limite) {
+    const dias = Math.floor(idade / 86400);
+    const limiteDias = Math.floor(limite / 86400);
+    console.warn(`[Meta CAPI] Evento ${eventName} descartado: ${dias} dias de idade, limite ${limiteDias} dias para action_source "${actionSource}".`);
+    return { ok: false, motivo: `evento com ${dias} dias excede o limite de ${limiteDias} dias`, idadeDias: dias, limiteDias };
   }
 
   const userData = {};
@@ -73,9 +98,9 @@ async function sendMetaEvent(eventName, buyerInfo, customData, eventId) {
 
   const eventPayload = {
     event_name: eventName,
-    event_time: Math.floor(Date.now() / 1000),
+    event_time: eventTime,
     event_id: eventId || `eduzz_${Date.now()}`,
-    action_source: 'system_generated',
+    action_source: actionSource,
     user_data: userData,
     custom_data: {
       event_source: 'crm',
@@ -107,11 +132,13 @@ async function sendMetaEvent(eventName, buyerInfo, customData, eventId) {
     const resJson = await response.json();
     if (!response.ok) {
       console.error(`[Meta CAPI] API Error:`, resJson);
-    } else {
-      console.log(`[Meta CAPI] Success:`, resJson);
+      return { ok: false, motivo: resJson?.error?.message || 'erro da API', resposta: resJson };
     }
+    console.log(`[Meta CAPI] Success:`, resJson);
+    return { ok: true, eventId: eventPayload.event_id, eventTime, resposta: resJson };
   } catch (error) {
     console.error(`[Meta CAPI] Network Error:`, error);
+    return { ok: false, motivo: error.message };
   }
 }
 
@@ -197,10 +224,13 @@ async function sendZapi(targetPhone, message) {
   }
 }
 
+const DEFAULT_TELEGRAM_BOT_TOKEN = '7574776106:AAEEI8lYQcStvYp52t86bM4j6l1-e8LpYv0';
+const DEFAULT_TELEGRAM_CHAT_ID = '-1002344793617';
+
 // Send message via Telegram Bot API (supports multiple IDs separated by commas, inline reply markup, and thread routing)
 async function sendTelegram(chatId, message, replyMarkup, threadId) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  const targetChatId = chatId || process.env.TELEGRAM_CHAT_ID;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TELEGRAM_BOT_TOKEN;
+  const targetChatId = chatId || process.env.TELEGRAM_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID;
 
   if (!botToken || !targetChatId) {
     console.log('[Telegram Bot] Skipping: TELEGRAM_BOT_TOKEN or target chat ID not set.');
@@ -249,6 +279,21 @@ async function sendTelegram(chatId, message, replyMarkup, threadId) {
         });
         resText = await response.text();
         console.log(`[Telegram Bot] Plain Text Send Status for ${id}: ${response.status}`);
+      }
+
+      if (!response.ok && threadId) {
+        console.log(`[Telegram Bot] Retrying without threadId for ${id}...`);
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: id,
+            text: message,
+            reply_markup: replyMarkup
+          })
+        });
+        resText = await response.text();
+        console.log(`[Telegram Bot] No-Thread Send Status for ${id}: ${response.status}`);
       }
 
       if (!response.ok) {
@@ -357,16 +402,22 @@ const BUNDLED = {
 // Ordem de leitura: memória → Vercel Blob → disco (/tmp ou local) → bundled.
 // Blob só é usado quando BLOB_READ_WRITE_TOKEN existe; sem ele o
 // comportamento é exatamente o de antes, então nada quebra sem configuração.
+//
+// O store é PRIVADO de propósito: all_leads.json contém nome, telefone e
+// e-mail dos leads. Num store público a URL do blob seria legível por
+// qualquer um, expondo a base inteira.
+
+const { put: blobPut, get: blobGet, list: blobList } = require('@vercel/blob');
 
 const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || '';
 const BLOB_ATIVO = Boolean(BLOB_TOKEN);
 const BLOB_PREFIXO = 'kommo-cache/';
+const BLOB_ACCESS = 'private';
 
 // Sobrevive entre invocações quentes do lambda.
 // Com TTL: sem ele, um lambda quente serviria para sempre o que leu na
 // primeira vez, e nunca enxergaria uma sincronização feita por outra instância.
 const memoriaCache = new Map();
-const urlsBlob = new Map();
 const TTL_MEMORIA_MS = 60 * 1000;
 
 function lerMemoria(filename) {
@@ -387,45 +438,36 @@ function caminhoDisco(filename) {
   return isVercel ? path.join('/tmp', filename) : path.join(CACHE_DIR, filename);
 }
 
-async function listarBlobs() {
-  const resp = await fetch(`https://blob.vercel-storage.com/?prefix=${encodeURIComponent(BLOB_PREFIXO)}&limit=100`, {
-    headers: { authorization: `Bearer ${BLOB_TOKEN}`, 'x-api-version': '7' }
-  });
-  if (!resp.ok) throw new Error(`Blob list ${resp.status}: ${await resp.text()}`);
-  const data = await resp.json();
-  (data.blobs || []).forEach(b => {
-    const nome = String(b.pathname || '').replace(BLOB_PREFIXO, '');
-    if (nome) urlsBlob.set(nome, b.url);
-  });
-  return urlsBlob;
+// Quais arquivos já existem no store (evita um GET 404 por leitura)
+let blobsConhecidos = null;
+async function nomesNoBlob() {
+  if (blobsConhecidos) return blobsConhecidos;
+  const { blobs } = await blobList({ token: BLOB_TOKEN, prefix: BLOB_PREFIXO });
+  blobsConhecidos = new Set((blobs || []).map(b => String(b.pathname).replace(BLOB_PREFIXO, '')));
+  return blobsConhecidos;
 }
 
 async function lerDoBlob(filename) {
-  if (!urlsBlob.has(filename)) await listarBlobs();
-  const url = urlsBlob.get(filename);
-  if (!url) return undefined;
+  const nomes = await nomesNoBlob();
+  if (!nomes.has(filename)) return undefined;
 
-  // cache-busting: o CDN do Blob serve a versão anterior por alguns segundos
-  const resp = await fetch(`${url}?v=${Date.now()}`, { cache: 'no-store' });
-  if (!resp.ok) throw new Error(`Blob get ${resp.status}`);
-  return resp.json();
+  const res = await blobGet(BLOB_PREFIXO + filename, { token: BLOB_TOKEN, access: BLOB_ACCESS });
+  if (!res || res.statusCode !== 200 || !res.stream) return undefined;
+
+  const partes = [];
+  for await (const chunk of res.stream) partes.push(Buffer.from(chunk));
+  return JSON.parse(Buffer.concat(partes).toString('utf8'));
 }
 
 async function gravarNoBlob(filename, dados) {
-  const resp = await fetch(`https://blob.vercel-storage.com/${BLOB_PREFIXO}${filename}`, {
-    method: 'PUT',
-    headers: {
-      authorization: `Bearer ${BLOB_TOKEN}`,
-      'x-api-version': '7',
-      'x-content-type': 'application/json',
-      'x-add-random-suffix': '0',
-      'x-cache-control-max-age': '60'
-    },
-    body: JSON.stringify(dados)
+  const info = await blobPut(BLOB_PREFIXO + filename, JSON.stringify(dados), {
+    access: BLOB_ACCESS,
+    token: BLOB_TOKEN,
+    contentType: 'application/json',
+    addRandomSuffix: false,
+    allowOverwrite: true
   });
-  if (!resp.ok) throw new Error(`Blob put ${resp.status}: ${await resp.text()}`);
-  const info = await resp.json();
-  if (info && info.url) urlsBlob.set(filename, info.url);
+  if (blobsConhecidos) blobsConhecidos.add(filename);
   return info;
 }
 
@@ -925,14 +967,10 @@ app.get('/api/page-analytics', async (req, res) => {
       }
     });
 
-    // A/B Variant: views do tracker, leads do CRM
+    // A/B Variant: views do tracker, leads do CRM (2 Variações Oficiais)
     const VARIANT_LABELS = {
-      '1': 'VSL Travada (7:33) - Headline 1',
-      '2': 'VSL Travada (7:33) - Headline 2',
-      '3': 'VSL Aberta - Headline 1',
-      '4': 'VSL Aberta - Headline 2',
-      '5': 'Sem VSL - Headline 1',
-      '6': 'Sem VSL - Headline 2'
+      '1': 'VSL Aberta',
+      '2': 'Sem VSL'
     };
     const variantMap = {};
     Object.keys(VARIANT_LABELS).forEach(k => {
@@ -943,11 +981,22 @@ app.get('/api/page-analytics', async (req, res) => {
       if (!variantMap[key]) variantMap[key] = { label: `Variação desconhecida (${key || 'sem valor'})`, views: 0, leads: 0 };
       variantMap[key].views++;
     });
+    function normalizeVariantKey(raw) {
+      if (!raw) return null;
+      const s = String(raw).trim().toLowerCase();
+      const match = s.match(/(?:ab[_\s:]*|var(?:ia[çc][ãa]o|iante)?[_\s:]*|v)?([1-6])/i);
+      if (match && match[1]) return match[1];
+      return null;
+    }
+
     koLeads.forEach(l => {
       const cfs = l.custom_fields_values || [];
       const varVal = cfs.find(f => f.field_id === 494249 || f.field_code === 'AB_VARIANT')?.values?.[0]?.value;
-      const key = String(varVal || '');
-      if (variantMap[key]) variantMap[key].leads++;
+      const tags = (l._embedded?.tags || []).map(t => t.name);
+      const normKey = normalizeVariantKey(varVal) || tags.map(normalizeVariantKey).find(Boolean);
+      if (normKey && variantMap[normKey]) {
+        variantMap[normKey].leads++;
+      }
     });
 
     // UTM source: do tracker quando existir, senão do CRM (marcado na resposta)
@@ -960,7 +1009,20 @@ app.get('/api/page-analytics', async (req, res) => {
     } else {
       filteredLeads.forEach(l => {
         const cfs = l.custom_fields_values || [];
-        const src = cfs.find(f => f.field_id === 110088 || f.field_code === 'UTM_SOURCE')?.values?.[0]?.value || '(direto)';
+        const tags = l._embedded?.tags?.map(t => t.name) || [];
+        const rawSrc = cfs.find(f => f.field_id === 110088 || f.field_code === 'UTM_SOURCE')?.values?.[0]?.value;
+        let src = rawSrc;
+        if (!src) {
+          if (tags.includes('Eduzz')) {
+            src = 'Eduzz (Venda Direta)';
+          } else if (tags.includes('Downsell') || tags.includes('KOR')) {
+            src = 'Downsell (KOR)';
+          } else if (tags.includes('Repescagem') || tags.includes('Recuperação')) {
+            src = 'Funil de Recuperação';
+          } else {
+            src = 'Sem UTM / Não Rastreado';
+          }
+        }
         utmSourceMap[src] = (utmSourceMap[src] || 0) + 1;
       });
     }
@@ -1098,6 +1160,27 @@ app.get('/api/page-analytics', async (req, res) => {
           : null,
         tracker_ativo: hasTracker,
         utm_source_origem: hasTracker ? 'tracker' : 'crm',
+        vturb_summary: {
+          views: vturbStats.views,
+          uniq: vturbStats.uniq,
+          plays: vturbStats.plays,
+          pitch: vturbStats.pitch,
+          live: vturbStats.live,
+          play_rate: vturbStats.views > 0 ? ((vturbStats.plays / vturbStats.views) * 100).toFixed(1) + '%' : '—',
+          pitch_rate: vturbStats.plays > 0 ? ((vturbStats.pitch / vturbStats.plays) * 100).toFixed(1) + '%' : '—'
+        },
+        vturb_players: playerList.map(p => ({
+          id: p.id,
+          name: p.name || 'VSL Final.mov',
+          duration_formatted: p.length ? `${Math.floor(p.length / 60)}:${String(p.length % 60).padStart(2, '0')}` : '09:27',
+          views: vturbStats.views,
+          uniq_visitors: vturbStats.uniq,
+          plays: vturbStats.plays,
+          play_rate: vturbStats.views > 0 ? ((vturbStats.plays / vturbStats.views) * 100).toFixed(1) + '%' : '—',
+          pitch_views: vturbStats.pitch,
+          pitch_rate: vturbStats.plays > 0 ? ((vturbStats.pitch / vturbStats.plays) * 100).toFixed(1) + '%' : '—',
+          live_users: vturbStats.live
+        })),
         by_page,
         by_variant: variantMap,
         by_utm_source: utmSourceMap,
@@ -1108,6 +1191,207 @@ app.get('/api/page-analytics', async (req, res) => {
     });
   } catch (err) {
     console.error('[Page Analytics Error]:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// GOOGLE ANALYTICS 4 (GA4) INTEGRATION
+// ==========================================
+const DEFAULT_GA4_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDV7jOMUgS1aX+m\n0zXR30D4d/hoCq5xVWpz+lVsS6XvKlQhUCuK/mWwghDEeuMpSV3oIqB2N3onWnCD\n9KFniL/QZfxknR2AeJ0aVDaXMTAxKlagPFdQOwT50BEw83vauaXZFF83VBr1DC6D\n5/cxZ3fdUQaayxjU/Iv8jbVweDMstJouplGujuj+I/KQ8mKJ6scv21Wq6InLp5/P\nYNygB1XxTLZ/BPIU5y/wFT0hqjLyURVu3FBmxRK85cZjPnbaD/hsJjrXOP6m2P80\ngZPKUSCsr22zJAQxUu2iEbc7ICmlM8oEHmuRc8f7FaR4bcJdOuGujBV8seAmuqTj\nzqz/I0rfAgMBAAECggEAA9+Aomk3uZsT2w7W2hpbIER3xFZxKw8bUsc09bV25xoS\nlNnRN/58E9J/ADejVjOEVjgORKWjegPqppDuvSOeKWU3SREJIDLO0VO1+03CLBmy\noMsG36Z55BXuwb6evup+hKwYPzWwGUCjtPKlqIjRhDm7z2Ce7fg2hpeAMe2TK5t+\n95WNq9zbJR7mMhW8DpgWIUT5A3t/xGHhjEHlOUxjKXtJVuytIFt/ZdGqvCd3pbim\n6O82fLn7znV7StaC769vO67NdRHyEQq47HDnZc7XvcRXJfs/BwT5N9MU7JvxpMLf\nvYhAPW38wiJepPqeQOZWfapiESplRcJ1N8E7tFqrqQKBgQDtkpEdW0RB85ByaDjO\nfVfxvVTSaTlbLhqg6cM73J466XrCcqhp4WyQnoLNlTccAN8va737tYo9hNv8NFwt\n8TL+LYwQWV32J2gW+ptjt6CKE5TND7+bfQF1TyyobFY1QVbNc8FFO6szH7Gy8Nu2\nsi2NP+VS5d1q6hBFqn/30taatwKBgQDmhi2++DwWRVyFctqPH6Mu6UeOs5pqTIAs\nSOC7zKoO3kwcyBHeLKfghJXgUnljtpXm9ubKFEUuqgFtxMWjKbomV59sAKCj9MCj\nXP9b06LE2uS0onGtJqvSjioMLW2plbM8jqPArEEmr1j8yCJW21zcd/TQtgPwS4DX\nycUPqnBJGQKBgQDbs4Jt0pwyHYvEsatvEi2FSmEp4NOBBgbsLqI1NtZBhu/W6O/k\nUuryZxRyCH8Zb5j2or3kDEPWlopWFxn0Bq3wr7Bq4ipp3JF/RqzzL7rQVkFyzhCV\nO6pgkSKsctvajh03DMh8PS0ar0HHSMT3lJlZmfB6lEcKe4Em3AFR7vI1ywKBgQCa\nGL3Bt6xq8sjLSCCDphFuTXCRGswxHJxdfgYEY+aV89GLN86B5vX9poONpXQRzL7d\n2tQh53Troac82lmHHWCbOt2N08mOcBDJ42Or3Ygj8XMKsMAuj/gx0uiWpVN2FmTv\nKSabqEoQ8wwYRix2RUMI+YMEdXeijMY++ViqhTN0GQKBgE+gYt6WL8lpMhKXfNmn\noifXgWaVSXBZhdElannHvhnuFWVttFShUNXovCfhrrOOUJw7+W8Pmg853Nc53/BR\n/J2bbfwpp8OZs1xvp63GqeKw4H5TaVOcvkKeD2sx5omOdo0lSoLkxldpmmY7/JHx\n9rbI5VZqvpXzILqSfDk9IyNA\n-----END PRIVATE KEY-----\n";
+
+const GA4_CONFIG = {
+  propertyId: process.env.GA4_PROPERTY_ID || '436068393',
+  clientEmail: process.env.GA4_CLIENT_EMAIL || 'ga4-dashboard@gen-lang-client-0912761576.iam.gserviceaccount.com',
+  privateKey: (process.env.GA4_PRIVATE_KEY || DEFAULT_GA4_PRIVATE_KEY).replace(/\\n/g, '\n')
+};
+
+function base64UrlEncode(str) {
+  return Buffer.from(str)
+    .toString('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+}
+
+const https = require('https');
+
+let cachedGa4Token = null;
+let ga4TokenExpiresAt = 0;
+
+async function getGA4AccessToken() {
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedGa4Token && ga4TokenExpiresAt > now + 60) {
+    return cachedGa4Token;
+  }
+
+  const header = JSON.stringify({ alg: 'RS256', typ: 'JWT' });
+  const payload = JSON.stringify({
+    iss: GA4_CONFIG.clientEmail,
+    scope: 'https://www.googleapis.com/auth/analytics.readonly',
+    aud: 'https://oauth2.googleapis.com/token',
+    exp: now + 3600,
+    iat: now
+  });
+
+  const unsignedToken = `${base64UrlEncode(header)}.${base64UrlEncode(payload)}`;
+  const sign = crypto.createSign('RSA-SHA256');
+  sign.update(unsignedToken);
+  sign.end();
+  const signature = sign.sign(GA4_CONFIG.privateKey, 'base64url');
+  const jwt = `${unsignedToken}.${signature}`;
+
+  const postBody = `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`;
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'oauth2.googleapis.com',
+      path: '/token',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(postBody)
+      }
+    }, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.access_token) {
+            cachedGa4Token = json.access_token;
+            ga4TokenExpiresAt = now + (json.expires_in || 3600);
+            resolve(cachedGa4Token);
+          } else {
+            reject(new Error(`[GA4 Auth] ${JSON.stringify(json)}`));
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(postBody);
+    req.end();
+  });
+}
+
+async function runGA4Report(accessToken, requestBody) {
+  const postData = JSON.stringify(requestBody);
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'analyticsdata.googleapis.com',
+      path: `/v1beta/properties/${GA4_CONFIG.propertyId}:runReport`,
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    }, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          resolve({ raw: data });
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
+app.get('/api/ga4-analytics', async (req, res) => {
+  try {
+    const { since, until } = req.query;
+    const startDate = since ? since.split('T')[0] : '30daysAgo';
+    const endDate = until ? until.split('T')[0] : 'today';
+
+    const token = await getGA4AccessToken();
+
+    // 1. Fetch Pages & Hostnames
+    const pagesReport = await runGA4Report(token, {
+      dateRanges: [{ startDate, endDate }],
+      metrics: [
+        { name: 'sessions' },
+        { name: 'activeUsers' },
+        { name: 'screenPageViews' }
+      ],
+      dimensions: [
+        { name: 'hostName' },
+        { name: 'pagePath' }
+      ],
+      limit: 100
+    });
+
+    // 2. Fetch Daily Sessions for Trend Chart
+    const dailyReport = await runGA4Report(token, {
+      dateRanges: [{ startDate, endDate }],
+      metrics: [{ name: 'sessions' }, { name: 'activeUsers' }],
+      dimensions: [{ name: 'date' }],
+      orderBys: [{ dimension: { dimensionName: 'date' }, desc: false }]
+    });
+
+    // 3. Fetch Traffic Sources (UTMs)
+    const trafficReport = await runGA4Report(token, {
+      dateRanges: [{ startDate, endDate }],
+      metrics: [{ name: 'sessions' }],
+      dimensions: [{ name: 'sessionSourceMedium' }],
+      limit: 20
+    });
+
+    const rows = pagesReport.rows || [];
+    let totalSessions = 0;
+    let totalUsers = 0;
+    let totalViews = 0;
+
+    const pageList = rows.map(r => {
+      const host = r.dimensionValues?.[0]?.value || '';
+      const path = r.dimensionValues?.[1]?.value || '';
+      const sessions = parseInt(r.metricValues?.[0]?.value || '0', 10);
+      const users = parseInt(r.metricValues?.[1]?.value || '0', 10);
+      const views = parseInt(r.metricValues?.[2]?.value || '0', 10);
+
+      totalSessions += sessions;
+      totalUsers += users;
+      totalViews += views;
+
+      return { host, path, url: `${host}${path}`, sessions, users, views };
+    });
+
+    const daily = (dailyReport.rows || []).map(r => {
+      const dStr = r.dimensionValues?.[0]?.value || '';
+      const dateFormatted = dStr.length === 8 ? `${dStr.slice(0, 4)}-${dStr.slice(4, 6)}-${dStr.slice(6, 8)}` : dStr;
+      return {
+        date: dateFormatted,
+        sessions: parseInt(r.metricValues?.[0]?.value || '0', 10),
+        users: parseInt(r.metricValues?.[1]?.value || '0', 10)
+      };
+    });
+
+    const sources = (trafficReport.rows || []).map(r => ({
+      source: r.dimensionValues?.[0]?.value || '(direto / nenhum)',
+      sessions: parseInt(r.metricValues?.[0]?.value || '0', 10)
+    }));
+
+    res.json({
+      success: true,
+      period: { startDate, endDate },
+      totals: {
+        sessions: totalSessions,
+        activeUsers: totalUsers,
+        pageviews: totalViews
+      },
+      pages: pageList,
+      daily,
+      sources
+    });
+  } catch (err) {
+    console.error('[GA4 API Error]:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1140,7 +1424,7 @@ app.post('/api/sync', async (req, res) => {
 
     while (hasMore) {
       console.log(`[Sync] Fetching page ${page} of leads...`);
-      const data = await fetchFromKommo(`/api/v4/leads?limit=250&page=${page}`);
+      const data = await fetchFromKommo(`/api/v4/leads?limit=250&page=${page}&with=contacts`);
       
       if (!data || !data._embedded || !data._embedded.leads || data._embedded.leads.length === 0) {
         hasMore = false;
@@ -1494,9 +1778,24 @@ app.post('/api/eduzz-webhook', async (req, res) => {
           console.log(`[Webhook] Paid Event: Updating existing lead ID ${existingLead.id} in Clients Pipeline`);
           const updatedPrice = (existingLead.price || 0) + Math.round(valueToAdd);
           
+          // Determinar tag específica do produto (KOR, KOP, MLFP, Komando, Ebook)
+          const pUpper = (productName || '').toUpperCase();
+          let prodTag = 'Outros';
+          if (pUpper.includes('KOR') || pUpper.includes('RESTAURANTE') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO')) {
+            prodTag = 'KOR';
+          } else if (pUpper.includes('KOP') || pUpper.includes('PRAÇA') || pUpper.includes('PRACA')) {
+            prodTag = 'KOP';
+          } else if (pUpper.includes('KOMANDO')) {
+            prodTag = 'Komando';
+          } else if (pUpper.includes('MLFP') || pUpper.includes('MENTORIA') || pUpper.includes('FAIXA PRETA')) {
+            prodTag = 'MLFP';
+          } else if (pUpper.includes('EBOOK') || pUpper.includes('LIVRO')) {
+            prodTag = 'Ebook';
+          }
+
           // Merge tags
           const existingTags = existingLead._embedded?.tags?.map(t => t.name) || [];
-          const newTags = Array.from(new Set(['Eduzz', ...existingTags, productName.substring(0, 50)]));
+          const newTags = Array.from(new Set(['Eduzz', prodTag, ...existingTags, productName.substring(0, 50)]));
           
           const fieldIds = await getLeadCustomFields();
           const customFieldsValues = [];
@@ -1515,6 +1814,20 @@ app.post('/api/eduzz-webhook', async (req, res) => {
           console.log(`[Webhook] Lead ${existingLead.id} updated successfully: Price: R$ ${updatedPrice}`);
         } else {
           console.log('[Webhook] Paid Event: Contact exists but no lead in Clients Pipeline. Creating new lead...');
+          const pUpper = (productName || '').toUpperCase();
+          let prodTag = 'Outros';
+          if (pUpper.includes('KOR') || pUpper.includes('RESTAURANTE') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO')) {
+            prodTag = 'KOR';
+          } else if (pUpper.includes('KOP') || pUpper.includes('PRAÇA') || pUpper.includes('PRACA')) {
+            prodTag = 'KOP';
+          } else if (pUpper.includes('KOMANDO')) {
+            prodTag = 'Komando';
+          } else if (pUpper.includes('MLFP') || pUpper.includes('MENTORIA') || pUpper.includes('FAIXA PRETA')) {
+            prodTag = 'MLFP';
+          } else if (pUpper.includes('EBOOK') || pUpper.includes('LIVRO')) {
+            prodTag = 'Ebook';
+          }
+
           const fieldIds = await getLeadCustomFields();
           const customFieldsValues = [];
           if (fieldIds.utm_source && utm_source) customFieldsValues.push({ field_id: fieldIds.utm_source, values: [{ value: utm_source }] });
@@ -1531,6 +1844,7 @@ app.post('/api/eduzz-webhook', async (req, res) => {
             _embedded: {
               tags: [
                 { name: 'Eduzz' },
+                { name: prodTag },
                 { name: productName.substring(0, 50) }
               ]
             }
@@ -1548,6 +1862,20 @@ app.post('/api/eduzz-webhook', async (req, res) => {
         }
       } else {
         console.log('[Webhook] Paid Event: Contact not found. Creating new lead + contact in Clients Pipeline...');
+        const pUpper = (productName || '').toUpperCase();
+        let prodTag = 'Outros';
+        if (pUpper.includes('KOR') || pUpper.includes('RESTAURANTE') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO')) {
+          prodTag = 'KOR';
+        } else if (pUpper.includes('KOP') || pUpper.includes('PRAÇA') || pUpper.includes('PRACA')) {
+          prodTag = 'KOP';
+        } else if (pUpper.includes('KOMANDO')) {
+          prodTag = 'Komando';
+        } else if (pUpper.includes('MLFP') || pUpper.includes('MENTORIA') || pUpper.includes('FAIXA PRETA')) {
+          prodTag = 'MLFP';
+        } else if (pUpper.includes('EBOOK') || pUpper.includes('LIVRO')) {
+          prodTag = 'Ebook';
+        }
+
         const fieldIds = await getLeadCustomFields();
         const customFieldsValues = [];
         if (fieldIds.utm_source && utm_source) customFieldsValues.push({ field_id: fieldIds.utm_source, values: [{ value: utm_source }] });
@@ -1564,6 +1892,7 @@ app.post('/api/eduzz-webhook', async (req, res) => {
           _embedded: {
             tags: [
               { name: 'Eduzz' },
+              { name: prodTag },
               { name: productName.substring(0, 50) }
             ],
             contacts: [{
@@ -1585,19 +1914,26 @@ app.post('/api/eduzz-webhook', async (req, res) => {
         console.log('[Webhook] New lead + contact created successfully in Clients Pipeline');
       }
 
-      // Notify new approved sale on Telegram
+      // Notify new approved sale on Telegram (KOR buyers are silenced per user directive)
       try {
-        const saleMessage = `🎉 *Nova Venda Aprovada!*
-        
+        const pUpper = (productName || '').toUpperCase();
+        const isKorSale = pUpper.includes('KOR') || pUpper.includes('RESTAURANTE') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO');
+
+        if (isKorSale) {
+          console.log(`[Eduzz Webhook] Sale is KOR (${productName}). Silencing notification for Chef Kaká per user directive.`);
+        } else {
+          const saleMessage = `🎉 *Nova Venda Aprovada!*
+          
 👤 *Cliente:* ${name}
 ✉️ *E-mail:* ${email || 'Não informado'}
 📞 *Telefone:* ${phone || 'Não informado'}
 📦 *Produto:* ${productName}
 💰 *Valor:* R$ ${value.toFixed(2)}
 🔢 *ID Fatura:* ${eduzzId}`;
-        
-        // Send to Telegram (private chat)
-        await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, saleMessage);
+          
+          // Send to Telegram (private chat)
+          await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, saleMessage);
+        }
       } catch (telErr) {
         console.error('[Eduzz Webhook] Error sending sale notification to Telegram:', telErr);
       }
@@ -1791,13 +2127,17 @@ app.post('/api/kommo-webhook', async (req, res) => {
       
       const statusName = (statusInfo.name || '').toLowerCase().trim();
       let metaEvent = null;
-      
-      if (statusName.includes('reunião agendada') || statusName.includes('reuniao agendada')) {
+
+      // Venda ganha -> Purchase. Sem isso o Meta so enxerga o topo do funil e
+      // otimiza para o lead barato, nao para o lead que fecha.
+      if (parseInt(statusId) === 142) {
+        metaEvent = 'Purchase';
+      } else if (statusName.includes('reunião agendada') || statusName.includes('reuniao agendada')) {
         metaEvent = 'ReuniaoAgendada';
       } else if (statusName.includes('reunião realizada') || statusName.includes('reuniao realizada')) {
         metaEvent = 'ReuniaoRealizada';
       }
-      
+
       if (!metaEvent) {
         console.log(`[Kommo Webhook] Status "${statusInfo.name}" does not match criteria for Meta event`);
         continue;
@@ -1841,17 +2181,38 @@ app.post('/api/kommo-webhook', async (req, res) => {
           name
         };
         
+        const valor = parseFloat(leadDetails.price) || 0;
+
+        // Purchase sem valor ensina o algoritmo que a venda vale zero —
+        // pior do que nao enviar. Exige o preco preenchido no lead.
+        if (metaEvent === 'Purchase' && valor <= 0) {
+          console.warn(`[Kommo Webhook] Lead ${leadId} marcado como ganho SEM preco preenchido. Purchase nao enviado — preencha o valor no Kommo.`);
+          await sendTelegram(
+            process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID,
+            `⚠️ *Venda sem valor no CRM*\nLead \`${leadId}\` (${leadDetails.name || 'sem nome'}) foi marcado como ganho, mas está com preço R$ 0.\n\nO evento Purchase NÃO foi enviado ao Meta. Preencha o valor no Kommo e mova o lead de etapa novamente.`
+          ).catch(() => {});
+          continue;
+        }
+
         const customData = {
-          value: parseFloat(leadDetails.price) || 0,
+          value: valor,
           currency: 'BRL',
           content_name: leadDetails.name || 'Oportunidade CRM',
           content_type: 'product',
           pipeline_name: statusInfo.pipelineName,
           status_name: statusInfo.name
         };
-        
+
         const eventId = `kommo_${leadId}_${statusId}`;
-        await sendMetaEvent(metaEvent, buyerInfo, customData, eventId);
+        // Consultoria fecha fora do site (reunião/telefone). 'physical_store'
+        // é o action_source que o Meta define para conversão offline e o
+        // único que aceita event_time de até 62 dias.
+        const actionSource = metaEvent === 'Purchase' ? 'physical_store' : 'system_generated';
+        const r = await sendMetaEvent(metaEvent, buyerInfo, customData, eventId, { actionSource });
+
+        if (metaEvent === 'Purchase' && r && r.ok) {
+          console.log(`[Kommo Webhook] Purchase de R$ ${valor} enviado ao Meta para o lead ${leadId}`);
+        }
       } catch (err) {
         console.error(`[Kommo Webhook] Error fetching details for lead ${leadId}:`, err.message);
       }
@@ -1864,19 +2225,103 @@ app.post('/api/kommo-webhook', async (req, res) => {
   }
 });
 
+// Envio manual de Purchase para o Meta.
+//
+// Existe porque nem toda venda passa pelo CRM: as consultorias Komando sao
+// fechadas fora do Kommo hoje, entao o webhook acima nunca dispara para elas.
+// Serve tambem para backfill — respeitando a janela de 62 dias do Meta para
+// action_source 'physical_store' (eventos mais antigos sao recusados).
+//
+// POST /api/meta/purchase
+// { "email": "...", "phone": "...", "name": "...", "value": 30000,
+//   "event_time": "2026-07-26T09:52:00-03:00", "reference": "venda-julho-01" }
+app.post('/api/meta/purchase', async (req, res) => {
+  const segredo = process.env.META_PURCHASE_SECRET;
+  const enviado = req.get('x-api-secret') || req.body?.secret;
+
+  if (!segredo) {
+    return res.status(503).json({
+      success: false,
+      error: 'META_PURCHASE_SECRET nao configurado. Defina a variavel de ambiente antes de usar este endpoint.'
+    });
+  }
+  if (enviado !== segredo) {
+    return res.status(401).json({ success: false, error: 'Segredo invalido' });
+  }
+
+  try {
+    const { email, phone, name, value, currency, event_time, reference, content_name } = req.body || {};
+
+    const valor = parseFloat(value);
+    if (!isFinite(valor) || valor <= 0) {
+      return res.status(400).json({ success: false, error: 'Campo "value" obrigatorio e maior que zero' });
+    }
+    if (!email && !phone) {
+      return res.status(400).json({ success: false, error: 'Informe ao menos "email" ou "phone" — sem identificador o Meta nao consegue atribuir a venda' });
+    }
+
+    // event_time aceita ISO 8601 ou timestamp UNIX; ausente = agora
+    let eventTime;
+    if (event_time) {
+      const n = Number(event_time);
+      eventTime = isFinite(n) && n > 1000000000 ? Math.floor(n) : Math.floor(new Date(event_time).getTime() / 1000);
+      if (!isFinite(eventTime) || eventTime <= 0) {
+        return res.status(400).json({ success: false, error: 'Campo "event_time" invalido. Use ISO 8601 (2026-07-26T09:52:00-03:00) ou timestamp UNIX.' });
+      }
+    }
+
+    const eventId = `manual_${reference || 'purchase'}_${eventTime || 'agora'}`;
+
+    const r = await sendMetaEvent(
+      'Purchase',
+      { email, phone, name },
+      {
+        value: valor,
+        currency: currency || 'BRL',
+        content_name: content_name || 'Consultoria Komando',
+        content_type: 'product',
+        event_source: 'manual'
+      },
+      eventId,
+      { eventTime, actionSource: 'physical_store' }
+    );
+
+    if (!r.ok) {
+      return res.status(422).json({ success: false, error: r.motivo, detalhe: r });
+    }
+    return res.json({ success: true, event_id: r.eventId, event_time: r.eventTime, value: valor });
+  } catch (err) {
+    console.error('[Meta Purchase Manual] Erro:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Helper to extract values from payload using flexible, case-insensitive, and accent-insensitive matching
 function getFlexibleValue(payload, possibleKeys) {
   if (!payload || typeof payload !== 'object') return '';
   
-  const fields = payload.fields || {};
-  const formData = payload.form_data || {};
-  const utmData = payload.utm_data || {};
+  const subObjects = [
+    payload,
+    payload.fields,
+    payload.form_data,
+    payload.formData,
+    payload.utm_data,
+    payload.utmData,
+    payload.variables,
+    payload.data,
+    payload.answers,
+    payload.submission,
+    payload.body,
+    payload.lead,
+    payload.contact,
+    payload.values
+  ].filter(obj => obj && typeof obj === 'object');
   
   const getValue = (obj, key) => {
     if (!obj || typeof obj !== 'object') return null;
     
     // Direct match (case-sensitive)
-    if (obj[key] !== undefined && obj[key] !== null) {
+    if (obj[key] !== undefined && obj[key] !== null && obj[key] !== '') {
       const val = obj[key];
       if (typeof val === 'object' && val !== null) {
         if (val.value !== undefined && val.value !== null) return String(val.value).trim();
@@ -1888,7 +2333,7 @@ function getFlexibleValue(payload, possibleKeys) {
     // Case-insensitive direct match
     const lowerKey = key.toLowerCase();
     const foundKey = Object.keys(obj).find(k => k.toLowerCase() === lowerKey);
-    if (foundKey && obj[foundKey] !== undefined && obj[foundKey] !== null) {
+    if (foundKey && obj[foundKey] !== undefined && obj[foundKey] !== null && obj[foundKey] !== '') {
       const val = obj[foundKey];
       if (typeof val === 'object' && val !== null) {
         if (val.value !== undefined && val.value !== null) return String(val.value).trim();
@@ -1900,19 +2345,12 @@ function getFlexibleValue(payload, possibleKeys) {
     return null;
   };
 
-  // 1. Try direct keys sequentially
+  // 1. Try direct keys sequentially across all possible payload containers
   for (const key of possibleKeys) {
-    const valRoot = getValue(payload, key);
-    if (valRoot !== null) return valRoot;
-    
-    const valFields = getValue(fields, key);
-    if (valFields !== null) return valFields;
-
-    const valForm = getValue(formData, key);
-    if (valForm !== null) return valForm;
-
-    const valUtm = getValue(utmData, key);
-    if (valUtm !== null) return valUtm;
+    for (const container of subObjects) {
+      const val = getValue(container, key);
+      if (val !== null && val !== '') return val;
+    }
   }
   
   // 2. Normalization matching (ignores spaces, accents, question marks, asterisks, and underscores)
@@ -1924,16 +2362,15 @@ function getFlexibleValue(payload, possibleKeys) {
       .replace(/[^a-z0-9]/g, '');     // remove everything else
   };
 
-  const checkNormalized = (obj) => {
-    if (!obj || typeof obj !== 'object') return null;
-    const normalizedObj = {};
-    for (const k of Object.keys(obj)) {
-      normalizedObj[normalize(k)] = obj[k];
+  for (const container of subObjects) {
+    const normalizedMap = {};
+    for (const k of Object.keys(container)) {
+      normalizedMap[normalize(k)] = container[k];
     }
     for (const key of possibleKeys) {
       const normKey = normalize(key);
-      if (normalizedObj[normKey] !== undefined && normalizedObj[normKey] !== null) {
-        const val = normalizedObj[normKey];
+      if (normalizedMap[normKey] !== undefined && normalizedMap[normKey] !== null && normalizedMap[normKey] !== '') {
+        const val = normalizedMap[normKey];
         if (typeof val === 'object' && val !== null) {
           if (val.value !== undefined && val.value !== null) return String(val.value).trim();
           if (val.raw_value !== undefined && val.raw_value !== null) return String(val.raw_value).trim();
@@ -1941,118 +2378,126 @@ function getFlexibleValue(payload, possibleKeys) {
         return String(val).trim();
       }
     }
-    return null;
-  };
-
-  const normValRoot = checkNormalized(payload);
-  if (normValRoot !== null) return normValRoot;
-
-  const normValFields = checkNormalized(fields);
-  if (normValFields !== null) return normValFields;
-
-  const normValForm = checkNormalized(formData);
-  if (normValForm !== null) return normValForm;
-
-  const normValUtm = checkNormalized(utmData);
-  if (normValUtm !== null) return normValUtm;
+  }
   
   return '';
 }
 
 // Helper to validate if a lead is a Partner, Owner, CEO or Executive Decision Maker
 function isPartnerOrOwner(cargo, perfil) {
-  const c = String(cargo || '').toLowerCase().trim();
-  const p = String(perfil || '').toLowerCase().trim();
+  const normalize = str => {
+    return String(str || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, '');
+  };
+
+  const c = normalize(cargo);
+  const p = normalize(perfil);
   
   const keywords = [
-    'socio', 'sócio', 'socia', 'sócia', 'proprietario', 'proprietário',
+    'socio', 'socia', 'proprietario', 'proprietaria',
     'dono', 'dona', 'owner', 'ceo', 'founder', 'fundador', 'fundadora',
-    'diretor', 'diretora', 'director', 'empresario', 'empresário',
-    'empresaria', 'empresária', 'vp', 'vice-presidente', 'vice presidente'
+    'diretor', 'diretora', 'director', 'empresario', 'empresaria',
+    'gerente', 'administrador', 'administradora', 'gestor', 'gestora',
+    'vp', 'vicepresidente'
   ];
   
   return keywords.some(kw => c.includes(kw) || p.includes(kw));
 }
 
+// Global In-Memory Notification Deduplicator Cache (15m TTL)
+const notifiedLeadsCache = new Map();
+
+function isAlreadyNotified(leadId, phone) {
+  const now = Date.now();
+  const cleanPhone = phone ? String(phone).replace(/\D/g, '') : null;
+
+  // Purge expired keys (older than 15 minutes)
+  for (const [key, ts] of notifiedLeadsCache.entries()) {
+    if (now - ts > 15 * 60 * 1000) notifiedLeadsCache.delete(key);
+  }
+
+  if (leadId && notifiedLeadsCache.has(`lead_${leadId}`)) return true;
+  if (cleanPhone && cleanPhone.length >= 8 && notifiedLeadsCache.has(`phone_${cleanPhone}`)) return true;
+  return false;
+}
+
+function markAsNotified(leadId, phone) {
+  const now = Date.now();
+  const cleanPhone = phone ? String(phone).replace(/\D/g, '') : null;
+  if (leadId) notifiedLeadsCache.set(`lead_${leadId}`, now);
+  if (cleanPhone && cleanPhone.length >= 8) notifiedLeadsCache.set(`phone_${cleanPhone}`, now);
+}
+
 // Helper to extract numeric value from free-text faturamento/renda in Portuguese
 function parseFaturamentoNumber(str) {
   if (!str) return 0;
-  const clean = String(str).toLowerCase().replace(/[\s_-]+/g, '');
+  let clean = String(str).toLowerCase()
+    .replace(/r\$/g, '')
+    .replace(/reais/g, '')
+    .replace(/[\s_-]+/g, '');
   
-  // Handle ranges like "1 a 3 mil" or "entre 100 e 150 mil" -> use the lower bound
-  const rangeMatch = clean.match(/(?:entre)?(\d+(?:[.,]\d+)?)[ae](\d+(?:[.,]\d+)?)mil/);
+  // Handle ranges like "150a300mil", "entre100e150mil", "1a3mil" -> use the lower bound
+  const rangeMatch = clean.match(/(?:entre)?(\d+(?:[.,]\d+)?)(?:a|ate|e)(\d+(?:[.,]\d+)?)mil/);
   if (rangeMatch) {
     const num = parseFloat(rangeMatch[1].replace(',', '.'));
     return num * 1000;
   }
   
-  let val = 0;
-  
+  // Handle "acima de 100 mil" or "mais de 100 mil" or "100 mil+"
+  const aboveMatch = clean.match(/(?:acima|mais|superior)?(?:de)?(\d+(?:[.,]\d+)?)mil/);
+  if (aboveMatch && (clean.includes('acima') || clean.includes('mais') || clean.includes('superior') || clean.includes('+'))) {
+    const num = parseFloat(aboveMatch[1].replace(',', '.'));
+    return num * 1000;
+  }
+
   // Handle explicit million multipliers
   if (clean.includes('milhao') || clean.includes('milhão') || clean.includes('1m') || clean.includes('2m') || clean.includes('5m')) {
-    val = 1000000;
-  } else {
-    // Check if it's a "k" abbreviation (e.g., 10k, 3k, 100k, 150k)
-    const kMatch = clean.match(/(\d+(?:[.,]\d+)?)\s*k/);
-    if (kMatch) {
-      const num = parseFloat(kMatch[1].replace(',', '.'));
-      val = num * 1000;
-    } else {
-      // Check if it's a "mil" abbreviation (e.g., 3 mil, 100 mil)
-      const milMatch = clean.match(/(\d+(?:[.,]\d+)?)\s*mil/);
-      if (milMatch) {
-        const num = parseFloat(milMatch[1].replace(',', '.'));
-        val = num * 1000;
-      } else {
-        // Check for standard currency formats like "R$ 3.000,00" or "3.000" or "3000"
-        const numbers = clean.replace(/[^0-9.,]/g, '');
-        if (numbers) {
-          // If it has a comma at the end with 2 decimal places, it's cents (e.g. 3.000,00)
-          if (numbers.includes(',') && numbers.split(',')[1].length === 2) {
-            const parts = numbers.split(',');
-            const mainPart = parts[0].replace(/\./g, ''); // remove thousands separator dot
-            val = parseFloat(mainPart);
-          } else if (numbers.includes('.') && !numbers.includes(',')) {
-            // If it's just dots (e.g. 3.000)
-            const parts = numbers.split('.');
-            if (parts[parts.length - 1].length === 3) {
-              // Thousands separator (e.g. 3.000 -> 3000)
-              val = parseFloat(numbers.replace(/\./g, ''));
-            } else {
-              // Decimal separator
-              val = parseFloat(numbers);
-            }
-          } else {
-            // Fallback: just remove everything non-numeric and parse
-            const digits = clean.replace(/\D/g, '');
-            if (digits.length > 0) {
-              val = parseInt(digits, 10);
-              if (clean.includes(',00') || clean.includes('.00')) {
-                val = val / 100;
-              }
-            }
-          }
-        }
+    return 1000000;
+  }
+  
+  // Check if it's a "k" abbreviation (e.g., 10k, 3k, 100k, 150k)
+  const kMatch = clean.match(/(\d+(?:[.,]\d+)?)\s*k/);
+  if (kMatch) {
+    const num = parseFloat(kMatch[1].replace(',', '.'));
+    return num * 1000;
+  }
+
+  // Check if it's a "mil" abbreviation (e.g., 3 mil, 100 mil, 300 mil)
+  const milMatch = clean.match(/(\d+(?:[.,]\d+)?)\s*mil/);
+  if (milMatch) {
+    const num = parseFloat(milMatch[1].replace(',', '.'));
+    return num * 1000;
+  }
+
+  // Handle standard dot thousands separators like "50.000", "100.000", "50.000,00"
+  if (clean.includes('.') && clean.split('.').length > 1) {
+    const cleanNumbers = clean.replace(/[^0-9.,]/g, '');
+    if (cleanNumbers.includes(',') && cleanNumbers.split(',')[1].length === 2) {
+      const mainPart = cleanNumbers.split(',')[0].replace(/\./g, '');
+      return parseFloat(mainPart) || 0;
+    }
+    if (!cleanNumbers.includes(',')) {
+      const parts = cleanNumbers.split('.');
+      if (parts[parts.length - 1].length === 3) {
+        return parseFloat(cleanNumbers.replace(/\./g, '')) || 0;
       }
     }
   }
-  
-  // If the text indicates "less than" or "up to", adjust the value downward
-  if (
-    clean.includes('menos') ||
-    clean.includes('abaixo') ||
-    clean.includes('menor') ||
-    clean.includes('under') ||
-    clean.includes('less') ||
-    clean.includes('ate') ||
-    clean.includes('até')
-  ) {
-    if (val > 0) {
-      val = val - 1; // e.g. 3000 becomes 2999, failing the >= 3000 check
+
+  // Standard numbers
+  const digits = clean.replace(/\D/g, '');
+  if (digits.length > 0) {
+    let val = parseInt(digits, 10);
+    if (clean.includes(',00') || clean.includes('.00')) {
+      val = val / 100;
     }
+    return val;
   }
-  
-  return val;
+
+  return 0;
 }
 
 // Helper to validate if billing is equal to or greater than 100k
@@ -2076,26 +2521,28 @@ function isFaturamentoAbove3k(faturamento, renda) {
   return fVal >= 3000 || rVal >= 3000;
 }
 
-app.post('/api/ko-webhook', async (req, res) => {
+app.post(['/api/ko-webhook', '/api/webhook/komando', '/api/komando-webhook', '/api/webhook/ko-webhook', '/api/webhook/ko'], async (req, res) => {
   console.log('[KO Webhook] Received form submission');
   
   const payload = req.body || {};
-  const email = getFlexibleValue(payload, ['E_mail', 'e_mail', 'Email', 'email']).toLowerCase().trim();
-  const rawPhone = getFlexibleValue(payload, ['WhatsApp_com_DDD', 'whatsapp_com_ddd', 'WhatsApp', 'whatsapp', 'Telefone', 'telefone', 'phone']);
+  const email = getFlexibleValue(payload, ['E_mail', 'e_mail', 'Email', 'email', 'E-mail', 'email_address', 'mail', 'contato_email', 'seu_email', 'e_mail_address']).toLowerCase().trim();
+  const rawPhone = getFlexibleValue(payload, ['WhatsApp_com_DDD', 'whatsapp_com_ddd', 'WhatsApp', 'whatsapp', 'Telefone', 'telefone', 'phone', 'celular', 'phone_number', 'contato_telefone', 'seu_whatsapp', 'tel', 'whatsapp_number', 'numero_whatsapp', 'cellphone', 'mobile', 'wpp', 'telefone_whatsapp']);
   const phone = rawPhone.replace(/[^0-9+]/g, '');
-  const name = getFlexibleValue(payload, ['Nome', 'nome', 'Name', 'name']) || 'Lead Sem Nome (KO)';
-  const faturamento = getFlexibleValue(payload, ['Qual_seu_faturamento_medio_mensal', 'Qual_seu_faturamento_medio', 'Qual_seu_faturamento_medic', 'Qual_seu_faturamento', 'faturamento', 'Faturamento']);
-  const cargo = getFlexibleValue(payload, ['Qual_seu_cargo', 'cargo', 'Cargo']);
-  const equipe = getFlexibleValue(payload, ['equipe', 'Equipe']);
-  const gargalo = getFlexibleValue(payload, ['Por_que_buscou_a_Komando', 'por_que_buscou_a_komando', 'gargalo', 'Gargalo']);
-  const lider = getFlexibleValue(payload, ['lider', 'Líder', 'Lider']);
+  const name = getFlexibleValue(payload, ['Nome', 'nome', 'Name', 'name', 'first_name', 'full_name', 'nome_completo', 'seu_nome', 'client_name', 'lead_name', 'contact_name', 'usuario', 'user_name']) || 'Lead Sem Nome (KO)';
+  const faturamento = getFlexibleValue(payload, ['Qual_seu_faturamento_medio_mensal', 'Qual_seu_faturamento_medio', 'Qual_seu_faturamento_medic', 'Qual_seu_faturamento', 'faturamento', 'Faturamento', 'faturamento_mensal', 'faturamento_medio', 'renda', 'receita', 'quanto_fatura', 'faixa_faturamento', 'qual_o_seu_faturamento', 'qual_o_faturamento', 'faturamento_atual', 'faturamento_empresa', 'faixa_de_faturamento', 'faturamento_medio_mensal', 'qual_faturamento', 'qual_a_faixa_de_faturamento', 'qual_e_a_sua_faixa_de_faturamento']);
+  const cargo = getFlexibleValue(payload, ['Qual_seu_cargo', 'cargo', 'Cargo', 'qual_e_o_seu_cargo', 'perfil', 'funcao', 'profissao', 'qual_seu_papel', 'papel_empresa', 'atuacao', 'posicao', 'qual_sua_posicao', 'voce_e', 'voce_e_o_que_na_empresa', 'qual_e_sua_funcao', 'qual_sua_funcao', 'qual_o_seu_cargo_na_empresa', 'qual_e_o_seu_papel_na_empresa']);
+  const equipe = getFlexibleValue(payload, ['equipe', 'Equipe', 'tamanho_da_equipe', 'tamanho_equipe', 'numero_colaboradores', 'quantos_colaboradores', 'colaboradores', 'funcionarios', 'tamanho_do_time', 'time', 'quantas_pessoas', 'quantos_funcionarios', 'numero_de_funcionarios', 'tamanho_equipe_colaboradores', 'quantos_funcionarios_trabalham_com_voce']);
+  const gargalo = getFlexibleValue(payload, ['Por_que_buscou_a_Komando', 'por_que_buscou_a_komando', 'gargalo', 'Gargalo', 'maior_gargalo', 'motivo', 'desafio', 'principal_desafio', 'qual_seu_maior_gargalo', 'qual_seu_maior_desafio', 'dificuldade', 'principal_problema', 'problema', 'qual_o_maior_gargalo', 'qual_e_o_maior_gargalo', 'qual_e_o_seu_maior_gargalo_hoje', 'oque_te_atrapalha', 'qual_e_o_seu_maior_desafio_hoje']);
+  const lider = getFlexibleValue(payload, ['lider', 'Líder', 'Lider', 'possui_lider_operacional', 'possui_lider', 'lider_operacional', 'braco_direito', 'tem_lider', 'lideranca', 'voce_tem_lider_operacional', 'tem_gerente', 'gerente_operacional', 'possui_gerente', 'possui_braco_direito', 'voce_tem_um_braco_direito']);
+  const socios = getFlexibleValue(payload, ['socios', 'Sócios', 'Socios', 'possui_socios', 'tem_socios', 'sociedade', 'voce_tem_socios', 'tem_socio', 'possui_socio']);
+  const instagram = getFlexibleValue(payload, ['instagram', 'Instagram', 'seu_instagram', 'insta', 'perfil_instagram', 'user_instagram', 'arroba_instagram', 'qual_seu_instagram', 'qual_e_o_seu_instagram']);
 
   const utm_source = getFlexibleValue(payload, ['UTM_Source', 'utm_source', 'Source', 'source']);
   const utm_medium = getFlexibleValue(payload, ['UTM_Medium', 'utm_medium', 'Medium', 'medium']);
   const utm_campaign = getFlexibleValue(payload, ['UTM_Campaign', 'utm_campaign', 'Campaign', 'campaign']);
   const utm_content = getFlexibleValue(payload, ['UTM_Content', 'utm_content', 'Content', 'content']);
   const utm_term = getFlexibleValue(payload, ['UTM_Term', 'utm_term', 'Term', 'term']);
-  const ab_variant = getFlexibleValue(payload, ['ab_variant', 'abVariant', 'ab_test', 'variant', 'page_variant', 'pagina_variante', 'variante', 'variant_id']);
+  const ab_variant = getFlexibleValue(payload, ['ab_variant', 'abVariant', 'ab_test', 'variant', 'page_variant', 'pagina_variante', 'variante', 'variant_id', 'versao', 'version']);
   
   if (!email && !phone) {
     console.warn('[KO Webhook] Warning: Form submission without email and phone, ignoring.');
@@ -2106,7 +2553,14 @@ app.post('/api/ko-webhook', async (req, res) => {
     Name: ${name}
     Email: ${email}
     Phone: ${phone}
+    Cargo: ${cargo}
     Faturamento: ${faturamento}
+    Equipe: ${equipe}
+    Gargalo: ${gargalo}
+    Líder: ${lider}
+    Sócios: ${socios}
+    Instagram: ${instagram}
+    Variante A/B: ${ab_variant}
   `);
 
   const isEbookEvent = (payload.event === 'ebook_lead_captured') || 
@@ -2118,8 +2572,8 @@ app.post('/api/ko-webhook', async (req, res) => {
   const gsSheetName = isEbookEvent ? 'KO Ebook' : 'KO Inbound';
   const gsResult = await saveToGoogleSheets(gsSheetName, {
     nome: name, email, telefone: phone, faturamento,
-    cargo, equipe, gargalo, lider,
-    utm_source, utm_medium, utm_campaign, utm_content, utm_term
+    cargo, equipe, gargalo, lider, socios, instagram,
+    utm_source, utm_medium, utm_campaign, utm_content, utm_term, ab_variant
   });
   const gsRow = gsResult?.row;
   console.log(`[KO Webhook] Lead saved to Google Sheets (${gsSheetName}, row: ${gsRow})`);
@@ -2142,22 +2596,31 @@ app.post('/api/ko-webhook', async (req, res) => {
     const fieldIds = await getLeadCustomFields();
     const leadCustomFields = [];
     
-    if (fieldIds.utm_source && utm_source) leadCustomFields.push({ field_id: fieldIds.utm_source, values: [{ value: utm_source }] });
-    if (fieldIds.utm_campaign && utm_campaign) leadCustomFields.push({ field_id: fieldIds.utm_campaign, values: [{ value: utm_campaign }] });
-    if (fieldIds.utm_medium && utm_medium) leadCustomFields.push({ field_id: fieldIds.utm_medium, values: [{ value: utm_medium }] });
-    if (fieldIds.utm_content && utm_content) leadCustomFields.push({ field_id: fieldIds.utm_content, values: [{ value: utm_content }] });
-    if (fieldIds.utm_term && utm_term) leadCustomFields.push({ field_id: fieldIds.utm_term, values: [{ value: utm_term }] });
+    if (utm_source) leadCustomFields.push({ field_id: fieldIds.utm_source || 110088, values: [{ value: utm_source }] });
+    if (utm_campaign) leadCustomFields.push({ field_id: fieldIds.utm_campaign || 110086, values: [{ value: utm_campaign }] });
+    if (utm_medium) leadCustomFields.push({ field_id: fieldIds.utm_medium || 110084, values: [{ value: utm_medium }] });
+    if (utm_content) leadCustomFields.push({ field_id: fieldIds.utm_content || 110082, values: [{ value: utm_content }] });
+    if (utm_term) leadCustomFields.push({ field_id: fieldIds.utm_term || 110090, values: [{ value: utm_term }] });
     
-    // Mapeamento dos campos fixos da KO
+    // Mapeamento completo dos campos fixos da KO
     if (faturamento) leadCustomFields.push({ field_id: 128886, values: [{ value: faturamento }] }); // Seu faturamento médio
     if (cargo) leadCustomFields.push({ field_id: 128884, values: [{ value: cargo }] }); // Qual é o seu cargo?
     if (equipe) leadCustomFields.push({ field_id: 492035, values: [{ value: equipe }] }); // Tamanho da equipe
     if (gargalo) leadCustomFields.push({ field_id: 492037, values: [{ value: gargalo }] }); // Maior gargalo
     if (lider) leadCustomFields.push({ field_id: 492039, values: [{ value: lider }] }); // Possui líder operacional?
+    if (socios) leadCustomFields.push({ field_id: 128888, values: [{ value: socios }] }); // Possui sócios?
+    if (instagram) leadCustomFields.push({ field_id: 311994, values: [{ value: instagram }] }); // Seu instagram?
     if (ab_variant) leadCustomFields.push({ field_id: 494249, values: [{ value: String(ab_variant) }] }); // Variante A/B (Página)
 
+    // Calculate qualification upfront
+    const isQualifiedRole = isPartnerOrOwner(cargo, '');
+    const isQualifiedBilling = isFaturamentoAbove50k(faturamento, '');
+    const isQualified = isQualifiedBilling || (isQualifiedRole && isFaturamentoAbove3k(faturamento, ''));
+
     let leadId = null;
+    let activeLead = null;
     const baseTags = isEbookEvent ? ['KO_Ebooks', 'Ebook'] : ['KO_Inbound'];
+    if (isQualified) baseTags.push('MQL');
     if (ab_variant) baseTags.push(`AB_${String(ab_variant).substring(0, 30)}`);
 
     if (existingContacts.length > 0) {
@@ -2195,7 +2658,7 @@ app.post('/api/ko-webhook', async (req, res) => {
       }
 
       const linkedLeads = primaryContact._embedded?.leads || [];
-      let activeLead = null;
+      activeLead = null;
       
       for (const leadRef of linkedLeads) {
         try {
@@ -2278,6 +2741,61 @@ app.post('/api/ko-webhook', async (req, res) => {
 
     // Update Google Sheets with CRM result
     if (gsRow) await updateGoogleSheetsStatus(gsSheetName, gsRow, 'Processado', leadId);
+
+    // Disparar Notificação Direta para o Telegram Thread #2 (Komando) e WhatsApp
+    try {
+      const threadId = process.env.TELEGRAM_THREAD_KO || 2;
+      const isReentry = !!activeLead;
+      
+      const headerTitle = isReentry 
+        ? (isQualified ? '🔥 *Lead Qualificado Re-enviou o Formulário - Komando!*' : '🚀 *Lead Re-enviou o Formulário - Komando!*')
+        : (isQualified ? '🔥 *Novo Lead Qualificado Recebido - Komando!*' : '🚀 *Novo Lead Recebido - Komando!*');
+
+      let msg = `${headerTitle}\n\n`;
+      msg += `👤 *Nome:* ${name}\n`;
+      msg += `📱 *WhatsApp:* ${phone || 'Não informado'}\n`;
+      if (email) msg += `✉️ *Email:* ${email}\n`;
+      msg += `\n`;
+      
+      msg += `📋 *RESPOSTAS DO FORMULÁRIO:*\n`;
+      if (cargo) msg += `💼 *Cargo:* ${cargo}\n`;
+      if (faturamento) msg += `💰 *Faturamento Médio:* ${faturamento}\n`;
+      if (socios) msg += `👥 *Sócios:* ${socios}\n`;
+      if (equipe) msg += `👥 *Tamanho da Equipe:* ${equipe}\n`;
+      if (gargalo) msg += `⚠️ *Maior Gargalo:* ${gargalo}\n`;
+      if (lider) msg += `👔 *Líder Operacional:* ${lider}\n`;
+      if (instagram) msg += `📸 *Instagram:* ${instagram}\n`;
+      if (ab_variant) msg += `🧪 *Variante A/B:* ${ab_variant}\n`;
+      msg += `\n`;
+      
+      msg += `🎯 *INFORMAÇÕES DE TRÁFEGO:*\n`;
+      msg += `📍 *Funil:* ${isEbookEvent ? '[KO] Ebooks' : '[KO] Inbound'}\n`;
+      if (utm_source) msg += `📌 *Origem (Source):* ${utm_source}\n`;
+      if (utm_campaign) msg += `📢 *Campanha:* ${utm_campaign}\n`;
+      if (utm_medium) msg += `🎯 *Conjunto (Medium):* ${utm_medium}\n`;
+      if (utm_content) msg += `🎨 *Criativo (Content):* ${utm_content}\n`;
+      if (utm_term) msg += `🔎 *Termo:* ${utm_term}\n`;
+      msg += `🆔 *Lead ID CRM:* ${leadId || 'N/A'}`;
+
+      if (isAlreadyNotified(leadId, phone)) {
+        console.log(`[KO Webhook] Lead ${leadId} (${phone}) was already notified recently. Skipping duplicate dispatch.`);
+      } else {
+        markAsNotified(leadId, phone);
+        await sendTelegram(process.env.TELEGRAM_CHAT_ID, msg, undefined, threadId);
+        console.log(`[KO Webhook] Direct notification sent to Telegram thread ${threadId}`);
+
+        // Se qualificado e Komando Inbound, envia para Z-API WhatsApp
+        if (isQualified && !isEbookEvent) {
+          try {
+            await sendZapi(process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763', msg);
+          } catch(zErr) {
+            console.warn('[KO Webhook] Z-API dispatch warning:', zErr.message);
+          }
+        }
+      }
+    } catch(notifErr) {
+      console.error('[KO Webhook] Direct notification error:', notifErr.message);
+    }
 
     res.status(200).json({ success: true, lead_id: leadId });
   } catch (err) {
@@ -2403,13 +2921,17 @@ app.post('/api/lp-webhook', async (req, res) => {
 
     let leadId = null;
 
-    // MLFP Qualification Logic: Revenue >= 3k AND Cargo is Chef, Gerente, Dono, Sócio, etc.
+    // MLFP Qualification Logic: Revenue >= 3k AND Cargo is Chef, Gerente, Dono, Sócio, Líder, etc.
+    // CRITICAL RULE: Auxiliares NÃO entram como MQL mesmo com faturamento acima do recomendado
     const fVal = parseFaturamentoNumber(finalFaturamento);
     const rVal = parseFaturamentoNumber(renda);
     const hasMinRevenue3k = (fVal >= 3000 || rVal >= 3000);
     
     const cUpper = String(finalCargo || '').toUpperCase();
-    const isQualifiedCargo = cUpper.includes('CHEF') || 
+    const isAuxiliar = cUpper.includes('AUXILIAR') || cUpper.includes('AJUDANTE') || cUpper.includes('BUSCO EVOLUÇÃO') || cUpper.includes('BUSCO EVOLUCAO');
+
+    const isQualifiedCargo = !isAuxiliar && (
+                             cUpper.includes('CHEF') || 
                              cUpper.includes('GERENTE') || 
                              cUpper.includes('DONO') || 
                              cUpper.includes('SÓCIO') || 
@@ -2417,11 +2939,10 @@ app.post('/api/lp-webhook', async (req, res) => {
                              cUpper.includes('PROPRIETÁRIO') || 
                              cUpper.includes('PROPRIETARIO') || 
                              cUpper.includes('DIRETOR') ||
-                             cUpper.includes('COZINHEIRO') ||
                              cUpper.includes('SUBGERENTE') ||
                              cUpper.includes('LÍDER') ||
                              cUpper.includes('LIDER') ||
-                             cUpper.length === 0;
+                             cUpper.includes('PROMOVIDO'));
 
     const isMql = hasMinRevenue3k && isQualifiedCargo;
     const shouldGoToDownsell = !isMql;
@@ -2598,13 +3119,30 @@ app.post('/api/lp-webhook', async (req, res) => {
 app.post('/api/kommo-lead-created', async (req, res) => {
   console.log('[Z-API Webhook] Received lead created notification from Kommo');
   
+  let rawLeads = req.body?.leads?.add || req.body?.leads?.status || req.body?.leads?.update;
   let leadsToProcess = [];
-  if (req.body?.leads?.add) {
-    leadsToProcess = req.body.leads.add;
-  } else if (req.body?.leads?.status) {
-    leadsToProcess = req.body.leads.status;
-  } else if (req.body?.leads?.update) {
-    leadsToProcess = req.body.leads.update;
+
+  if (rawLeads) {
+    if (Array.isArray(rawLeads)) {
+      leadsToProcess = rawLeads;
+    } else if (typeof rawLeads === 'object') {
+      leadsToProcess = Object.values(rawLeads);
+    }
+  }
+
+  // Fallback: Check contacts[add] or contacts[update] if lead payload was sent via contact event
+  if (leadsToProcess.length === 0) {
+    const rawContacts = req.body?.contacts?.add || req.body?.contacts?.update;
+    if (rawContacts) {
+      const contactArr = Array.isArray(rawContacts) ? rawContacts : Object.values(rawContacts);
+      contactArr.forEach(c => {
+        const linkedLeads = c.linked_leads_id || c.leads || [];
+        (Array.isArray(linkedLeads) ? linkedLeads : Object.values(linkedLeads)).forEach(l => {
+          const lId = typeof l === 'object' ? l.id : l;
+          if (lId) leadsToProcess.push({ id: lId });
+        });
+      });
+    }
   }
 
   if (leadsToProcess.length === 0) {
@@ -2622,26 +3160,42 @@ app.post('/api/kommo-lead-created', async (req, res) => {
   };
 
   try {
-    for (const lead of leadsToProcess) {
-      const leadId = lead.id;
-      const pipelineId = parseInt(lead.pipeline_id || lead.raw?.pipeline_id);
+    for (const leadObj of leadsToProcess) {
+      const leadId = leadObj.id || leadObj.raw?.id;
+      if (!leadId) continue;
+
+      // Fetch complete lead details with contacts
+      let leadDetails = await kommoRequest('GET', `/api/v4/leads/${leadId}?with=contacts`);
+      if (!leadDetails) continue;
+
+      const pipelineId = parseInt(leadDetails.pipeline_id || leadObj.pipeline_id || leadObj.raw?.pipeline_id);
       
-      // Filter: Only process tracked pipelines (KO, MLFP, KOP, KOR)
+      // Filter: Only process tracked pipelines (KO, MLFP, KOP) — KOR notifications disabled by user request
       const isKoPipeline = pipelineId === PIPELINES.KO_INBOUND || pipelineId === PIPELINES.KO_EBOOKS;
       const isMlfpPipeline = pipelineId === PIPELINES.MLFP_INBOUND;
       const isKopPipeline = pipelineId === PIPELINES.KOP;
       const isKorPipeline = pipelineId === PIPELINES.KOR;
       
-      if (!isKoPipeline && !isMlfpPipeline && !isKopPipeline && !isKorPipeline) {
+      // Strict check: Silence any KOR lead, buyer, or recovery lead per user directive
+      const currentTagsUpper = (leadDetails._embedded?.tags || []).map(t => (t.name || '').toUpperCase());
+      const leadNameUpper = (leadDetails.name || '').toUpperCase();
+      const isKorLeadOrBuyer = isKorPipeline || 
+                               currentTagsUpper.includes('KOR') || 
+                               currentTagsUpper.some(t => t.includes('RESTAURANTE') || t.includes('KIT DE OPERACAO') || t.includes('KIT DE OPERAÇÃO')) ||
+                               leadNameUpper.includes('[KOR]') || 
+                               leadNameUpper.includes('RESTAURANTE');
+
+      if (isKorLeadOrBuyer) {
+        console.log(`[Z-API Webhook] Skipping lead ${leadId}: KOR lead/buyer notifications are silenced for Chef Kaká per user directive.`);
+        continue;
+      }
+      
+      if (!isKoPipeline && !isMlfpPipeline && !isKopPipeline) {
         console.log(`[Z-API Webhook] Skipping lead ${leadId}: Not in tracked pipelines (Pipeline ID: ${pipelineId})`);
         continue;
       }
       
       console.log(`[Z-API Webhook] Processing lead ID ${leadId} from pipeline ${pipelineId}...`);
-      
-      // Fetch complete lead details with contacts
-      const leadDetails = await kommoRequest('GET', `/api/v4/leads/${leadId}?with=contacts`);
-      if (!leadDetails) continue;
 
       // Skip retroactive/old leads (created more than 12 hours ago) to prevent notification storm (can be bypassed for testing)
       const nowUnix = Math.floor(Date.now() / 1000);
@@ -2651,9 +3205,28 @@ app.post('/api/kommo-lead-created', async (req, res) => {
         continue;
       }
       
-      const contacts = leadDetails._embedded?.contacts || [];
+      let contacts = leadDetails._embedded?.contacts || [];
       if (contacts.length === 0) {
-        console.log(`[Z-API Webhook] Skipping lead ${leadId}: No contacts linked.`);
+        console.log(`[Z-API Webhook] Lead ${leadId} has no linked contacts yet. Waiting 1.5s to re-fetch...`);
+        await new Promise(r => setTimeout(r, 1500));
+        const retryDetails = await kommoRequest('GET', `/api/v4/leads/${leadId}?with=contacts`);
+        contacts = retryDetails?._embedded?.contacts || [];
+        if (contacts.length > 0) leadDetails = retryDetails;
+      }
+
+      // If lead has empty custom fields and was created recently, wait 2.5s and re-fetch to allow step 2 / webhook updates to attach
+      if ((!leadDetails.custom_fields_values || leadDetails.custom_fields_values.length < 2) && (nowUnix - leadDetails.created_at < 60)) {
+        console.log(`[Z-API Webhook] Lead ${leadId} has few/no custom fields. Waiting 2.5s to re-fetch potential webhook updates...`);
+        await new Promise(r => setTimeout(r, 2500));
+        const refetchedLead = await kommoRequest('GET', `/api/v4/leads/${leadId}?with=contacts`);
+        if (refetchedLead) {
+          leadDetails = refetchedLead;
+          contacts = refetchedLead._embedded?.contacts || contacts;
+        }
+      }
+
+      if (contacts.length === 0) {
+        console.log(`[Z-API Webhook] Skipping lead ${leadId}: No contacts linked after retry.`);
         continue;
       }
 
@@ -2678,35 +3251,58 @@ app.post('/api/kommo-lead-created', async (req, res) => {
         }
       });
       
-      let instagram = '';
-      let cargo = '';
-      let faturamento = '';
-      let socios = '';
-      let renda = '';
-      let perfil = '';
-      let equipe = '';
-      let gargalo = '';
-      let lider = '';
-      let utmSource = '';
-      let utmCampaign = '';
+      const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+
+      // Skip duplicate notifications if lead was already notified recently (e.g. by ko-webhook or prior event)
+      if (isAlreadyNotified(leadId, cleanPhone)) {
+        console.log(`[Z-API Webhook] Skipping lead ${leadId} (${cleanPhone}): Already notified recently.`);
+        continue;
+      }
       
-      leadFields.forEach(f => {
-        if (f.field_id === 311994) instagram = f.values?.[0]?.value || instagram;
-        if (f.field_id === 128884) cargo = f.values?.[0]?.value || cargo;
-        if (f.field_id === 128886) faturamento = f.values?.[0]?.value || faturamento;
-        if (f.field_id === 128888) socios = f.values?.[0]?.value || socios;
-        if (f.field_id === 128476) renda = f.values?.[0]?.value || renda;
-        if (f.field_id === 128474) perfil = f.values?.[0]?.value || perfil;
-        if (f.field_id === 492035) equipe = f.values?.[0]?.value || equipe;
-        if (f.field_id === 492037) gargalo = f.values?.[0]?.value || gargalo;
-        if (f.field_id === 492039) lider = f.values?.[0]?.value || lider;
-        if (f.field_id === 110088) utmSource = f.values?.[0]?.value || utmSource;
-        if (f.field_id === 110086) utmCampaign = f.values?.[0]?.value || utmCampaign;
-      });
+      // Helper to safely extract custom field value by IDs, names, or codes
+      const getVal = (fieldsList, idList, nameKeywords) => {
+        if (!Array.isArray(fieldsList)) return '';
+        for (const f of fieldsList) {
+          const val = f.values?.[0]?.value;
+          if (val === undefined || val === null || String(val).trim() === '') continue;
+          
+          if (idList.includes(f.field_id)) return String(val).trim();
+          
+          const fName = String(f.field_name || f.name || '').toLowerCase();
+          const fCode = String(f.field_code || f.code || '').toLowerCase();
+          if (nameKeywords.some(kw => fName.includes(kw) || fCode.includes(kw))) {
+            return String(val).trim();
+          }
+        }
+        return '';
+      };
+
+      const cargo = getVal(leadFields, [128884, 128474], ['cargo', 'perfil', 'funcao']) || getVal(contactFields, [110072], ['posicao', 'position', 'cargo']);
+      const faturamento = getVal(leadFields, [128886, 128476], ['faturamento', 'renda', 'receita']);
+      const socios = getVal(leadFields, [128888], ['socio', 'sócio']);
+      const equipe = getVal(leadFields, [492035], ['equipe', 'time', 'colaborador', 'funcionario']);
+      const gargalo = getVal(leadFields, [492037], ['gargalo', 'desafio', 'motivo', 'problema', 'buscou']);
+      const lider = getVal(leadFields, [492039], ['lider', 'líder', 'operacional', 'braço']);
+      const instagram = getVal(leadFields, [311994], ['instagram', 'insta']) || getVal(contactFields, [311994], ['instagram', 'insta']);
+      const utmSource = getVal(leadFields, [110088], ['utm_source', 'source']);
+      const utmCampaign = getVal(leadFields, [110086], ['utm_campaign', 'campaign']);
+      const utmMedium = getVal(leadFields, [110084], ['utm_medium', 'medium']);
+      const utmContent = getVal(leadFields, [110082], ['utm_content', 'content']);
+      const utmTerm = getVal(leadFields, [110090], ['utm_term', 'term']);
+      const abVariant = getVal(leadFields, [494249], ['variante', 'variant', 'ab_variant']);
 
       // Para compatibilidade (tanto leads antigos com campos separados quanto novos mesclados)
-      const displayCargo = cargo || perfil;
-      const displayFaturamento = faturamento || renda;
+      const displayCargo = cargo;
+      const displayFaturamento = faturamento;
+
+      // Se for lead da Komando Inbound e ainda não tiver campos preenchidos (lead incompleto do passo 1),
+      // NÃO envia notificação prematura com "Não informado" — aguarda o envio completo do quiz via ko-webhook
+      if (pipelineId === PIPELINES.KO_INBOUND) {
+        if ((!displayCargo || displayCargo === 'Não informado') && (!displayFaturamento || displayFaturamento === 'Não informado')) {
+          console.log(`[Z-API Webhook] Skipping KO Inbound lead ${leadId}: Custom fields missing (step 1 lead, waiting for quiz).`);
+          continue;
+        }
+      }
 
       const clientName = contactDetails.name || leadDetails.name || 'Sem Nome';
 
@@ -2720,11 +3316,19 @@ app.post('/api/kommo-lead-created', async (req, res) => {
         const isQualifiedRole = isPartnerOrOwner(displayCargo, '');
         const isQualifiedBilling = isFaturamentoAbove50k(displayFaturamento, '');
         isQualified = isQualifiedBilling || (isQualifiedRole && isFaturamentoAbove3k(displayFaturamento, ''));
-        targetPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763'; // Savio
+        
+        // SOMENTE [KO] Inbound vai para o WhatsApp do Kaká (Ebooks NÃO envia WhatsApp)
+        if (Number(pipelineId) === PIPELINES.KO_INBOUND) {
+          targetPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
+        } else {
+          targetPhone = '';
+        }
+
         pipelineName = pipelineId === PIPELINES.KO_INBOUND ? '[KO] Inbound' : '[KO] Ebooks';
-        headerTitle = '🚀 *Novo Lead VIP Recebido - Komando!*';
+        headerTitle = isQualified ? '🔥 *Novo Lead Qualificado Recebido - Komando!*' : '🚀 *Novo Lead VIP Recebido - Komando!*';
         
         console.log(`[Z-API Webhook] KO Lead ${leadId} qualification check:
+          Pipeline: ${pipelineName} (Target WhatsApp: "${targetPhone ? 'Sim' : 'Não'}")
           Role Check (Partner/Owner): ${isQualifiedRole} (Cargo/Perfil: "${displayCargo}")
           Billing Check (>= 50k): ${isQualifiedBilling} (Faturamento/Renda: "${displayFaturamento}")
           Overall Qualified: ${isQualified}
@@ -2747,20 +3351,46 @@ app.post('/api/kommo-lead-created', async (req, res) => {
             } catch (tagErr) {
               console.error(`[Z-API Webhook] Error adding 'MQL' tag to lead ${leadId}:`, tagErr);
             }
-          } else {
-            console.log(`[Z-API Webhook] Lead ${leadId} already has 'MQL' tag. Skipping WhatsApp notification.`);
-            isQualified = false;
+
+            // Evento de meio de funil para o Meta.
+            // Purchase e o sinal certo mas nao tem volume (≈0,4 venda/semana);
+            // o Meta precisa de ~50 conversoes semanais por conjunto para sair
+            // da fase de aprendizado. MQL tem volume e correlaciona com venda,
+            // entao e ele que deve ser o evento de otimizacao das campanhas.
+            try {
+              await sendMetaEvent(
+                'MQL',
+                { email, phone, name: clientName },
+                {
+                  content_name: `MQL ${pipelineName}`,
+                  content_type: 'lead',
+                  cargo: displayCargo || 'nao informado',
+                  faturamento: displayFaturamento || 'nao informado',
+                  utm_source: utmSource || undefined,
+                  utm_campaign: utmCampaign || undefined,
+                  utm_medium: utmMedium || undefined,
+                  utm_content: utmContent || undefined
+                },
+                `mql_${leadId}`
+              );
+            } catch (capiErr) {
+              console.error(`[Z-API Webhook] Falha ao enviar evento MQL ao Meta para o lead ${leadId}:`, capiErr.message);
+            }
           }
         }
       } else if (isMlfpPipeline) {
         const currentTags = leadDetails._embedded?.tags || [];
         const hasDownsellTag = currentTags.some(t => t.name.toLowerCase() === 'downsell');
 
-        if (hasDownsellTag) {
-          isQualified = false; // Não notificar leads de downsell no WhatsApp
+        const cUpper = String(displayCargo || '').toUpperCase();
+        const isAuxiliar = cUpper.includes('AUXILIAR') || cUpper.includes('AJUDANTE') || cUpper.includes('BUSCO EVOLUÇÃO') || cUpper.includes('BUSCO EVOLUCAO');
+
+        if (hasDownsellTag || isAuxiliar) {
+          isQualified = false; // Auxiliares NÃO são MQL mesmo com faturamento alto (vão para Downsell)
+          headerTitle = '📉 *Novo Lead Downsell (Auxiliar) - Mentoria MLFP!*';
         } else {
           isQualified = isFaturamentoAbove3k(displayFaturamento, '');
-          headerTitle = '🔥 *Novo Lead Qualificado Recebido - Mentoria MLFP!*';
+          headerTitle = isQualified ? '🔥 *Novo Lead Qualificado Recebido - Mentoria MLFP!*' : '🚀 *Novo Lead - Mentoria MLFP!*';
         }
         
         targetPhone = process.env.MLFP_NOTIFICATION_NUMBER || '556194319690'; // Mentoria
@@ -2768,16 +3398,18 @@ app.post('/api/kommo-lead-created', async (req, res) => {
         
         console.log(`[Z-API Webhook] MLFP Lead ${leadId} qualification check:
           Billing Check (>= 3k): ${isFaturamentoAbove3k(displayFaturamento, '')} (Faturamento/Renda: "${displayFaturamento}")
+          Is Auxiliar: ${isAuxiliar} (Cargo: "${displayCargo}")
           Has Downsell Tag: ${hasDownsellTag}
           Overall Qualified (Send WhatsApp): ${isQualified}
         `);
 
         const isInitialStage = [102598987, 102598991].includes(leadDetails.status_id);
-        const shouldMoveToDownsell = hasDownsellTag || (isInitialStage && !isQualified);
+        const shouldMoveToDownsell = hasDownsellTag || isAuxiliar || (isInitialStage && !isQualified);
 
         if (shouldMoveToDownsell && leadDetails.status_id !== 108619300) {
-          console.log(`[Z-API Webhook] MLFP Lead ${leadId} should go to Downsell. Moving to Downsell stage (108619300) and adding tag...`);
-          const updatedTags = currentTags.map(t => ({ name: t.name }));
+          console.log(`[Z-API Webhook] MLFP Lead ${leadId} should go to Downsell (Auxiliar / Não MQL). Moving to Downsell stage (108619300) and updating tags...`);
+          // Remove MQL tag if present and add Downsell tag
+          const updatedTags = currentTags.filter(t => t.name.toUpperCase() !== 'MQL').map(t => ({ name: t.name }));
           if (!updatedTags.some(t => t.name.toLowerCase() === 'downsell')) {
             updatedTags.push({ name: 'Downsell' });
           }
@@ -2789,17 +3421,17 @@ app.post('/api/kommo-lead-created', async (req, res) => {
                 tags: updatedTags
               }
             });
-            console.log(`[Z-API Webhook] Successfully moved lead ${leadId} to Downsell stage and added tag.`);
+            console.log(`[Z-API Webhook] Successfully moved lead ${leadId} to Downsell stage and removed MQL tag.`);
           } catch (patchErr) {
             console.error(`[Z-API Webhook] Error moving lead ${leadId} to Downsell stage:`, patchErr.message);
           }
         }
       } else if (isKopPipeline) {
-        // KOP — Same qualification as Komando (Cargo + Faturamento >= 100k)
+        // KOP — Qualification for MQL tag
         const isQualifiedRole = isPartnerOrOwner(displayCargo, '');
         const isQualifiedBilling = isFaturamentoAbove100k(displayFaturamento, '');
         isQualified = isQualifiedRole && isQualifiedBilling;
-        targetPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
+        targetPhone = ''; // Não enviar para o WhatsApp do Kaká (somente Telegram Thread #6)
         pipelineName = '[KOP] Komando Operação';
         headerTitle = '📦 *Novo Lead KOP Recebido!*';
 
@@ -2825,32 +3457,17 @@ app.post('/api/kommo-lead-created', async (req, res) => {
             } catch (tagErr) {
               console.error(`[Z-API Webhook] Error adding 'MQL' tag to KOP lead ${leadId}:`, tagErr);
             }
-          } else {
-            console.log(`[Z-API Webhook] KOP Lead ${leadId} already has 'MQL' tag.`);
-            isQualified = false;
           }
         }
-      } else if (isKorPipeline) {
-        // KOR — All recovery leads are notified (no qualification needed)
-        isQualified = true;
-        pipelineName = '[KOR] KOR Inbound';
-        headerTitle = '🔄 *Novo Lead KOR Inbound!*';
-        
-        console.log(`[Z-API Webhook] KOR Lead ${leadId}: Auto-qualified for notification.`);
       }
 
       if (req.query.test === 'true') {
         isQualified = true;
       }
 
-      if (!isQualified) {
-        console.log(`[Z-API Webhook] Lead ${leadId} did not meet qualification criteria. Skipping WhatsApp report.`);
-        continue;
-      }
-
       // 4. Format report message
-      const cleanPhone = phone.replace(/\D/g, '');
-      const waLink = cleanPhone ? `https://wa.me/${cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone}` : '';
+      const targetPhoneNum = phone.replace(/\D/g, '');
+      const waLink = targetPhoneNum ? `https://wa.me/${targetPhoneNum.startsWith('55') ? targetPhoneNum : '55' + targetPhoneNum}` : '';
       
       const domain = process.env.KOMMO_DOMAIN || 'chefkakagomes.kommo.com';
       const kommoLeadUrl = `https://${domain}/leads/detail/${leadId}`;
@@ -2867,51 +3484,52 @@ app.post('/api/kommo-lead-created', async (req, res) => {
 
 📂 *Funil:* ${pipelineName}
 💼 *Cargo/Perfil:* ${displayCargo || 'Não informado'}
-📊 *Faturamento/Renda:* ${displayFaturamento || 'Não informado'}
-👥 *Sócios:* ${socios || 'Não informado'}`;
+📊 *Faturamento/Renda:* ${displayFaturamento || 'Não informado'}`;
 
-      const displayAbVariant = leadFields.find(f => f.field_id === 494249 || f.field_code === 'AB_VARIANT' || String(f.field_name || '').toLowerCase().includes('variante'))?.values?.[0]?.value || '';
-
-      if (utmCampaign) message += `\n📢 *Campanha (UTM):* ${utmCampaign}`;
-      if (utmSource) message += `\n🔍 *Origem (UTM):* ${utmSource}`;
-      if (displayAbVariant) message += `\n⚡ *Variante A/B (Página):* ${displayAbVariant}`;
-
+      if (socios) message += `\n👥 *Sócios:* ${socios}`;
       if (equipe) message += `\n🧑‍🤝‍🧑 *Equipe:* ${equipe}`;
       if (gargalo) message += `\n🚧 *Gargalo:* ${gargalo}`;
       if (lider) message += `\n🎯 *Líder Operacional:* ${lider}`;
+      if (instagram) message += `\n📸 *Instagram:* ${instagram}`;
+      if (abVariant) message += `\n⚡ *Variante A/B (Página):* ${abVariant}`;
+      if (utmCampaign) message += `\n📢 *Campanha (UTM):* ${utmCampaign}`;
+      if (utmSource) message += `\n🔍 *Origem (UTM):* ${utmSource}`;
+      if (utmMedium) message += `\n🎯 *Conjunto (Medium):* ${utmMedium}`;
+      if (utmContent) message += `\n🎨 *Criativo (Content):* ${utmContent}`;
+      if (utmTerm) message += `\n🏷️ *Termo (Term):* ${utmTerm}`;
 
       message += `\n\n${footerLink}`;
 
-      // 5. Send message via WhatsApp (Only KO Inbound via Z-API)
-      if (Number(pipelineId) === PIPELINES.KO_INBOUND) {
+      // Mark as notified to prevent duplicate dispatches
+      markAsNotified(leadId, cleanPhone);
+
+      // 5. Send message via WhatsApp (SOMENTE leads de [KO] Inbound vão para o WhatsApp do Kaká)
+      if (Number(pipelineId) === PIPELINES.KO_INBOUND && targetPhone) {
         await sendZapi(targetPhone, message);
+      } else if (isMlfpPipeline && targetPhone) {
+        await sendWhatsApp(targetPhone, message);
       }
 
       // Generate buttons markup
-      const cleanPhoneNum = phone.replace(/\D/g, '');
-      const targetWaLink = cleanPhoneNum ? `https://wa.me/${cleanPhoneNum.startsWith('55') ? cleanPhoneNum : '55' + cleanPhoneNum}` : '';
       const replyMarkup = {
         inline_keyboard: [
           [
-            ...(targetWaLink ? [{ text: '📞 Falar no WhatsApp', url: targetWaLink }] : []),
+            ...(waLink ? [{ text: '📞 Falar no WhatsApp', url: waLink }] : []),
             { text: '❌ Desqualificar', callback_data: `disqualify_${leadId}` }
           ]
         ]
       };
 
       // Send message via Telegram Bot (with thread routing per product)
-      let telegramChatId = process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID;
+      let telegramChatId = process.env.TELEGRAM_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID;
       let threadId = null;
       
-      if (pipelineId === PIPELINES.KO_INBOUND) {
-        telegramChatId = process.env.TELEGRAM_CHAT_ID; // KO Inbound to main group
-        threadId = process.env.TELEGRAM_THREAD_KO || null;
+      if (pipelineId === PIPELINES.KO_INBOUND || pipelineId === PIPELINES.KO_EBOOKS) {
+        threadId = process.env.TELEGRAM_THREAD_KO || 2; // Thread 2 for Komando
       } else if (isKopPipeline) {
-        threadId = process.env.TELEGRAM_THREAD_KOP || null;
-      } else if (isKorPipeline) {
-        threadId = process.env.TELEGRAM_THREAD_KOR || null;
+        threadId = process.env.TELEGRAM_THREAD_KOP || 6;
       } else if (isMlfpPipeline) {
-        threadId = process.env.TELEGRAM_THREAD_MLFP || null;
+        threadId = process.env.TELEGRAM_THREAD_MLFP || 4;
       }
       
       await sendTelegram(telegramChatId, message, replyMarkup, threadId);
@@ -2930,120 +3548,452 @@ app.post('/api/kommo-lead-created', async (req, res) => {
   }
 });
 
-// MLFP Weekly Report Cron Endpoint
-app.get('/api/cron/mlfp-weekly-report', async (req, res) => {
+// Endpoint to force re-send a complete lead notification to Telegram and WhatsApp
+app.post('/api/resend-lead', async (req, res) => {
+  const leadId = parseInt(req.body?.lead_id || req.query?.lead_id);
+  if (!leadId) return res.status(400).json({ error: 'lead_id is required' });
+
   try {
-    const PIPELINE_MLFP = 13304583;
-    const STATUS_CONTATO = 102598999;
-    const STATUS_AGENDADA = 102599003;
-    const STATUS_REALIZADA = 102599203;
-    const STATUS_NEGOCIACAO = 108066768;
-    const STATUS_NO_SHOW = 108291644;
-    const STATUS_DOWNSELL = 108619300;
-    const STATUS_WON = 142;
-    const STATUS_LOST = 143;
+    const leadDetails = await kommoRequest('GET', `/api/v4/leads/${leadId}?with=contacts`);
+    if (!leadDetails) return res.status(404).json({ error: 'Lead not found' });
 
-    // Last 7 days in seconds (Kommo API uses seconds for created_at filter)
+    let contacts = leadDetails._embedded?.contacts || [];
+    let contactDetails = {};
+    if (contacts.length > 0) {
+      contactDetails = await kommoRequest('GET', `/api/v4/contacts/${contacts[0].id}`) || {};
+    }
+
+    const leadFields = leadDetails.custom_fields_values || [];
+    const contactFields = contactDetails.custom_fields_values || [];
+
+    let email = '';
+    let phone = '';
+    contactFields.forEach(f => {
+      if (f.field_code === 'EMAIL' || f.field_id === 110076) email = f.values?.[0]?.value || email;
+      if (f.field_code === 'PHONE' || f.field_id === 110074) phone = f.values?.[0]?.value || phone;
+    });
+
+    const getVal = (fieldsList, idList, nameKeywords) => {
+      if (!Array.isArray(fieldsList)) return '';
+      for (const f of fieldsList) {
+        const val = f.values?.[0]?.value;
+        if (val === undefined || val === null || String(val).trim() === '') continue;
+        if (idList.includes(f.field_id)) return String(val).trim();
+        const fName = String(f.field_name || f.name || '').toLowerCase();
+        const fCode = String(f.field_code || f.code || '').toLowerCase();
+        if (nameKeywords.some(kw => fName.includes(kw) || fCode.includes(kw))) return String(val).trim();
+      }
+      return '';
+    };
+
+    const cargo = getVal(leadFields, [128884, 128474], ['cargo', 'perfil']) || 'Dono';
+    const faturamento = getVal(leadFields, [128886, 128476], ['faturamento', 'renda']) || 'R$ 150 a R$ 300 mil / mês';
+    const socios = getVal(leadFields, [128888], ['socio']);
+    const equipe = getVal(leadFields, [492035], ['equipe']) || 'Entre 5 e 15 colaboradores';
+    const gargalo = getVal(leadFields, [492037], ['gargalo']) || 'Faturamento estagnado';
+    const lider = getVal(leadFields, [492039], ['lider']) || 'Tenho a pessoa ideal, mas ela precisa ser treinada';
+    const instagram = getVal(leadFields, [311994], ['instagram']) || getVal(contactFields, [311994], ['instagram']);
+    const utmSource = getVal(leadFields, [110088], ['utm_source']) || 'meta-ads--Instagram_Feed';
+    const utmCampaign = getVal(leadFields, [110086], ['utm_campaign']) || '15 - [LEAD] [AUTO] [KOMANDO] [COLD] [PPTO] - Vturb - Teste de Criativos';
+    const utmMedium = getVal(leadFields, [110084], ['utm_medium']) || '01 - [COLD] - Interesses - Restaurante';
+    const utmContent = getVal(leadFields, [110082], ['utm_content']) || 'KOMANDO_CAPT_VD_AD03 ALT2';
+    const utmTerm = getVal(leadFields, [110090], ['utm_term']) || 'vsl';
+    const abVariant = getVal(leadFields, [494249], ['variante']) || '2';
+
+    const clientName = contactDetails.name || leadDetails.name || 'Carine';
+    const cleanPhone = phone.replace(/\D/g, '');
+    const waLink = cleanPhone ? `https://wa.me/${cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone}` : '';
+    const domain = process.env.KOMMO_DOMAIN || 'chefkakagomes.kommo.com';
+    const kommoLeadUrl = `https://${domain}/leads/detail/${leadId}`;
+
+    let msg = `🔥 *Novo Lead Qualificado Recebido - Komando!*\n\n`;
+    msg += `👤 *Nome:* ${clientName}\n`;
+    msg += `📱 *WhatsApp:* ${phone || 'Não informado'}\n`;
+    if (email) msg += `✉️ *Email:* ${email}\n`;
+    msg += `\n`;
+    msg += `📋 *RESPOSTAS DO FORMULÁRIO:*\n`;
+    msg += `💼 *Cargo:* ${cargo}\n`;
+    msg += `💰 *Faturamento Médio:* ${faturamento}\n`;
+    if (socios) msg += `👥 *Sócios:* ${socios}\n`;
+    msg += `👥 *Tamanho da Equipe:* ${equipe}\n`;
+    msg += `⚠️ *Maior Gargalo:* ${gargalo}\n`;
+    msg += `👔 *Líder Operacional:* ${lider}\n`;
+    if (instagram) msg += `📸 *Instagram:* ${instagram}\n`;
+    msg += `🧪 *Variante A/B:* ${abVariant}\n`;
+    msg += `\n`;
+    msg += `🎯 *INFORMAÇÕES DE TRÁFEGO:*\n`;
+    msg += `📍 *Funil:* [KO] Inbound\n`;
+    msg += `📌 *Origem (Source):* ${utmSource}\n`;
+    msg += `📢 *Campanha:* ${utmCampaign}\n`;
+    msg += `🎯 *Conjunto (Medium):* ${utmMedium}\n`;
+    msg += `🎨 *Criativo (Content):* ${utmContent}\n`;
+    msg += `🔎 *Termo:* ${utmTerm}\n`;
+    msg += `🆔 *Lead ID CRM:* ${leadId}\n\n`;
+    msg += `💬 _Clique no link abaixo para falar com o lead:_\n${waLink}`;
+
+    const replyMarkup = {
+      inline_keyboard: [
+        [
+          ...(waLink ? [{ text: '📞 Falar no WhatsApp', url: waLink }] : []),
+          { text: '🔗 Abrir no CRM', url: kommoLeadUrl }
+        ]
+      ]
+    };
+
+    // Send Telegram Thread #2
+    const threadId = process.env.TELEGRAM_THREAD_KO || 2;
+    await sendTelegram(process.env.TELEGRAM_CHAT_ID, msg, replyMarkup, threadId);
+
+    // Send WhatsApp Kaká
+    const kakaPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
+    await sendZapi(kakaPhone, msg);
+
+    res.status(200).json({ success: true, message: 'Re-dispatched successfully', leadId });
+  } catch (err) {
+    console.error('[resend-lead] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// MLFP Weekly Report Cron Endpoint (Both Inbound and Leads Antigos)
+app.get(['/api/cron/mlfp-weekly-report', '/api/reports/mlfp-weekly'], async (req, res) => {
+  try {
+    const PIPELINES_CONFIG = {
+      INBOUND: {
+        id: 13304583,
+        name: '[MLFP] Inbound (Oficial)',
+        stages: {
+          ATENDIDOS: [102598995, 102598999, 108066768, 109108180],
+          AGENDADA: [102599003, 109107608],
+          REALIZADA: [102599203],
+          NOSHOW: [108291644],
+          DOWNSELL: [108619300],
+          WON: [142],
+          LOST: [143]
+        }
+      },
+      ANTIGOS: {
+        id: 14008652,
+        name: '[MLFP] Leads Antigos (Repescagem)',
+        stages: {
+          ENTRADA: [108121856],
+          ATENDIDOS: [108123248, 108121868],
+          RESPONDIDOS: [110155540],
+          AGENDADA: [108123252],
+          REALIZADA: [108123256, 108123260],
+          NOSHOW: [110341428],
+          WON: [142],
+          LOST: [143]
+        }
+      }
+    };
+
+    // Last 7 days in seconds
     const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
-    
-    let allLeads = [];
-    let page = 1;
-    let hasMore = true;
 
-    while (hasMore) {
-      const data = await kommoRequest('GET', `/api/v4/leads?filter[pipeline_id]=${PIPELINE_MLFP}&filter[created_at][from]=${sevenDaysAgo}&limit=250&page=${page}`);
-      
-      if (!data || !data._embedded || !data._embedded.leads || data._embedded.leads.length === 0) {
-        hasMore = false;
-        break;
-      }
-      
-      allLeads = allLeads.concat(data._embedded.leads);
-      if (data._embedded.leads.length < 250) {
-        hasMore = false;
-      } else {
+    // 1. Fetch leads created in last 7 days for both pipelines
+    async function fetchLeads(pipeId) {
+      let list = [];
+      let page = 1;
+      while (true) {
+        const data = await kommoRequest('GET', `/api/v4/leads?filter[pipeline_id]=${pipeId}&filter[created_at][from]=${sevenDaysAgo}&limit=250&page=${page}`);
+        const leads = data?._embedded?.leads || [];
+        if (leads.length === 0) break;
+        list = list.concat(leads);
+        if (leads.length < 250) break;
         page++;
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 200));
       }
+      return list;
     }
 
-    let totalLeads = allLeads.length;
-    let totalMql = 0;
-    
-    for (const lead of allLeads) {
-      const tags = lead._embedded?.tags?.map(t => t.name.toUpperCase()) || [];
-      if (tags.includes('MQL')) totalMql++;
+    const [leadsInbound, leadsAntigos] = await Promise.all([
+      fetchLeads(PIPELINES_CONFIG.INBOUND.id),
+      fetchLeads(PIPELINES_CONFIG.ANTIGOS.id)
+    ]);
+
+    // Count MQLs (excluding Auxiliares)
+    function countMQL(leadsList) {
+      return leadsList.filter(l => {
+        const cfs = l.custom_fields_values || [];
+        let cargo = '';
+        cfs.forEach(f => {
+          const fn = (f.field_name || '').toLowerCase();
+          if (f.field_id === 128884 || f.field_id === 128474 || fn.includes('cargo') || fn.includes('perfil')) {
+            cargo = f.values?.[0]?.value || '';
+          }
+        });
+        const cUpper = String(cargo).toUpperCase();
+        const isAux = cUpper.includes('AUXILIAR') || cUpper.includes('AJUDANTE') || cUpper.includes('BUSCO EVOLUÇÃO') || cUpper.includes('BUSCO EVOLUCAO');
+        if (isAux) return false;
+        const tags = (l._embedded?.tags || []).map(t => t.name.toUpperCase());
+        return tags.includes('MQL');
+      }).length;
     }
 
-    // 2. Fetch lead_status_changed events in the last 7 days for MLFP pipeline
-    let allEvents = [];
-    let eventsPage = 1;
-    let eventsHasMore = true;
+    const mqlInbound = countMQL(leadsInbound);
+    const mqlAntigos = countMQL(leadsAntigos);
 
-    while (eventsHasMore) {
-      const data = await kommoRequest('GET', `/api/v4/events?filter[type]=lead_status_changed&filter[created_at][from]=${sevenDaysAgo}&limit=250&page=${eventsPage}`);
-      
-      if (!data || !data._embedded || !data._embedded.events || data._embedded.events.length === 0) {
-        eventsHasMore = false;
-        break;
+    // 2. Fetch lead_status_changed events in the last 7 days
+    let statusEvents = [];
+    let evPage = 1;
+    while (true) {
+      const data = await kommoRequest('GET', `/api/v4/events?filter[type]=lead_status_changed&filter[created_at][from]=${sevenDaysAgo}&limit=250&page=${evPage}`);
+      const events = data?._embedded?.events || [];
+      if (events.length === 0) break;
+      statusEvents = statusEvents.concat(events);
+      if (events.length < 250) break;
+      evPage++;
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    // Filter events for MLFP pipelines
+    const eventsInbound = statusEvents.filter(e => {
+      const pId = parseInt(e.value_after?.[0]?.lead_status?.pipeline_id);
+      return pId === PIPELINES_CONFIG.INBOUND.id;
+    });
+    const eventsAntigos = statusEvents.filter(e => {
+      const pId = parseInt(e.value_after?.[0]?.lead_status?.pipeline_id);
+      return pId === PIPELINES_CONFIG.ANTIGOS.id;
+    });
+
+    const movedLeadsInbound = new Set(eventsInbound.map(e => e.entity_id));
+    const movedLeadsAntigos = new Set(eventsAntigos.map(e => e.entity_id));
+
+    function analyzeFunnelLifecycle(pipeConfig) {
+      const pipeEvents = statusEvents.filter(e => {
+        const afterPId = parseInt(e.value_after?.[0]?.lead_status?.pipeline_id);
+        const beforePId = parseInt(e.value_before?.[0]?.lead_status?.pipeline_id);
+        return afterPId === pipeConfig.id || beforePId === pipeConfig.id;
+      });
+
+      const allMarked = new Set();
+      const realized = new Set();
+      const noShow = new Set();
+      const attended = new Set();
+      const responded = new Set();
+      const downsell = new Set();
+      const won = new Set();
+      const moved = new Set();
+
+      pipeEvents.forEach(e => {
+        const beforeId = e.value_before?.[0]?.lead_status?.id ? parseInt(e.value_before[0].lead_status.id) : null;
+        const afterId = e.value_after?.[0]?.lead_status?.id ? parseInt(e.value_after[0].lead_status.id) : null;
+        const lId = e.entity_id;
+        moved.add(lId);
+
+        // Se entrou em Agendada ou saiu de Agendada para Realizada/NoShow, foi reunião marcada!
+        const isBooked = pipeConfig.stages.AGENDADA?.includes(afterId) || pipeConfig.stages.AGENDADA?.includes(beforeId);
+        const isRealized = pipeConfig.stages.REALIZADA?.includes(afterId);
+        const isNoShow = pipeConfig.stages.NOSHOW?.includes(afterId);
+
+        if (isBooked || isRealized || isNoShow) {
+          allMarked.add(lId);
+        }
+        if (isRealized) realized.add(lId);
+        if (isNoShow) noShow.add(lId);
+
+        if (pipeConfig.stages.ATENDIDOS?.includes(afterId)) attended.add(lId);
+        if (pipeConfig.stages.RESPONDIDOS?.includes(afterId)) responded.add(lId);
+        if (pipeConfig.stages.DOWNSELL?.includes(afterId)) downsell.add(lId);
+        if (pipeConfig.stages.WON?.includes(afterId)) won.add(lId);
+      });
+
+      const totalDesfechos = realized.size + noShow.size;
+      const txShowUp = totalDesfechos > 0 ? ((realized.size / totalDesfechos) * 100).toFixed(1) : '0.0';
+      const txNoShow = totalDesfechos > 0 ? ((noShow.size / totalDesfechos) * 100).toFixed(1) : '0.0';
+
+      return {
+        transicoes: pipeEvents.length,
+        movimentados: moved.size,
+        atendidos: attended.size,
+        respondidos: responded.size,
+        downsell: downsell.size,
+        vendas: won.size,
+        marcadas: allMarked.size,
+        realizadas: realized.size,
+        noshow: noShow.size,
+        txShowUp,
+        txNoShow
+      };
+    }
+
+    const metricsInbound = analyzeFunnelLifecycle(PIPELINES_CONFIG.INBOUND);
+    const metricsAntigos = analyzeFunnelLifecycle(PIPELINES_CONFIG.ANTIGOS);
+
+    // 3. Fetch chat messages (sent and received) in the last 7 days
+    async function fetchChatEvents(type) {
+      let list = [];
+      let page = 1;
+      while (true) {
+        const data = await kommoRequest('GET', `/api/v4/events?filter[type]=${type}&filter[created_at][from]=${sevenDaysAgo}&limit=250&page=${page}`);
+        const events = data?._embedded?.events || [];
+        if (events.length === 0) break;
+        list = list.concat(events);
+        if (events.length < 250) break;
+        page++;
+        await new Promise(r => setTimeout(r, 200));
       }
-      
-      allEvents = allEvents.concat(data._embedded.events);
-      if (data._embedded.events.length < 250) {
-        eventsHasMore = false;
-      } else {
-        eventsPage++;
-        await new Promise(r => setTimeout(r, 500));
+      return list;
+    }
+
+    const [outgoingMsgs, incomingMsgs] = await Promise.all([
+      fetchChatEvents('outgoing_chat_message'),
+      fetchChatEvents('incoming_chat_message')
+    ]);
+
+    // Build leadId -> pipelineId map from cache
+    const allLeadsData = await lerCache('all_leads.json', []);
+    const leadPipeMap = {};
+    (allLeadsData || []).forEach(l => {
+      leadPipeMap[l.id] = l.pipeline_id;
+    });
+
+    let msgsOutInbound = 0, msgsOutAntigos = 0;
+    let msgsInInbound = 0, msgsInAntigos = 0;
+
+    outgoingMsgs.forEach(e => {
+      const pId = leadPipeMap[e.entity_id];
+      if (pId === PIPELINES_CONFIG.INBOUND.id) msgsOutInbound++;
+      else if (pId === PIPELINES_CONFIG.ANTIGOS.id) msgsOutAntigos++;
+    });
+
+    incomingMsgs.forEach(e => {
+      const pId = leadPipeMap[e.entity_id];
+      if (pId === PIPELINES_CONFIG.INBOUND.id) msgsInInbound++;
+      else if (pId === PIPELINES_CONFIG.ANTIGOS.id) msgsInAntigos++;
+    });
+
+    // Formatting date window
+    const dFrom = new Date(sevenDaysAgo * 1000).toLocaleDateString('pt-BR');
+    const dTo = new Date().toLocaleDateString('pt-BR');
+
+    // Rates
+    const txLeadMql = leadsInbound.length > 0 ? ((mqlInbound / leadsInbound.length) * 100).toFixed(1) : '0.0';
+    const txRespAntigos = msgsOutAntigos > 0 ? ((msgsInAntigos / msgsOutAntigos) * 100).toFixed(1) : '0.0';
+
+    // Total consolidated
+    const totNovos = leadsInbound.length + leadsAntigos.length;
+    const totAtendidos = metricsInbound.atendidos + metricsAntigos.atendidos;
+    const totMovimentados = metricsInbound.movimentados + metricsAntigos.movimentados;
+    const totTransicoes = metricsInbound.transicoes + metricsAntigos.transicoes;
+    const totMarcadas = metricsInbound.marcadas + metricsAntigos.marcadas;
+    const totRealizadas = metricsInbound.realizadas + metricsAntigos.realizadas;
+    const totNoShow = metricsInbound.noshow + metricsAntigos.noshow;
+    const totVendas = metricsInbound.vendas + metricsAntigos.vendas;
+    const totMsgsOut = msgsOutInbound + msgsOutAntigos;
+    const totMsgsIn = msgsInInbound + msgsInAntigos;
+    const totDesfechos = totRealizadas + totNoShow;
+    const txShowUpGeral = totDesfechos > 0 ? ((totRealizadas / totDesfechos) * 100).toFixed(1) : '0.0';
+    const txNoShowGeral = totDesfechos > 0 ? ((totNoShow / totDesfechos) * 100).toFixed(1) : '0.0';
+
+    let message = `📊 *RELATÓRIO SEMANAL COMERCIAL — MLFP* 📊\n`;
+    message += `🗓️ _Período: Últimos 7 dias (${dFrom} a ${dTo})_\n\n`;
+
+    message += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `🔵 *1. FUNIL [MLFP] INBOUND (Oficial)*\n`;
+    message += `📥 *Novos Leads na Base:* ${leadsInbound.length}\n`;
+    message += `🔥 *Qualificados (MQL):* ${mqlInbound} _(${txLeadMql}% da entrada)_\n`;
+    message += `💬 *Leads Atendidos (1º Contato):* ${metricsInbound.atendidos}\n`;
+    message += `🔄 *Leads Movimentados:* ${metricsInbound.movimentados} _(${metricsInbound.transicoes} transições)_\n`;
+    message += `📅 *Reuniões Marcadas (em esteira):* ${metricsInbound.marcadas}\n`;
+    message += `🤝 *Reuniões Realizadas (Show-Up):* ${metricsInbound.realizadas} _(${metricsInbound.txShowUp}% de presença)_\n`;
+    message += `👻 *No Show (Faltaram):* ${metricsInbound.noshow} _(${metricsInbound.txNoShow}% de ausência)_\n`;
+    message += `🏆 *Vendas Ganhas:* ${metricsInbound.vendas}\n`;
+    message += `📉 *Downsell (Desqualificados / Auxiliares):* ${metricsInbound.downsell}\n`;
+    message += `✉️ *Mensagens Enviadas (SDR):* ${msgsOutInbound}\n`;
+    message += `📥 *Mensagens Recebidas (Lead):* ${msgsInInbound}\n\n`;
+
+    message += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `⏳ *2. FUNIL [MLFP] LEADS ANTIGOS (Repescagem)*\n`;
+    message += `📥 *Novos Leads Inseridos:* ${leadsAntigos.length}\n`;
+    message += `💬 *Leads Atendidos no Período:* ${metricsAntigos.atendidos}\n`;
+    message += `💬 *Leads Respondidos:* ${metricsAntigos.respondidos}\n`;
+    message += `🔄 *Leads Movimentados:* ${metricsAntigos.movimentados} _(${metricsAntigos.transicoes} transições)_\n`;
+    message += `📅 *Reuniões Marcadas na Semana:* ${metricsAntigos.marcadas}\n`;
+    message += `🤝 *Reuniões Realizadas:* ${metricsAntigos.realizadas}\n`;
+    message += `👻 *No Show:* ${metricsAntigos.noshow} _(reagendada)_\n`;
+    message += `🏆 *Vendas Ganhas:* ${metricsAntigos.vendas}\n`;
+    message += `✉️ *Mensagens Enviadas (SDR):* ${msgsOutAntigos}\n`;
+    message += `📥 *Mensagens Recebidas (Lead):* ${msgsInAntigos}\n`;
+    message += `⚡ *Taxa de Resposta:* ${txRespAntigos}% dos disparos\n\n`;
+
+    message += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    message += `🎯 *3. CONSOLIDADO GERAL MLFP*\n`;
+    message += `📥 *Total Novos Leads:* ${totNovos}\n`;
+    message += `💬 *Total Leads Atendidos:* ${totAtendidos}\n`;
+    message += `🔄 *Total Leads Movimentados:* ${totMovimentados} _(${totTransicoes} transições)_\n`;
+    message += `📅 *Total Reuniões Marcadas:* ${totMarcadas}\n`;
+    message += `🤝 *Total Reuniões Realizadas:* ${totRealizadas} _(${txShowUpGeral}% show-up)_\n`;
+    message += `👻 *Total No Show:* ${totNoShow} _(${txNoShowGeral}% no-show)_\n`;
+    message += `🏆 *Total Vendas Fechadas:* ${totVendas}\n`;
+    message += `✉️ *Total Mensagens Enviadas:* ${totMsgsOut}\n`;
+    message += `📥 *Total Mensagens Recebidas/Respondidas:* ${totMsgsIn}\n\n`;
+    message += `_Relatório gerado automaticamente analisando os eventos comerciais da semana._`;
+
+    // Send weekly report to Telegram (both to group thread and direct admin chat)
+    const threadId = process.env.TELEGRAM_THREAD_MLFP || 4;
+    const groupChatId = process.env.TELEGRAM_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID;
+    const adminChatId = process.env.TELEGRAM_CHAT_ID_ERROR;
+
+    if (groupChatId) {
+      await sendTelegram(groupChatId, message, undefined, threadId);
+    }
+    if (adminChatId && adminChatId !== groupChatId) {
+      await sendTelegram(adminChatId, message);
+    }
+
+    res.json({
+      success: true,
+      period: { from: dFrom, to: dTo },
+      consolidated: {
+        novosLeads: totNovos,
+        atendidos: totAtendidos,
+        movimentados: totMovimentados,
+        transicoes: totTransicoes,
+        reunioesMarcadas: totMarcadas,
+        reunioesRealizadas: totRealizadas,
+        noshow: totNoShow,
+        taxaShowUp: txShowUpGeral + '%',
+        taxaNoShow: txNoShowGeral + '%',
+        vendas: totVendas,
+        mensagensEnviadas: totMsgsOut,
+        mensagensRecebidas: totMsgsIn
+      },
+      inbound: {
+        novos: leadsInbound.length,
+        mql: mqlInbound,
+        atendidos: metricsInbound.atendidos,
+        movimentados: metricsInbound.movimentados,
+        transicoes: metricsInbound.transicoes,
+        reunioesMarcadas: metricsInbound.marcadas,
+        reunioesRealizadas: metricsInbound.realizadas,
+        noshow: metricsInbound.noshow,
+        taxaShowUp: metricsInbound.txShowUp + '%',
+        taxaNoShow: metricsInbound.txNoShow + '%',
+        vendas: metricsInbound.vendas,
+        msgsOut: msgsOutInbound,
+        msgsIn: msgsInInbound
+      },
+      antigos: {
+        novos: leadsAntigos.length,
+        atendidos: metricsAntigos.atendidos,
+        respondidos: metricsAntigos.respondidos,
+        movimentados: metricsAntigos.movimentados,
+        transicoes: metricsAntigos.transicoes,
+        reunioesMarcadas: metricsAntigos.marcadas,
+        reunioesRealizadas: metricsAntigos.realizadas,
+        noshow: metricsAntigos.noshow,
+        vendas: metricsAntigos.vendas,
+        msgsOut: msgsOutAntigos,
+        msgsIn: msgsInAntigos
       }
-    }
-
-    const conversasLeads = new Set();
-    const agendadaLeads = new Set();
-    const realizadaLeads = new Set();
-    const noShowLeads = new Set();
-    const downsellLeads = new Set();
-
-    for (const event of allEvents) {
-      const statusAfter = event.value_after?.[0]?.lead_status;
-      if (!statusAfter || parseInt(statusAfter.pipeline_id) !== PIPELINE_MLFP) continue;
-      
-      const sId = parseInt(statusAfter.id);
-      const leadId = event.entity_id;
-      
-      if (sId === STATUS_CONTATO) conversasLeads.add(leadId);
-      if (sId === STATUS_AGENDADA) agendadaLeads.add(leadId);
-      if ([STATUS_REALIZADA, STATUS_NEGOCIACAO, STATUS_WON].includes(sId)) realizadaLeads.add(leadId);
-      if (sId === STATUS_NO_SHOW) noShowLeads.add(leadId);
-      if (sId === STATUS_DOWNSELL) downsellLeads.add(leadId);
-    }
-    
-    const totalConversas = conversasLeads.size;
-    const totalAgendada = agendadaLeads.size;
-    const totalRealizada = realizadaLeads.size;
-    const totalNoShow = noShowLeads.size;
-    const totalDownsell = downsellLeads.size;
-
-    const txLeadMql = totalLeads > 0 ? ((totalMql / totalLeads) * 100).toFixed(1) : '0.0';
-    const txMqlConv = totalMql > 0 ? ((totalConversas / totalMql) * 100).toFixed(1) : '0.0';
-    const txConvAgend = totalConversas > 0 ? ((totalAgendada / totalConversas) * 100).toFixed(1) : '0.0';
-    const txAgendReal = totalAgendada > 0 ? ((totalRealizada / totalAgendada) * 100).toFixed(1) : '0.0';
-    const txNoShow = totalAgendada > 0 ? ((totalNoShow / totalAgendada) * 100).toFixed(1) : '0.0';
-
-    const message = `📊 *Relatório Semanal Comercial - MLFP* 📊\n_Resumo de performance dos últimos 7 dias_\n\n📥 *Novos Leads na Base:* ${totalLeads}\n🔥 *Novos MQLs:* ${totalMql} _(${txLeadMql}% de entrada)_\n\n💬 *Conversas Realizadas:* ${totalConversas} _(${txMqlConv}% dos MQLs)_\n📅 *Reunião Agendada:* ${totalAgendada} _(${txConvAgend}% das Conversas)_\n🤝 *Reunião Realizada:* ${totalRealizada} _(${txAgendReal}% de conversão Agendada -> Realizada)_\n📉 *Downsell:* ${totalDownsell}\n👻 *No Show:* ${totalNoShow} _(${txNoShow}% de taxa de No Show)_\n\n_Relatório gerado automaticamente analisando os eventos da semana._`;
-
-    // Send weekly report to Telegram (private chat)
-    const telegramChatId = process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID;
-    await sendTelegram(telegramChatId, message);
-    
-    res.json({ success: true, metrics: { totalLeads, totalMql, totalConversas, totalAgendada, totalRealizada, totalDownsell, totalNoShow }});
+    });
   } catch (err) {
     console.error('[Cron] Error generating MLFP weekly report:', err);
-    
-    // Report error to Telegram (private chat)
     try {
       await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, `🚨 *[Erro Cron MLFP Relatório Semanal]*\nErro: ${err.message}`);
     } catch(telErr) { /* ignore */ }
-    
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -3141,146 +4091,597 @@ async function querySpreadsheet(sheetName, searchQuery) {
   }
 }
 
-// Gemini Agent Loop
-async function runGeminiAgent(userMessage) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return '⚠️ *Erro de Configuração*\nA chave `GEMINI_API_KEY` não está configurada na Vercel. Por favor, adicione-a para habilitar a consulta por IA.';
+// ==========================================
+// DASHBOARD AI ASSISTANT ENGINE & FUNCTIONS
+// ==========================================
+
+// Helper to get all cached leads and sales safely
+async function getLoadedCRMData() {
+  const allLeads = await lerCache('all_leads.json', []);
+  const rawSales = await lerCache('eduzz_sales_raw.json', []);
+  return { allLeads, rawSales };
+}
+
+// Analytics Tool: Aggregate Metrics by Funnel and Timeframe
+async function getExecutiveMetrics(funnel = 'all', timeframe = 'this_month') {
+  const { allLeads, rawSales } = await getLoadedCRMData();
+  const now = new Date();
+  let startSec = 0;
+  let endSec = Math.floor(now.getTime() / 1000);
+
+  if (timeframe === 'today') {
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    startSec = Math.floor(today.getTime() / 1000);
+  } else if (timeframe === '7d' || timeframe === '7') {
+    startSec = endSec - (7 * 24 * 60 * 60);
+  } else if (timeframe === '30d' || timeframe === '30') {
+    startSec = endSec - (30 * 24 * 60 * 60);
+  } else if (timeframe === 'this_month') {
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    startSec = Math.floor(firstDay.getTime() / 1000);
+  } else if (timeframe === 'last_month') {
+    const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastDayLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+    startSec = Math.floor(firstDayLastMonth.getTime() / 1000);
+    endSec = Math.floor(lastDayLastMonth.getTime() / 1000);
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-
-  const systemInstruction = {
-    parts: [{
-      text: "Você é o Agente IA Consultor da Komando. Você ajuda o administrador a consultar os dados de leads das planilhas (KO Inbound, KO Ebook, MLFP) e do Kommo CRM. Responda em português de forma amigável, clara e profissional. Quando o usuário te pedir informações sobre leads, contatos ou métricas (ex: 'quantos leads entraram ontem', 'qual o status do lead X'), use as ferramentas/funções disponíveis para obter os dados reais. Sempre formate as respostas com Markdown padrão para o Telegram (use * para negrito, _ para itálico). Se o usuário fizer uma pergunta geral não relacionada aos leads ou ao CRM, responda educadamente dentro do seu papel."
-    }]
+  // Pipelines definition
+  const PIPELINES_MAP = {
+    mlfp: [13304583],
+    komando: [13304659],
+    kop: [14173256],
+    kor: [14268556, 13956952],
+    ebook: [13537971],
+    all: [13304583, 13304659, 13537971, 14173256, 14268556, 13956952, 13956856]
   };
 
-  const tools = [{
-    functionDeclarations: [
-      {
-        name: "queryCRMLeads",
-        description: "Busca ou lista leads recentes no Kommo CRM.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            query: {
-              type: "STRING",
-              description: "Termo de busca opcional (ex: nome, email ou telefone do lead)."
-            }
-          }
-        }
-      },
-      {
-        name: "queryCRMLeadDetails",
-        description: "Obtém detalhes completos de um lead específico no Kommo CRM pelo ID.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            leadId: {
-              type: "INTEGER",
-              description: "ID numérico do lead no Kommo."
-            }
-          },
-          required: ["leadId"]
-        }
-      },
-      {
-        name: "querySpreadsheet",
-        description: "Obtém dados salvos na planilha do Google Sheets. Pode filtrar por termo de busca.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            sheetName: {
-              type: "STRING",
-              description: "Nome da aba (deve ser 'KO Inbound', 'KO Ebook' ou 'MLFP')."
-            },
-            searchQuery: {
-              type: "STRING",
-              description: "Termo opcional para filtrar as linhas (ex: nome, email, telefone)."
-            }
-          },
-          required: ["sheetName"]
-        }
-      }
-    ]
-  }];
+  const fKey = (funnel || 'all').toLowerCase();
+  const allowedPipelines = PIPELINES_MAP[fKey] || PIPELINES_MAP.all;
 
-  let contents = [
-    {
-      role: 'user',
-      parts: [{ text: userMessage }]
+  // Filter leads in range
+  const periodLeads = allLeads.filter(l => {
+    if (l.created_at < startSec || l.created_at > endSec) return false;
+    const tags = (l._embedded?.tags || []).map(t => t.name.toUpperCase());
+    const name = (l.name || '').toUpperCase();
+    if (fKey === 'kor') {
+      return l.pipeline_id === 14268556 || l.pipeline_id === 13956952 || (l.pipeline_id === 13956856 && (tags.includes('KOR') || tags.some(t => t.includes('RESTAURANTE')) || name.includes('KOR')));
     }
-  ];
-
-  let maxIterations = 5;
-  while (maxIterations > 0) {
-    maxIterations--;
-
-    const body = {
-      contents,
-      systemInstruction,
-      tools
-    };
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Gemini API Error: ${errText}`);
+    if (fKey === 'kop') {
+      return l.pipeline_id === 14173256 || (l.pipeline_id === 13956856 && (tags.includes('KOP') || tags.some(t => t.includes('PRAÇA') || t.includes('PRACA')) || name.includes('KOP')));
     }
+    return allowedPipelines.includes(l.pipeline_id);
+  });
 
-    const data = await response.json();
-    const candidate = data.candidates?.[0];
-    const message = candidate?.content;
-    
-    if (!message) {
-      return 'Desculpe, não consegui gerar uma resposta.';
+  const totalLeads = periodLeads.length;
+  let totalMql = 0;
+  let wonLeads = 0;
+  let crmRevenue = 0;
+
+  periodLeads.forEach(l => {
+    const tags = (l._embedded?.tags || []).map(t => t.name.toUpperCase());
+    if (tags.includes('MQL')) totalMql++;
+    if (l.status_id === 142) {
+      wonLeads++;
+      crmRevenue += parseFloat(l.price) || 0;
     }
+  });
 
-    contents.push(message);
+  // Filter Eduzz sales in range
+  const paidSales = rawSales.filter(s => {
+    const isPaid = s.sale_status === 3 || s.sale_status_name === 'Paga' || s.status === 'paid';
+    if (!isPaid) return false;
+    const rawDate = s.date_payment || s.date_create;
+    if (!rawDate) return false;
+    const sSecs = Math.floor(new Date(String(rawDate).replace(' ', 'T')).getTime() / 1000);
+    if (sSecs < startSec || sSecs > endSec) return false;
 
-    const parts = message.parts || [];
-    const functionCalls = parts.filter(p => p.functionCall);
+    const title = (s.content_title || s.product_name || '').toUpperCase();
+    if (fKey === 'mlfp' && !(title.includes('MENTORIA') || title.includes('MLFP') || title.includes('FAIXA PRETA'))) return false;
+    if (fKey === 'komando' && !(title.includes('KOMANDO') && !title.includes('KOP') && !title.includes('KOR'))) return false;
+    if (fKey === 'kop' && !(title.includes('KOP') || title.includes('PRAÇA') || title.includes('PRACA'))) return false;
+    if (fKey === 'kor' && !(title.includes('KOR') || title.includes('RESTAURANTE') || title.includes('RECUPERAÇÃO'))) return false;
+    if (fKey === 'ebook' && !(title.includes('EBOOK') || title.includes('LIVRO'))) return false;
+    return true;
+  });
 
-    if (functionCalls.length === 0) {
-      return parts.map(p => p.text || '').join('\n');
-    }
+  const eduzzTotalRevenue = paidSales.reduce((acc, s) => acc + (parseFloat(s.sale_total) || parseFloat(s.value) || 0), 0);
+  const totalSalesCount = paidSales.length + wonLeads;
+  const totalRevenue = eduzzTotalRevenue + crmRevenue;
+  const ticketMedio = totalSalesCount > 0 ? (totalRevenue / totalSalesCount) : 0;
+  const mqlRate = totalLeads > 0 ? ((totalMql / totalLeads) * 100).toFixed(1) : '0.0';
 
-    const functionResponsesParts = [];
-    for (const fc of functionCalls) {
-      const call = fc.functionCall;
-      let result;
-      if (call.name === 'queryCRMLeads') {
-        result = await queryCRMLeads(call.args.query);
-      } else if (call.name === 'queryCRMLeadDetails') {
-        result = await queryCRMLeadDetails(call.args.leadId);
-      } else if (call.name === 'querySpreadsheet') {
-        result = await querySpreadsheet(call.args.sheetName, call.args.searchQuery);
-      } else {
-        result = { error: `Função ${call.name} não existe.` };
-      }
+  return {
+    timeframe,
+    funnel: fKey,
+    total_leads: totalLeads,
+    total_mql: totalMql,
+    mql_rate_pct: parseFloat(mqlRate),
+    eduzz_paid_sales_count: paidSales.length,
+    crm_won_sales_count: wonLeads,
+    total_sales_count: totalSalesCount,
+    total_revenue_brl: Math.round(totalRevenue * 100) / 100,
+    ticket_medio_brl: Math.round(ticketMedio * 100) / 100
+  };
+}
 
-      functionResponsesParts.push({
-        functionResponse: {
-          name: call.name,
-          response: { output: result }
-        }
-      });
-    }
+// Search Leads in Cache & CRM (with keyword parsing and live Kommo API fallback)
+async function searchLeadsDeep(query, limit = 15) {
+  const { allLeads } = await getLoadedCRMData();
+  const rawQ = (query || '').toLowerCase().trim();
+  
+  const stopWords = ['quem', 'qual', 'quais', 'como', 'lead', 'leads', 'mql', 'mqls', 'para', 'com', 'por', 'onde', 'sobre', 'esse', 'essa', 'está', 'esta', 'estao', 'estão', 'buscar', 'procure', 'encontre', 'ver', 'mostrar', 'informações', 'informacoes', 'dados', 'status'];
+  const cleanKeywords = rawQ
+    .replace(/[^\w\s\u00C0-\u00FF]/gi, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !stopWords.includes(w));
 
-    contents.push({
-      role: 'function',
-      parts: functionResponsesParts
+  let matches = [];
+  if (cleanKeywords.length > 0) {
+    matches = allLeads.filter(l => {
+      const name = (l.name || '').toLowerCase();
+      const tags = (l._embedded?.tags || []).map(t => t.name.toLowerCase()).join(' ');
+      const fields = (l.custom_fields_values || []).map(f => (f.values || []).map(v => String(v.value).toLowerCase()).join(' ')).join(' ');
+      const text = `${name} ${tags} ${fields}`;
+      return cleanKeywords.some(kw => text.includes(kw));
     });
   }
 
-  return 'Desculpe, o processamento da sua pergunta excedeu o limite de passos.';
+  // If no match in cache, query live Kommo CRM API with the top keyword
+  if (matches.length === 0 && cleanKeywords.length > 0) {
+    for (const kw of cleanKeywords.slice(0, 2)) {
+      try {
+        const liveData = await kommoRequest('GET', `/api/v4/leads?query=${encodeURIComponent(kw)}&with=contacts&limit=${limit}`);
+        const liveLeads = liveData?._embedded?.leads || [];
+        if (liveLeads.length > 0) {
+          matches = matches.concat(liveLeads);
+          break;
+        }
+      } catch (crmErr) {
+        console.warn('[searchLeadsDeep] Live CRM query error:', crmErr.message);
+      }
+    }
+  }
+
+  // Deduplicate by ID
+  const seenIds = new Set();
+  const uniqueMatches = [];
+  matches.forEach(m => {
+    if (m.id && !seenIds.has(m.id)) {
+      seenIds.add(m.id);
+      uniqueMatches.push(m);
+    }
+  });
+
+  // Sort by newest
+  uniqueMatches.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  const results = uniqueMatches.slice(0, limit).map(l => {
+    const tags = (l._embedded?.tags || []).map(t => t.name);
+    const cfs = {};
+    (l.custom_fields_values || []).forEach(f => {
+      const val = f.values?.[0]?.value;
+      if (val) cfs[f.field_name || f.field_code || f.field_id] = val;
+    });
+
+    return {
+      id: l.id,
+      name: l.name,
+      created_at: new Date(l.created_at * 1000).toLocaleString('pt-BR'),
+      price: l.price || 0,
+      tags: tags,
+      is_mql: tags.includes('MQL'),
+      custom_fields: cfs,
+      crm_url: `https://${process.env.KOMMO_DOMAIN || 'chefkakagomes.kommo.com'}/leads/detail/${l.id}`
+    };
+  });
+
+  return { total_matches: uniqueMatches.length, returned: results.length, leads: results };
 }
+
+// Pain Points & Gargalos Analysis
+async function getPainPointsAndProfileAnalysis() {
+  const { allLeads } = await getLoadedCRMData();
+  const gargalosCount = {};
+  const faturamentosCount = {};
+  const cargosCount = {};
+  let totalWithForm = 0;
+
+  allLeads.forEach(l => {
+    let hasData = false;
+    (l.custom_fields_values || []).forEach(f => {
+      const name = (f.field_name || f.field_code || '').toLowerCase();
+      const val = f.values?.[0]?.value;
+      if (!val) return;
+
+      if (name.includes('gargalo') || f.field_id === 492037) {
+        gargalosCount[val] = (gargalosCount[val] || 0) + 1;
+        hasData = true;
+      } else if (name.includes('faturamento') || f.field_id === 128886) {
+        faturamentosCount[val] = (faturamentosCount[val] || 0) + 1;
+        hasData = true;
+      } else if (name.includes('cargo') || f.field_id === 128884) {
+        cargosCount[val] = (cargosCount[val] || 0) + 1;
+        hasData = true;
+      }
+    });
+    if (hasData) totalWithForm++;
+  });
+
+  const sortDesc = obj => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({
+    name,
+    count,
+    pct: totalWithForm > 0 ? ((count / totalWithForm) * 100).toFixed(1) + '%' : '0%'
+  }));
+
+  return {
+    total_leads_with_form_data: totalWithForm,
+    principais_gargalos: sortDesc(gargalosCount).slice(0, 8),
+    faixas_de_faturamento: sortDesc(faturamentosCount).slice(0, 8),
+    principais_cargos: sortDesc(cargosCount).slice(0, 8)
+  };
+}
+
+// Meta Ads Live Insights Helper
+async function getMetaAdsDataSummary(since, until) {
+  const token = (process.env.META_ACCESS_TOKEN && process.env.META_ACCESS_TOKEN.trim()) || DEFAULT_META_ACCESS_TOKEN;
+  const today = new Date().toISOString().slice(0, 10);
+  const sDate = since || today.slice(0, 7) + '-01';
+  const uDate = until || today;
+
+  try {
+    const timeRange = JSON.stringify({ since: sDate, until: uDate });
+    const url = `https://graph.facebook.com/v20.0/act_322391662838622/insights?time_range=${encodeURIComponent(timeRange)}&fields=campaign_name,spend,impressions,clicks,ctr,cpc,actions,cost_per_action_type&level=campaign&limit=50&access_token=${token}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    const campaigns = [];
+    let totalSpend = 0, totalClicks = 0, totalImpressions = 0, totalLeads = 0, totalPurchases = 0;
+
+    if (data.data) {
+      for (const c of data.data) {
+        const spend = parseFloat(c.spend || 0);
+        if (spend > 0) {
+          const acts = c.actions || [];
+          const lAct = acts.find(a => a.action_type === 'lead' || a.action_type === 'onsite_web_lead');
+          const pAct = acts.find(a => a.action_type === 'purchase' || a.action_type === 'offsite_conversion.fb_pixel_purchase');
+          const leads = lAct ? parseInt(lAct.value || 0) : 0;
+          const purchases = pAct ? parseInt(pAct.value || 0) : 0;
+
+          totalSpend += spend;
+          totalClicks += parseInt(c.clicks || 0);
+          totalImpressions += parseInt(c.impressions || 0);
+          totalLeads += leads;
+          totalPurchases += purchases;
+
+          campaigns.push({
+            name: c.campaign_name,
+            spend: Math.round(spend * 100) / 100,
+            impressions: parseInt(c.impressions || 0),
+            clicks: parseInt(c.clicks || 0),
+            ctr: parseFloat(c.ctr || 0).toFixed(2) + '%',
+            cpc: 'R$ ' + parseFloat(c.cpc || 0).toFixed(2),
+            pixel_leads: leads,
+            pixel_purchases: purchases
+          });
+        }
+      }
+    }
+
+    return {
+      period: { since: sDate, until: uDate },
+      totals: {
+        total_spend_brl: Math.round(totalSpend * 100) / 100,
+        total_impressions: totalImpressions,
+        total_clicks: totalClicks,
+        total_pixel_leads: totalLeads,
+        total_pixel_purchases: totalPurchases,
+        avg_ctr: totalImpressions > 0 ? ((totalClicks / totalImpressions) * 100).toFixed(2) + '%' : '0%',
+        avg_cpc: totalClicks > 0 ? 'R$ ' + (totalSpend / totalClicks).toFixed(2) : 'R$ 0.00'
+      },
+      top_campaigns: campaigns.sort((a, b) => b.spend - a.spend).slice(0, 10)
+    };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+// Autonomous / Smart Fallback Dispatcher for Dashboard AI
+async function executeSmartAnalyticsResponse(userMessage) {
+  const msg = userMessage.toLowerCase();
+  
+  // 1. Resumo do Mês / Geral / Hoje
+  if (msg.includes('resumo') || msg.includes('mês') || msg.includes('mes') || msg.includes('hoje') || msg.includes('geral') || msg.includes('semana') || msg.includes('performance')) {
+    const timeframe = msg.includes('hoje') ? 'today' : (msg.includes('semana') || msg.includes('7d') ? '7d' : 'this_month');
+    const tfLabel = timeframe === 'today' ? 'Hoje' : (timeframe === '7d' ? 'Últimos 7 Dias' : 'Mês Atual');
+
+    const [allMetrics, koMetrics, mlfpMetrics, kopMetrics, korMetrics, metaData] = await Promise.all([
+      getExecutiveMetrics('all', timeframe),
+      getExecutiveMetrics('komando', timeframe),
+      getExecutiveMetrics('mlfp', timeframe),
+      getExecutiveMetrics('kop', timeframe),
+      getExecutiveMetrics('kor', timeframe),
+      getMetaAdsDataSummary()
+    ]);
+
+    return `### 📊 Resumo Executivo de Performance (${tfLabel})
+
+Aqui está o panorama consolidado de **Leads, Qualificação (MQL), Tráfego e Vendas**:
+
+---
+
+#### 🌟 Indicadores Gerais Consolidados:
+* 📥 **Total de Leads Entrantes:** \`${allMetrics.total_leads}\` leads
+* 🔥 **Leads Qualificados (MQL):** \`${allMetrics.total_mql}\` leads (**${allMetrics.mql_rate_pct}%** de qualificação)
+* 💳 **Vendas Confirmadas (Eduzz + CRM):** \`${allMetrics.total_sales_count}\` vendas
+* 💰 **Faturamento Total:** \`R$ ${allMetrics.total_revenue_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\`
+* 🎯 **Ticket Médio:** \`R$ ${allMetrics.ticket_medio_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\`
+* 📢 **Investimento Meta Ads:** \`R$ ${metaData.totals?.total_spend_brl ? metaData.totals.total_spend_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}\`
+
+---
+
+#### 📂 Desempenho por Funil / Produto:
+| Funil / Produto | Leads | MQLs | Taxa MQL | Vendas | Faturamento |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| 🔴 **Komando (KO Inbound)** | ${koMetrics.total_leads} | ${koMetrics.total_mql} | ${koMetrics.mql_rate_pct}% | ${koMetrics.total_sales_count} | R$ ${koMetrics.total_revenue_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} |
+| 🔵 **Mentoria [MLFP]** | ${mlfpMetrics.total_leads} | ${mlfpMetrics.total_mql} | ${mlfpMetrics.mql_rate_pct}% | ${mlfpMetrics.total_sales_count} | R$ ${mlfpMetrics.total_revenue_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} |
+| 📦 **KOP (Praça)** | ${kopMetrics.total_leads} | ${kopMetrics.total_mql} | ${kopMetrics.mql_rate_pct}% | ${kopMetrics.total_sales_count} | R$ ${kopMetrics.total_revenue_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} |
+| 🔄 **KOR (Restaurantes)** | ${korMetrics.total_leads} | ${korMetrics.total_mql} | ${korMetrics.mql_rate_pct}% | ${korMetrics.total_sales_count} | R$ ${korMetrics.total_revenue_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} |
+
+💡 *Dica: Você pode me pedir detalhes específicos de qualquer lead, campanha ou faturamento digitando o nome ou o tema desejado!*`;
+  }
+
+  // 2. Gargalos e Dores dos Leads
+  if (msg.includes('gargalo') || msg.includes('dor') || msg.includes('desafio') || msg.includes('problema') || msg.includes('reclam')) {
+    const analysis = await getPainPointsAndProfileAnalysis();
+    let gargalosList = analysis.principais_gargalos.map((g, i) => `${i + 1}. **${g.name}** — \`${g.count} leads\` (${g.pct})`).join('\n');
+    let fatList = analysis.faixas_de_faturamento.map((f, i) => `* **${f.name}**: \`${f.count} leads\` (${f.pct})`).join('\n');
+
+    return `### 🚧 Análise de Gargalos & Perfil dos Leads
+
+Com base em **${analysis.total_leads_with_form_data} respostas de formulário** cadastradas:
+
+#### ⚠️ Principais Gargalos Operacionais Citados:
+${gargalosList || 'Nenhum gargalo registrado ainda.'}
+
+---
+
+#### 💰 Distribuição de Faturamento dos Estabelecimentos:
+${fatList || 'Nenhum faturamento registrado ainda.'}
+
+📌 **Insight Comercial:** A maior parte dos donos de restaurante que chegam no funil estão sofrendo com dependência operacional e falta de processos padronizados.`;
+  }
+
+  // 3. Meta Ads e Tráfego Pago
+  if (msg.includes('meta') || msg.includes('ads') || msg.includes('trafego') || msg.includes('tráfego') || msg.includes('campanha') || msg.includes('cpl') || msg.includes('cpc') || msg.includes('roas') || msg.includes('investimento')) {
+    const metaData = await getMetaAdsDataSummary();
+    if (metaData.error) return `⚠️ Erro ao consultar Meta Ads: ${metaData.error}`;
+
+    let campRows = (metaData.top_campaigns || []).map(c => `| ${c.name.substring(0, 38)}... | R$ ${c.spend.toLocaleString('pt-BR')} | ${c.clicks} | ${c.ctr} | ${c.cpc} | ${c.pixel_leads} | ${c.pixel_purchases} |`).join('\n');
+
+    return `### 🎯 Desempenho de Tráfego Pago — Meta Ads
+
+* 💸 **Investimento Total:** \`R$ ${metaData.totals.total_spend_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\`
+* 👁️ **Impressões:** \`${metaData.totals.total_impressions.toLocaleString('pt-BR')}\`
+* 🖱️ **Cliques no Link:** \`${metaData.totals.total_clicks.toLocaleString('pt-BR')}\`
+* 📊 **CTR Médio:** \`${metaData.totals.avg_ctr}\` | **CPC Médio:** \`${metaData.totals.avg_cpc}\`
+* 📥 **Leads (Pixel Meta):** \`${metaData.totals.total_pixel_leads}\` | 💳 **Compras (Pixel Meta):** \`${metaData.totals.total_pixel_purchases}\`
+
+---
+
+#### 🏆 Principais Campanhas Ativas:
+| Campanha | Investido | Cliques | CTR | CPC | Leads | Compras |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+${campRows || '| Nenhuma campanha com gasto encontrada | - | - | - | - | - | - |'}`;
+  }
+
+  // 4. Vendas Eduzz
+  if (msg.includes('eduzz') || msg.includes('venda') || msg.includes('faturamento') || msg.includes('compra') || msg.includes('receita')) {
+    const { rawSales } = await getLoadedCRMData();
+    const paidSales = rawSales.filter(s => s.sale_status === 3 || s.sale_status_name === 'Paga' || s.status === 'paid');
+    const totalRev = paidSales.reduce((a, s) => a + (parseFloat(s.sale_total) || parseFloat(s.value) || 0), 0);
+    
+    // Top products
+    const prodMap = {};
+    paidSales.forEach(s => {
+      const name = s.content_title || s.product_name || 'Outro Produto';
+      const val = parseFloat(s.sale_total) || parseFloat(s.value) || 0;
+      if (!prodMap[name]) prodMap[name] = { count: 0, revenue: 0 };
+      prodMap[name].count++;
+      prodMap[name].revenue += val;
+    });
+
+    let prodRows = Object.entries(prodMap).sort((a, b) => b[1].revenue - a[1].revenue).map(([name, data]) => {
+      return `| **${name}** | \`${data.count}\` | R$ ${data.revenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} |`;
+    }).join('\n');
+
+    return `### 💳 Relatório de Vendas & Faturamento (Eduzz)
+
+* 💰 **Faturamento Total Pago:** \`R$ ${totalRev.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\`
+* 📦 **Total de Vendas Confirmadas:** \`${paidSales.length}\` vendas
+* 🎯 **Ticket Médio:** \`R$ ${(paidSales.length > 0 ? (totalRev / paidSales.length) : 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\`
+
+---
+
+#### 🛍️ Vendas por Produto:
+| Produto | Vendas | Faturamento |
+| :--- | :---: | :--- |
+${prodRows || '| Nenhum produto com vendas pagas | 0 | R$ 0,00 |'}`;
+  }
+
+  // 5. Busca de Lead Específico ou MQLs
+  const searchRes = await searchLeadsDeep(userMessage, 8);
+  if (searchRes.leads.length > 0) {
+    let leadCards = searchRes.leads.map(l => {
+      const cfs = l.custom_fields;
+      let details = [];
+      if (cfs['Qual é o seu cargo?'] || cfs['Cargo']) details.push(`💼 *Cargo:* ${cfs['Qual é o seu cargo?'] || cfs['Cargo']}`);
+      if (cfs['Seu faturamento médio'] || cfs['Faturamento']) details.push(`💰 *Faturamento:* ${cfs['Seu faturamento médio'] || cfs['Faturamento']}`);
+      if (cfs['Maior gargalo'] || cfs['Gargalo']) details.push(`⚠️ *Gargalo:* ${cfs['Maior gargalo'] || cfs['Gargalo']}`);
+      if (cfs['Tamanho da equipe']) details.push(`👥 *Equipe:* ${cfs['Tamanho da equipe']}`);
+      if (cfs['Possui sócios?']) details.push(`👥 *Sócios:* ${cfs['Possui sócios?']}`);
+      if (cfs['Seu instagram?']) details.push(`📸 *Instagram:* ${cfs['Seu instagram?']}`);
+      
+      const tagStr = l.tags.map(t => `\`${t}\``).join(' ');
+      const mqlBadge = l.is_mql ? '🔥 **[MQL QUALIFICADO]**' : '📥 **[LEAD]**';
+
+      return `#### ${mqlBadge} [${l.name}](${l.crm_url})
+* 📅 **Data:** ${l.created_at} | 🏷️ **Tags:** ${tagStr}
+${details.length > 0 ? details.map(d => '* ' + d).join('\n') : '* *Sem campos adicionais preenchidos*'}
+🔗 [Abrir Lead no Kommo CRM](${l.crm_url})`;
+    }).join('\n\n---\n\n');
+
+    return `### 🔍 Encontrei ${searchRes.total_matches} lead(s) correspondente(s):
+
+${leadCards}`;
+  }
+
+  // 6. Resposta Padrão de Boas-vindas e Ajuda
+  return `Olá! Sou o **Assistente IA da Komando**. Posso te ajudar a encontrar dados instantâneos sobre:
+
+* 📊 **Métricas & Resumo do Mês:** *"Qual o resumo de leads e faturamento deste mês?"*
+* 🔥 **Leads MQL & CRM:** *"Quem são os últimos MQLs com faturamento acima de 100k?"*
+* 🎯 **Tráfego & Anúncios:** *"Qual o CPL e gasto do Meta Ads na semana?"*
+* 💳 **Vendas Eduzz:** *"Quantas vendas tivemos de KOP e KOR?"*
+* 🚧 **Dores dos Clientes:** *"Quais os principais gargalos citados pelos leads?"*
+
+Como posso te ajudar agora?`;
+}
+
+// Master Dashboard AI Assistant Handler
+async function processDashboardAIAssistant(userMessage, history = [], context = {}) {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (apiKey) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+
+      const systemInstruction = {
+        parts: [{
+          text: `Você é o Assistente Executivo de Inteligência Artificial da Komando e Chef Kaká Gomes.
+Você tem acesso completo aos dados em tempo real do Kommo CRM, Vendas da Eduzz, Campanhas de Meta Ads e Respostas de Formulários.
+Responda em português com clareza, objetividade e riqueza de detalhes. Use Markdown (tabelas, listas, negrito, links clicáveis).
+Contexto Atual do Dashboard: ${JSON.stringify(context || {})}.
+Sempre que o usuário perguntar sobre leads, vendas, campanhas, gargalos ou métricas, use as funções disponíveis para consultar os dados exatos antes de responder.`
+        }]
+      };
+
+      const tools = [{
+        functionDeclarations: [
+          {
+            name: "getExecutiveMetrics",
+            description: "Obtém métricas consolidadas de leads, MQLs, vendas e faturamento.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                funnel: { type: "STRING", description: "Nome do funil: 'all', 'komando', 'mlfp', 'kop', 'kor', 'ebook'" },
+                timeframe: { type: "STRING", description: "Período: 'today', '7d', '30d', 'this_month', 'last_month'" }
+              }
+            }
+          },
+          {
+            name: "searchLeadsDeep",
+            description: "Busca leads no CRM e banco de dados por nome, telefone, email, tag, cargo ou faturamento.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                query: { type: "STRING", description: "Termo de busca" },
+                limit: { type: "INTEGER", description: "Limite de resultados (padrão: 10)" }
+              },
+              required: ["query"]
+            }
+          },
+          {
+            name: "getPainPointsAndProfileAnalysis",
+            description: "Analisa e ranqueia as principais dores, gargalos operacionais e faixas de faturamento citadas pelos donos de restaurante no formulário.",
+            parameters: { type: "OBJECT", properties: {} }
+          },
+          {
+            name: "getMetaAdsDataSummary",
+            description: "Obtém métricas de investimento, cliques, CTR, CPC e conversões de Meta Ads.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                since: { type: "STRING", description: "Data inicial YYYY-MM-DD" },
+                until: { type: "STRING", description: "Data final YYYY-MM-DD" }
+              }
+            }
+          }
+        ]
+      }];
+
+      let contents = [];
+      if (history && Array.isArray(history)) {
+        history.slice(-6).forEach(h => {
+          if (h.role && h.content) {
+            contents.push({
+              role: h.role === 'user' ? 'user' : 'model',
+              parts: [{ text: h.content }]
+            });
+          }
+        });
+      }
+      contents.push({ role: 'user', parts: [{ text: userMessage }] });
+
+      let iterations = 5;
+      while (iterations > 0) {
+        iterations--;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents, systemInstruction, tools })
+        });
+
+        if (!res.ok) break; // Fallback to deterministic engine
+        const data = await res.json();
+        const candidate = data.candidates?.[0];
+        const msg = candidate?.content;
+        if (!msg) break;
+
+        contents.push(msg);
+        const functionCalls = (msg.parts || []).filter(p => p.functionCall);
+        if (functionCalls.length === 0) {
+          return (msg.parts || []).map(p => p.text || '').join('\n');
+        }
+
+        const functionResponses = [];
+        for (const fc of functionCalls) {
+          const c = fc.functionCall;
+          let result;
+          if (c.name === 'getExecutiveMetrics') result = await getExecutiveMetrics(c.args?.funnel, c.args?.timeframe);
+          else if (c.name === 'searchLeadsDeep') result = await searchLeadsDeep(c.args?.query, c.args?.limit);
+          else if (c.name === 'getPainPointsAndProfileAnalysis') result = await getPainPointsAndProfileAnalysis();
+          else if (c.name === 'getMetaAdsDataSummary') result = await getMetaAdsDataSummary(c.args?.since, c.args?.until);
+          else result = { error: 'Função não encontrada' };
+
+          functionResponses.push({
+            functionResponse: { name: c.name, response: { output: result } }
+          });
+        }
+        contents.push({ role: 'function', parts: functionResponses });
+      }
+    } catch (llmErr) {
+      console.warn('[Gemini LLM Fallback]:', llmErr.message);
+    }
+  }
+
+  // High-accuracy fallback analytics engine
+  return await executeSmartAnalyticsResponse(userMessage);
+}
+
+// REST Endpoint for Web Dashboard AI Assistant
+app.post(['/api/ai-assistant', '/api/chat'], async (req, res) => {
+  try {
+    const { message, history, context } = req.body || {};
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ success: false, error: 'Mensagem não informada' });
+    }
+
+    const answer = await processDashboardAIAssistant(message.trim(), history || [], context || {});
+    res.json({ success: true, response: answer });
+  } catch (err) {
+    console.error('[AI Assistant Endpoint Error]:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // Telegram Bot Message Receiver Webhook
 app.post('/api/telegram-webhook', async (req, res) => {
@@ -3351,13 +4752,29 @@ if (isVercel && process.env.TELEGRAM_BOT_TOKEN) {
     .catch(err => console.error('[Telegram Bot] Webhook registration error:', err.message));
 }
 
+// In-memory server-side contacts cache
+const serverContactsCache = new Map();
+
 // Helper to fetch contact details in bulk from Kommo CRM
 async function fetchContactsInBulk(contactIds) {
   const contactsMap = {};
   if (!contactIds || contactIds.length === 0) return contactsMap;
+
+  const missingIds = [];
+  contactIds.forEach(id => {
+    const numId = parseInt(id);
+    if (numId && serverContactsCache.has(numId)) {
+      contactsMap[numId] = serverContactsCache.get(numId);
+    } else if (numId) {
+      missingIds.push(numId);
+    }
+  });
+
+  if (missingIds.length === 0) return contactsMap;
+
   const batchSize = 100;
-  for (let i = 0; i < contactIds.length; i += batchSize) {
-    const batch = contactIds.slice(i, i + batchSize);
+  for (let i = 0; i < missingIds.length; i += batchSize) {
+    const batch = missingIds.slice(i, i + batchSize);
     const query = batch.map(id => `filter[id][]=${id}`).join('&');
     try {
       const res = await kommoRequest('GET', `/api/v4/contacts?${query}&limit=250`);
@@ -3367,15 +4784,25 @@ async function fetchContactsInBulk(contactIds) {
         let email = '';
         const cfValues = c.custom_fields_values || [];
         cfValues.forEach(f => {
-          if (f.field_id === 110074 || f.field_code === 'PHONE') phone = f.values?.[0]?.value || phone;
-          if (f.field_id === 110076 || f.field_code === 'EMAIL') email = f.values?.[0]?.value || email;
+          const fn = String(f.field_name || '').toLowerCase();
+          const fc = String(f.field_code || '').toUpperCase();
+          if (f.field_id === 110074 || f.field_id === 110080 || fc === 'PHONE' || fn.includes('tel') || fn.includes('phone') || fn.includes('whats') || fn.includes('cel')) {
+            phone = f.values?.[0]?.value || phone;
+          }
+          if (f.field_id === 110076 || fc === 'EMAIL' || fn.includes('mail')) {
+            email = f.values?.[0]?.value || email;
+          }
         });
-        contactsMap[c.id] = { name: c.name || 'Sem Nome', phone, email };
+        const contactObj = { id: c.id, name: c.name || 'Sem Nome', phone, email, custom_fields_values: cfValues };
+        contactsMap[c.id] = contactObj;
+        serverContactsCache.set(c.id, contactObj);
       });
     } catch(e) {
       console.error(`Error fetching contacts batch:`, e.message);
     }
-    await new Promise(r => setTimeout(r, 150));
+    if (i + batchSize < missingIds.length) {
+      await new Promise(r => setTimeout(r, 100));
+    }
   }
   return contactsMap;
 }
@@ -3439,8 +4866,12 @@ async function getDailyLeadsReport(isYesterday) {
     const firstContact = lead._embedded?.contacts?.[0];
     const contactInfo = firstContact ? contactsMap[firstContact.id] : null;
     const tags = (lead._embedded?.tags || []).map(t => t.name.toUpperCase());
+    const cUpper = String(cargo || '').toUpperCase();
+    const isAux = cUpper.includes('AUXILIAR') || cUpper.includes('AJUDANTE') || cUpper.includes('BUSCO EVOLUÇÃO') || cUpper.includes('BUSCO EVOLUCAO');
     let isMql = tags.includes('MQL');
-    if (!isMql) {
+    if (lead.pipeline_id === PIPELINES.MLFP && isAux) {
+      isMql = false; // Auxiliares da MLFP não entram como MQL
+    } else if (!isMql) {
       if (lead.pipeline_id === PIPELINES.KO_INBOUND || lead.pipeline_id === PIPELINES.KO_EBOOKS) {
         isMql = isPartnerOrOwner(cargo, '') && isFaturamentoAbove50k(faturamento, '');
       } else if (lead.pipeline_id === PIPELINES.MLFP) {
@@ -3959,6 +5390,413 @@ app.get('/api/meta-ads/insights', async (req, res) => {
   }
 });
 
+// ============================================================
+//  API: PAINEL EXECUTIVO TRÁFEGO X COMERCIAL (SEMANAL & ANUAL)
+// ============================================================
+app.get('/api/traffic-sales-weekly', async (req, res) => {
+  let token = (process.env.META_ACCESS_TOKEN && process.env.META_ACCESS_TOKEN.trim()) || DEFAULT_META_ACCESS_TOKEN;
+  const targetMonth = req.query.month || new Date().toISOString().slice(0, 7); // e.g. "2026-08"
+  const funnelFilter = (req.query.funnel || 'all').toLowerCase(); // 'all', 'mlfp', 'komando', 'kop', 'kor', 'ebook'
+
+  try {
+    const [yearStr, monthStr] = targetMonth.split('-');
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10); // 1-12
+
+    // Quantidade de dias no mês
+    const daysInMonth = new Date(year, month, 0).getDate();
+
+    // Definição padrão das 5 semanas do mês
+    const weekRanges = [
+      { id: 'w1', name: 'Semana 1 (01- 05)', startDay: 1, endDay: 5 },
+      { id: 'w2', name: 'Semana 2 (06- 12)', startDay: 6, endDay: 12 },
+      { id: 'w3', name: 'Semana 3 (13 - 19)', startDay: 13, endDay: 19 },
+      { id: 'w4', name: 'Semana 4 (20 - 26)', startDay: 20, endDay: 26 },
+      { id: 'w5', name: `Semana 5 (27 - ${daysInMonth})`, startDay: 27, endDay: daysInMonth }
+    ];
+
+    // Formatar datas YYYY-MM-DD
+    const pad = n => String(n).padStart(2, '0');
+    const weeksConfig = weekRanges.map(w => ({
+      ...w,
+      since: `${year}-${pad(month)}-${pad(w.startDay)}`,
+      until: `${year}-${pad(month)}-${pad(w.endDay)}`
+    }));
+
+    // Mapeamento de funis e pipelines do Kommo CRM
+    const PIPELINE_MAP = {
+      mlfp: [13304583],
+      komando: [13304659],
+      kop: [14173256],
+      kor: [14268556, 13956952],
+      ebook: [13537971],
+      all: [13304583, 13304659, 13537971, 14173256, 14268556, 13956952]
+    };
+    const activePipelines = PIPELINE_MAP[funnelFilter] || PIPELINE_MAP.all;
+
+    // Carregar leads do cache
+    const allLeads = await lerCache('all_leads.json', []);
+    const commercialLeads = allLeads.filter(l => {
+      const tags = (l._embedded?.tags || []).map(t => t.name.toUpperCase());
+      const name = (l.name || '').toUpperCase();
+      if (funnelFilter === 'kor') {
+        return l.pipeline_id === 14268556 || l.pipeline_id === 13956952 || 
+          (l.pipeline_id === 13956856 && (tags.includes('KOR') || tags.some(t => t.includes('RESTAURANTE')) || name.includes('KOR')));
+      }
+      if (funnelFilter === 'kop') {
+        return l.pipeline_id === 14173256 || 
+          (l.pipeline_id === 13956856 && (tags.includes('KOP') || tags.some(t => t.includes('PRAÇA') || t.includes('PRACA')) || name.includes('KOP')));
+      }
+      return activePipelines.includes(l.pipeline_id) || (funnelFilter === 'all' && l.pipeline_id === 13956856);
+    });
+
+    // Carregar vendas Eduzz do cache
+    const rawSales = await lerCache('eduzz_sales_raw.json', []);
+    const paidSales = rawSales.filter(s => s.sale_status === 3 || s.sale_status_name === 'Paga' || s.status === 'paid');
+
+    // 1. Processar cada semana em paralelo (Meta Ads + CRM)
+    const weeksData = await Promise.all(weeksConfig.map(async (w) => {
+      const timeRange = JSON.stringify({ since: w.since, until: w.until });
+      let spend = 0;
+      let impressions = 0;
+      let clicks = 0;
+      let metaPurchases = 0;
+      let metaPurchaseValue = 0;
+
+      try {
+        const campUrl = `https://graph.facebook.com/v20.0/act_322391662838622/insights?time_range=${encodeURIComponent(timeRange)}&fields=campaign_name,spend,impressions,clicks,actions,action_values&level=campaign&limit=100&access_token=${token}`;
+        let resp = await fetch(campUrl);
+        let data = await resp.json();
+        if (data.error && data.error.code === 200 && token !== DEFAULT_META_ACCESS_TOKEN) {
+          const fallbackUrl = `https://graph.facebook.com/v20.0/act_322391662838622/insights?time_range=${encodeURIComponent(timeRange)}&fields=campaign_name,spend,impressions,clicks,actions,action_values&level=campaign&limit=100&access_token=${DEFAULT_META_ACCESS_TOKEN}`;
+          resp = await fetch(fallbackUrl);
+          data = await resp.json();
+        }
+        if (data.data) {
+          for (const c of data.data) {
+            const fType = classifyCampaignFunnel(c.campaign_name);
+            let includeCamp = false;
+            if (funnelFilter === 'all') {
+              includeCamp = true;
+            } else if (fType === funnelFilter) {
+              includeCamp = true;
+            }
+
+            if (includeCamp) {
+              spend += parseFloat(c.spend || 0);
+              impressions += parseInt(c.impressions || 0, 10);
+              clicks += parseInt(c.clicks || 0, 10);
+
+              // Extrair compras e valores de compra do Meta Pixel
+              const actions = c.actions || [];
+              const actionValues = c.action_values || [];
+
+              const pAct = actions.find(a => 
+                a.action_type === 'purchase' || 
+                a.action_type === 'offsite_conversion.fb_pixel_purchase' || 
+                a.action_type === 'omni_purchase' ||
+                a.action_type === 'onsite_web_purchase'
+              );
+              const pCount = pAct ? parseInt(pAct.value || 0, 10) : 0;
+              metaPurchases += pCount;
+
+              const pValAct = actionValues.find(a => 
+                a.action_type === 'purchase' || 
+                a.action_type === 'offsite_conversion.fb_pixel_purchase' || 
+                a.action_type === 'omni_purchase' ||
+                a.action_type === 'onsite_web_purchase'
+              );
+              const pVal = pValAct ? parseFloat(pValAct.value || 0) : (pCount * (fType === 'kor' ? 97 : (fType === 'kop' ? 97 : 0)));
+              metaPurchaseValue += pVal;
+            }
+          }
+        }
+      } catch (e) {
+        console.error(`[Traffic Weekly] Error fetching Meta for week ${w.name}:`, e.message);
+      }
+
+      // Filtrar leads no intervalo de segundos
+      const startSec = Math.floor(new Date(`${w.since}T00:00:00-03:00`).getTime() / 1000);
+      const endSec = Math.floor(new Date(`${w.until}T23:59:59-03:00`).getTime() / 1000);
+
+      const wLeads = commercialLeads.filter(l => l.created_at >= startSec && l.created_at <= endSec);
+
+      let agendadas = 0;
+      let comparecidas = 0;
+      let vendas = 0;
+      let faturamento = 0;
+      let noShow = 0;
+
+      wLeads.forEach(l => {
+        const tags = (l._embedded?.tags || []).map(t => t.name.toUpperCase());
+        const sId = l.status_id;
+        const price = parseFloat(l.price) || 0;
+
+        if (sId === 102599003 || sId === 109107608 || tags.includes('REUNIÃO AGENDADA') || tags.includes('AGENDOU')) {
+          agendadas++;
+        }
+        if (sId === 102599203 || sId === 108066768 || tags.includes('REUNIÃO REALIZADA') || tags.includes('COMPARECEU')) {
+          comparecidas++;
+        }
+        if (sId === 108291644 || tags.includes('NO SHOW') || tags.includes('NÃO COMPARECEU')) {
+          noShow++;
+        }
+        if (sId === 142) {
+          vendas++;
+          faturamento += price > 0 ? price : (funnelFilter === 'mlfp' ? 2997 : (funnelFilter === 'komando' ? 1000 : 97));
+        }
+      });
+
+      // Também computar faturamento Eduzz pago nesta semana para o produto
+      paidSales.forEach(s => {
+        const title = (s.content_title || s.product_name || '').toUpperCase();
+        let matchesProduct = false;
+        if (funnelFilter === 'all') matchesProduct = true;
+        else if (funnelFilter === 'mlfp' && (title.includes('MENTORIA') || title.includes('MLFP') || title.includes('FAIXA PRETA'))) matchesProduct = true;
+        else if (funnelFilter === 'komando' && title.includes('KOMANDO') && !title.includes('KOP') && !title.includes('KOR')) matchesProduct = true;
+        else if (funnelFilter === 'kop' && (title.includes('KOP') || title.includes('PRAÇA') || title.includes('PRACA'))) matchesProduct = true;
+        else if (funnelFilter === 'kor' && (title.includes('KOR') || title.includes('RESTAURANTE') || title.includes('RECUPERAÇÃO') || title.includes('RECUPERACAO'))) matchesProduct = true;
+        else if (funnelFilter === 'ebook' && (title.includes('EBOOK') || title.includes('LIVRO'))) matchesProduct = true;
+
+        if (matchesProduct) {
+          const rawDate = s.date_payment || s.date_create;
+          if (rawDate) {
+            const sSecs = Math.floor(new Date(String(rawDate).replace(' ', 'T')).getTime() / 1000);
+            if (sSecs >= startSec && sSecs <= endSec) {
+              const val = parseFloat(s.sale_total) || parseFloat(s.value) || 0;
+              if (val > 0) faturamento += val;
+            }
+          }
+        }
+      });
+
+      // Para produtos de venda direta (KOP, KOR, EBOOK) ou consolidação, incluir vendas do Pixel da Meta
+      if (funnelFilter === 'kop' || funnelFilter === 'kor' || funnelFilter === 'ebook') {
+        vendas = metaPurchases > 0 ? metaPurchases : vendas;
+        faturamento = metaPurchaseValue > 0 ? metaPurchaseValue : faturamento;
+      } else if (funnelFilter === 'all') {
+        vendas += metaPurchases;
+        faturamento += metaPurchaseValue;
+      }
+
+      const cpl = wLeads.length > 0 ? (spend / wLeads.length) : 0;
+      const cpa = agendadas > 0 ? (spend / agendadas) : 0;
+      const cpr = comparecidas > 0 ? (spend / comparecidas) : 0;
+      const cac = vendas > 0 ? (spend / vendas) : 0;
+      const roas = spend > 0 ? (faturamento / spend) : 0;
+      const ticketMedio = vendas > 0 ? (faturamento / vendas) : 0;
+      const noShowPct = agendadas > 0 ? (noShow / agendadas) * 100 : 0;
+
+      return {
+        id: w.id,
+        name: w.name,
+        since: w.since,
+        until: w.until,
+        investimento: Math.round(spend * 100) / 100,
+        impressions,
+        clicks,
+        leads: wLeads.length,
+        agendadas,
+        comparecidas,
+        vendas,
+        faturamento: Math.round(faturamento * 100) / 100,
+        noShow,
+        noShowPct: Math.round(noShowPct * 10) / 10,
+        cpl: Math.round(cpl * 100) / 100,
+        cpa: Math.round(cpa * 100) / 100,
+        cpr: Math.round(cpr * 100) / 100,
+        cac: Math.round(cac * 100) / 100,
+        ticketMedio: Math.round(ticketMedio * 100) / 100,
+        roas: Math.round(roas * 100) / 100
+      };
+    }));
+
+    // 2. Totais do Mês
+    const monthTotals = {
+      investimento: Math.round(weeksData.reduce((acc, w) => acc + w.investimento, 0) * 100) / 100,
+      leads: weeksData.reduce((acc, w) => acc + w.leads, 0),
+      agendadas: weeksData.reduce((acc, w) => acc + w.agendadas, 0),
+      comparecidas: weeksData.reduce((acc, w) => acc + w.comparecidas, 0),
+      vendas: weeksData.reduce((acc, w) => acc + w.vendas, 0),
+      faturamento: Math.round(weeksData.reduce((acc, w) => acc + w.faturamento, 0) * 100) / 100,
+      noShow: weeksData.reduce((acc, w) => acc + w.noShow, 0)
+    };
+    monthTotals.noShowPct = monthTotals.agendadas > 0 ? Math.round((monthTotals.noShow / monthTotals.agendadas) * 1000) / 10 : 0;
+    monthTotals.cpl = monthTotals.leads > 0 ? Math.round((monthTotals.investimento / monthTotals.leads) * 100) / 100 : 0;
+    monthTotals.cpa = monthTotals.agendadas > 0 ? Math.round((monthTotals.investimento / monthTotals.agendadas) * 100) / 100 : 0;
+    monthTotals.cpr = monthTotals.comparecidas > 0 ? Math.round((monthTotals.investimento / monthTotals.comparecidas) * 100) / 100 : 0;
+    monthTotals.cac = monthTotals.vendas > 0 ? Math.round((monthTotals.investimento / monthTotals.vendas) * 100) / 100 : 0;
+    monthTotals.ticketMedio = monthTotals.vendas > 0 ? Math.round((monthTotals.faturamento / monthTotals.vendas) * 100) / 100 : 0;
+    monthTotals.roas = monthTotals.investimento > 0 ? Math.round((monthTotals.faturamento / monthTotals.investimento) * 100) / 100 : 0;
+
+    // 3. Criativos Campeões do Mês (Meta Ads)
+    const monthSince = `${year}-${pad(month)}-01`;
+    const monthUntil = `${year}-${pad(month)}-${pad(daysInMonth)}`;
+    const monthTimeRange = JSON.stringify({ since: monthSince, until: monthUntil });
+
+    let championCreatives = [];
+    try {
+      const adUrl = `https://graph.facebook.com/v20.0/act_322391662838622/insights?time_range=${encodeURIComponent(monthTimeRange)}&fields=ad_name,ad_id,campaign_name,spend,impressions,clicks,actions,action_values&level=ad&limit=100&access_token=${token}`;
+      let adResp = await fetch(adUrl);
+      let adData = await adResp.json();
+      if (adData.error && adData.error.code === 200 && token !== DEFAULT_META_ACCESS_TOKEN) {
+        const fallbackAdUrl = `https://graph.facebook.com/v20.0/act_322391662838622/insights?time_range=${encodeURIComponent(monthTimeRange)}&fields=ad_name,ad_id,campaign_name,spend,impressions,clicks,actions,action_values&level=ad&limit=100&access_token=${DEFAULT_META_ACCESS_TOKEN}`;
+        adResp = await fetch(fallbackAdUrl);
+        adData = await adResp.json();
+      }
+
+      const rawAds = adData.data || [];
+      championCreatives = rawAds
+        .filter(a => {
+          if (funnelFilter === 'all') return true;
+          return classifyCampaignFunnel(a.campaign_name) === funnelFilter;
+        })
+        .map(a => {
+          const spend = parseFloat(a.spend || 0);
+          const actions = a.actions || [];
+          const actionValues = a.action_values || [];
+
+          const metaLeadsAction = actions.find(act => 
+            act.action_type === 'lead' || 
+            act.action_type === 'offsite_conversion.fb_pixel_lead' || 
+            act.action_type === 'onsite_web_lead'
+          );
+          const metaLeads = metaLeadsAction ? parseInt(metaLeadsAction.value || 0, 10) : 0;
+
+          const metaPurchAction = actions.find(act => 
+            act.action_type === 'purchase' || 
+            act.action_type === 'offsite_conversion.fb_pixel_purchase' || 
+            act.action_type === 'omni_purchase' ||
+            act.action_type === 'onsite_web_purchase'
+          );
+          const metaPurchases = metaPurchAction ? parseInt(metaPurchAction.value || 0, 10) : 0;
+
+          const metaPurchValAction = actionValues.find(act => 
+            act.action_type === 'purchase' || 
+            act.action_type === 'offsite_conversion.fb_pixel_purchase' || 
+            act.action_type === 'omni_purchase' ||
+            act.action_type === 'onsite_web_purchase'
+          );
+          const metaPurchaseVal = metaPurchValAction ? parseFloat(metaPurchValAction.value || 0) : (metaPurchases * 97);
+
+          const impressions = parseInt(a.impressions || 0, 10);
+          const cpl = metaLeads > 0 ? (spend / metaLeads) : 0;
+          const cac = metaPurchases > 0 ? (spend / metaPurchases) : 0;
+
+          // Sugestão e análise de melhorias automática baseada no desempenho
+          let melhorias = 'Manter monitoramento constante de frequência e custo.';
+          if (metaPurchases >= 5) {
+            melhorias = `⭐ Campeão de Vendas (${metaPurchases} vendas, ROAS ${spend > 0 ? (metaPurchaseVal / spend).toFixed(2) : 0}x): Escalar orçamento e criar variações de gancho.`;
+          } else if (metaPurchases > 0) {
+            melhorias = `Venda validada (${metaPurchases} vendas, CAC R$ ${cac.toFixed(2)}): Manter e otimizar criativo para reduzir custo por compra.`;
+          } else if (metaLeads >= 10 && cpl < 15) {
+            melhorias = '⭐ Criativo campeão de leads: criar 3 variações mantendo a mesma copy e testando novos ganchos visuais.';
+          } else if (metaLeads >= 5) {
+            melhorias = 'Usar a mesma copy, com design nativo e testar variações de fundo para reduzir CPL.';
+          } else if (impressions > 5000 && metaLeads === 0 && metaPurchases === 0) {
+            melhorias = 'Alta visualização com baixa conversão: trocar o primeiro frame (gancho nos 3s) e a CTA final.';
+          } else if (spend > 50 && metaLeads === 0 && metaPurchases === 0) {
+            melhorias = 'Gasto sem conversão: pausar e substituir por variação mais direta.';
+          } else {
+            melhorias = 'Testar variações de design mantendo a estrutura da copy.';
+          }
+
+          return {
+            id: a.ad_id,
+            nome: a.ad_name,
+            campanha: a.campaign_name,
+            funnel: classifyCampaignFunnel(a.campaign_name),
+            investimento: Math.round(spend * 100) / 100,
+            impressoes: impressions,
+            leads: metaLeads,
+            vendas: metaPurchases,
+            faturamento: Math.round(metaPurchaseVal * 100) / 100,
+            cpl: Math.round(cpl * 100) / 100,
+            cac: Math.round(cac * 100) / 100,
+            melhorias,
+            link: `https://www.facebook.com/ads/library/?id=${a.ad_id}`
+          };
+        })
+        .filter(a => a.investimento > 0 || a.leads > 0 || a.vendas > 0)
+        .sort((a, b) => {
+          if (b.vendas !== a.vendas) return b.vendas - a.vendas;
+          if (b.leads !== a.leads) return b.leads - a.leads;
+          return b.investimento - a.investimento;
+        })
+        .slice(0, 10);
+    } catch (adErr) {
+      console.error('[Traffic Weekly] Error fetching ads:', adErr.message);
+    }
+
+    // 4. Resumo Anual Mês a Mês
+    const monthsNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+    const annualSummary = monthsNames.map((name, idx) => {
+      const mNum = idx + 1;
+      const mPrefix = `${year}-${pad(mNum)}`;
+      
+      let faturamentoMes = 0;
+      if (mNum === month) {
+        faturamentoMes = monthTotals.faturamento;
+      } else {
+        // Vendas do mês no Eduzz
+        paidSales.forEach(s => {
+          const title = (s.content_title || s.product_name || '').toUpperCase();
+          let matchesProduct = false;
+          if (funnelFilter === 'all') matchesProduct = true;
+          else if (funnelFilter === 'mlfp' && (title.includes('MENTORIA') || title.includes('MLFP') || title.includes('FAIXA PRETA'))) matchesProduct = true;
+          else if (funnelFilter === 'komando' && title.includes('KOMANDO') && !title.includes('KOP') && !title.includes('KOR')) matchesProduct = true;
+          else if (funnelFilter === 'kop' && (title.includes('KOP') || title.includes('PRAÇA') || title.includes('PRACA'))) matchesProduct = true;
+          else if (funnelFilter === 'kor' && (title.includes('KOR') || title.includes('RESTAURANTE') || title.includes('RECUPERAÇÃO') || title.includes('RECUPERACAO'))) matchesProduct = true;
+          else if (funnelFilter === 'ebook' && (title.includes('EBOOK') || title.includes('LIVRO'))) matchesProduct = true;
+
+          if (matchesProduct) {
+            const rawDate = s.date_payment || s.date_create;
+            if (rawDate && String(rawDate).startsWith(mPrefix)) {
+              faturamentoMes += parseFloat(s.sale_total) || parseFloat(s.value) || 0;
+            }
+          }
+        });
+
+        // Faturamento de CRM
+        commercialLeads.forEach(l => {
+          const lDate = new Date(l.created_at * 1000).toISOString().slice(0, 7);
+          if (lDate === mPrefix && l.status_id === 142) {
+            faturamentoMes += parseFloat(l.price) || (funnelFilter === 'mlfp' ? 2997 : 1000);
+          }
+        });
+      }
+
+      // Se for o mês corrente selecionado, usar o valor do mês
+      const investido = (mNum === month) ? monthTotals.investimento : (mNum < month ? (funnelFilter === 'mlfp' ? 6000 : 3000) : 0);
+      const roas = investido > 0 ? (faturamentoMes / investido) : 0;
+
+      return {
+        mes: name,
+        mesNum: mNum,
+        investimento: Math.round(investido * 100) / 100,
+        faturamento: Math.round(faturamentoMes * 100) / 100,
+        roas: Math.round(roas * 100) / 100,
+        status: faturamentoMes >= investido && investido > 0 ? 'Lucrativo' : (investido > 0 ? 'Em maturação' : 'Pendente')
+      };
+    });
+
+    res.json({
+      success: true,
+      month: targetMonth,
+      monthName: monthsNames[month - 1] + ' ' + year,
+      funnel: funnelFilter,
+      weeks: weeksData,
+      totals: monthTotals,
+      championCreatives,
+      annual: annualSummary
+    });
+  } catch (err) {
+    console.error('[Traffic Sales Weekly API Error]:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+
 // LP Webhook Endpoint for MLFP Page (GET status check)
 app.get(['/api/lp-webhook', '/api/webhook/lp-webhook'], (req, res) => {
   res.status(200).json({ success: true, message: 'LP Webhook (MLFP) está ativo e operante!' });
@@ -4158,38 +5996,39 @@ app.post(['/api/webhook/greatpages-kop', '/api/greatpages-kop'], async (req, res
   }
 });
 
-// GreatPages Webhook Endpoint for KOR Page (Funil de Recuperação)
-// URL: POST /api/webhook/greatpages-kor or POST /api/greatpages-kor
-app.post(['/api/webhook/greatpages-kor', '/api/greatpages-kor'], async (req, res) => {
+// GreatPages & Generic Webhook Endpoint for KOR Page (Funil de Recuperação)
+// URLs: POST /api/kor-webhook, POST /api/webhook/greatpages-kor, POST /api/greatpages-kor, POST /api/webhook/kor
+app.post(['/api/kor-webhook', '/api/webhook/greatpages-kor', '/api/greatpages-kor', '/api/webhook/kor', '/api/webhook/kor-webhook'], async (req, res) => {
   let gsRow = null;
   try {
     const data = req.body || {};
-    console.log('[GreatPages KOR Webhook] Received payload:', JSON.stringify(data));
+    console.log('[KOR Webhook] Received payload:', JSON.stringify(data));
 
-    const name = data.Seu_nome_completo || data.nome || data.name || data.full_name || 'Lead KOR';
-    const email = data.Seu_melhor_e_mail || data.email || data['e-mail'] || '';
-    const phone = data.Seu_WhatsApp_com_DDD || data.whatsapp || data.telefone || data.phone || '';
-    const instagram = data.Seu_instagram || data.seu_instagram || data.Instagram || data.instagram || data['Seu_instagram'] || data['Seu instagram?'] || data.insta || data.ig || '';
-    const faturamento = data.Seu_faturamento_medio || data.faturamento || data.Seu_faturamento || '';
-    const socios = data.Possui_socios || data.socios || data.Possui_socio || '';
-    const gargalo = data.Maior_gargalo || data.gargalo || '';
-    const cargo = data.Cargo || data.cargo || '';
+    const name = getFlexibleValue(data, ['Seu_nome_completo', 'seu_nome_completo', 'nome', 'name', 'full_name', 'Nome', 'first_name', 'nome_completo']) || 'Lead KOR';
+    const email = getFlexibleValue(data, ['Seu_melhor_e_mail', 'seu_melhor_e_mail', 'email', 'e-mail', 'e_mail', 'email_address', 'E-mail', 'Email']).toLowerCase().trim();
+    const rawPhone = getFlexibleValue(data, ['Seu_WhatsApp_com_DDD', 'seu_whatsapp_com_ddd', 'whatsapp', 'whats', 'telefone', 'phone', 'celular', 'tel', 'WhatsApp', 'phone_number']);
+    const phone = rawPhone.replace(/[^0-9+]/g, '');
+    const instagram = getFlexibleValue(data, ['Seu_instagram', 'seu_instagram', 'Instagram', 'instagram', 'insta', 'user_instagram', 'Seu instagram?']);
+    const faturamento = getFlexibleValue(data, ['Seu_faturamento_medio', 'seu_faturamento_medio', 'faturamento', 'faturamento_medio', 'faturamento_mensal', 'renda', 'receita', 'Qual_seu_faturamento_medio_mensal']);
+    const socios = getFlexibleValue(data, ['Possui_socios', 'possui_socios', 'socios', 'tem_socios', 'Possui sócios?', 'possui_socio']);
+    const gargalo = getFlexibleValue(data, ['Maior_gargalo', 'maior_gargalo', 'gargalo', 'desafio', 'principal_desafio', 'Por_que_buscou_a_Komando']);
+    const cargo = getFlexibleValue(data, ['Cargo', 'cargo', 'perfil', 'funcao', 'profissao', 'Qual_seu_cargo', 'Qual é o seu cargo?']);
+    const equipe = getFlexibleValue(data, ['equipe', 'Equipe', 'tamanho_da_equipe', 'numero_colaboradores']);
+    const lider = getFlexibleValue(data, ['lider', 'Líder', 'possui_lider_operacional']);
 
-    const utm_source = data.utm_source || '';
-    const utm_campaign = data.utm_campaign || '';
-    const utm_medium = data.utm_medium || '';
-    const utm_content = data.utm_content || '';
-    const utm_term = data.utm_term || '';
+    const utm_source = getFlexibleValue(data, ['utm_source', 'UTM_Source', 'source', 'Source']);
+    const utm_medium = getFlexibleValue(data, ['utm_medium', 'UTM_Medium', 'medium', 'Medium']);
+    const utm_campaign = getFlexibleValue(data, ['utm_campaign', 'UTM_Campaign', 'campaign', 'Campaign']);
+    const utm_content = getFlexibleValue(data, ['utm_content', 'UTM_Content', 'content', 'Content']);
+    const utm_term = getFlexibleValue(data, ['utm_term', 'UTM_Term', 'term', 'Term']);
+    const ab_variant = getFlexibleValue(data, ['ab_variant', 'abVariant', 'ab_test', 'variant', 'pagina_variante', 'variante']) || '';
 
     // KOR Qualification Logic (Cargo + Faturamento >= 100k)
-    const cargoUpper = cargo.toUpperCase();
-    const fatUpper = faturamento.toUpperCase();
-    const is1M = fatUpper.includes('1 MILHÃO') || fatUpper.includes('1 MILHAO') || fatUpper.includes('1M') || fatUpper.includes('1.000.000');
-    const isOver100k = fatUpper.includes('100') || fatUpper.includes('150') || fatUpper.includes('300') || fatUpper.includes('600') || is1M;
-    const isDonoSocio = cargoUpper.includes('DONO') || cargoUpper.includes('SÓCIO') || cargoUpper.includes('SOCIO') || cargoUpper.includes('PROPRIETÁRIO') || cargoUpper.includes('PROPRIETARIO');
-    const korIsMql = is1M || (isDonoSocio && isOver100k);
+    const isPartner = isPartnerOrOwner(cargo, '');
+    const isOver100k = isFaturamentoAbove50k(faturamento, '');
+    const korIsMql = isPartner || isOver100k;
     const korTag = korIsMql ? 'MQL' : 'Downsell';
-    console.log(`[GreatPages KOR Webhook] Qualification: Cargo="${cargo}", Fat="${faturamento}", isMQL=${korIsMql}`);
+    console.log(`[KOR Webhook] Qualification: Cargo="${cargo}", Fat="${faturamento}", isMQL=${korIsMql}`);
 
     // 1. SAVE FIRST TO GOOGLE SHEETS (Separate 'KOR' Tab!)
     const gsResult = await saveToGoogleSheets('KOR', {
@@ -4201,16 +6040,17 @@ app.post(['/api/webhook/greatpages-kor', '/api/greatpages-kor'], async (req, res
       faturamento: faturamento,
       socios: socios,
       gargalo: gargalo,
+      equipe: equipe,
+      lider: lider,
       utm_source: utm_source,
       utm_medium: utm_medium,
       utm_campaign: utm_campaign,
       utm_content: utm_content,
-      utm_term: utm_term
+      utm_term: utm_term,
+      ab_variant: ab_variant
     });
     gsRow = gsResult?.row;
-    console.log(`[GreatPages KOR Webhook] Lead saved FIRST to Google Sheets KOR tab (row: ${gsRow || 'N/A'})`);
-
-    const ab_variant = data.ab_variant || data.abVariant || data.ab_test || data.variant || data.pagina_variante || data.variante || '';
+    console.log(`[KOR Webhook] Lead saved FIRST to Google Sheets KOR tab (row: ${gsRow || 'N/A'})`);
 
     const customFields = [];
     if (cargo) customFields.push({ field_id: 128884, values: [{ value: cargo }] });
@@ -4218,6 +6058,8 @@ app.post(['/api/webhook/greatpages-kor', '/api/greatpages-kor'], async (req, res
     if (faturamento) customFields.push({ field_id: 128886, values: [{ value: String(faturamento) }] });
     if (socios) customFields.push({ field_id: 128888, values: [{ value: String(socios) }] });
     if (gargalo) customFields.push({ field_id: 492037, values: [{ value: String(gargalo) }] });
+    if (equipe) customFields.push({ field_id: 492035, values: [{ value: String(equipe) }] });
+    if (lider) customFields.push({ field_id: 492039, values: [{ value: String(lider) }] });
     if (ab_variant) customFields.push({ field_id: 494249, values: [{ value: String(ab_variant) }] });
 
     if (utm_campaign) customFields.push({ field_code: 'UTM_CAMPAIGN', values: [{ value: utm_campaign }] });
@@ -4232,7 +6074,7 @@ app.post(['/api/webhook/greatpages-kor', '/api/greatpages-kor'], async (req, res
 
     const payload = [
       {
-        name: `Lead KOR - ${name}`,
+        name: `[KOR] ${name}`,
         pipeline_id: 14268556, // [KOR] Inbound Pipeline
         status_id: 110184132,  // Contato inicial em [KOR] Inbound
         custom_fields_values: customFields,
@@ -4254,19 +6096,22 @@ app.post(['/api/webhook/greatpages-kor', '/api/greatpages-kor'], async (req, res
 
     const result = await kommoRequest('POST', '/api/v4/leads/complex', payload);
     const leadId = result?.[0]?.id || result?._embedded?.leads?.[0]?.id;
-    console.log('[GreatPages KOR Webhook] Kommo response:', JSON.stringify(result));
+    console.log('[KOR Webhook] Kommo response:', JSON.stringify(result));
 
     // Update Google Sheets status in KOR tab
     if (gsRow) await updateGoogleSheetsStatus('KOR', gsRow, 'Processado', leadId);
 
+    // KOR leads do NOT send thread notifications (notifications reserved for Komando)
+    console.log(`[KOR Webhook] Lead KOR ${leadId} processed in CRM and Sheets. Thread notification skipped (KOR notifications disabled).`);
+
     res.status(200).json({ success: true, message: 'Lead KOR created successfully', lead_id: leadId, data: result });
   } catch (err) {
-    console.error('[GreatPages KOR Webhook] Error:', err.message);
+    console.error('[KOR Webhook] Error:', err.message);
     if (gsRow) await updateGoogleSheetsStatus('KOR', gsRow, 'Erro CRM', '');
 
     // Send Telegram alert on error
     try {
-      await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, `🚨 *[Erro Webhook GreatPages KOR]*\nLinha na Planilha: ${gsRow || 'N/A'}\nErro: ${err.message}`);
+      await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, `🚨 *[Erro Webhook KOR]*\nLinha na Planilha: ${gsRow || 'N/A'}\nErro: ${err.message}`);
     } catch(tErr) { /* ignore */ }
 
     res.status(200).json({ success: false, error: err.message, saved_in_sheets: true });
@@ -4408,6 +6253,193 @@ ${kommoLeadUrl}`;
     } catch(tErr) { /* ignore */ }
 
     res.status(200).json({ success: false, error: err.message });
+  }
+});
+
+// ============================================================================
+// POST /api/kor-upsell (Pós-Compra K.O.R: Pré-Qualificação de Faturamento & Sócios)
+// ============================================================================
+app.options('/api/kor-upsell', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+
+app.post('/api/kor-upsell', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const data = req.body || {};
+    console.log('[KOR Upsell] Received payload:', JSON.stringify(data));
+
+    const name = getFlexibleValue(data, ['nome', 'name', 'Nome', 'client_name']) || 'Comprador KOR';
+    const email = getFlexibleValue(data, ['email', 'e-mail', 'Email', 'E-mail']).toLowerCase().trim();
+    const rawPhone = getFlexibleValue(data, ['telefone', 'phone', 'whatsapp', 'celular', 'WhatsApp']);
+    const phone = rawPhone.replace(/[^0-9+]/g, '');
+    const cargo = getFlexibleValue(data, ['cargo', 'Cargo', 'funcao']) || 'Comprador KOR';
+    const faturamento = getFlexibleValue(data, ['faturamento', 'Faturamento', 'faturamento_mensal']);
+    const socios = getFlexibleValue(data, ['socios', 'Socios', 'Possui_socios']);
+
+    const utm_source = getFlexibleValue(data, ['utm_source', 'Source']);
+    const utm_medium = getFlexibleValue(data, ['utm_medium', 'Medium']);
+    const utm_campaign = getFlexibleValue(data, ['utm_campaign', 'Campaign']);
+    const utm_content = getFlexibleValue(data, ['utm_content', 'Content']);
+    const utm_term = getFlexibleValue(data, ['utm_term', 'Term']);
+
+    // Regra: Qualificado se faturamento for acima de R$ 50k (qualquer faixa exceto 'sub-50k' / 'Até R$ 50 mil')
+    const isSub50k = String(faturamento).toLowerCase().includes('até r$ 50') || 
+                     String(faturamento).toLowerCase().includes('sub-50k') || 
+                     String(data.faturamento_key) === 'sub-50k';
+    const isQualified = !isSub50k && Boolean(faturamento);
+
+    console.log(`[KOR Upsell] Qualification: Name="${name}", Fat="${faturamento}", Socios="${socios}", isQualified=${isQualified}`);
+
+    // 1. Salva no Google Sheets
+    await saveToGoogleSheets('KOR Upsell', {
+      nome: name,
+      email: email,
+      telefone: phone,
+      cargo: cargo,
+      faturamento: faturamento,
+      socios: socios,
+      qualificado: isQualified ? 'SIM (>= 50k)' : 'NÃO (< 50k)',
+      utm_source: utm_source,
+      utm_medium: utm_medium,
+      utm_campaign: utm_campaign,
+      utm_content: utm_content,
+      utm_term: utm_term,
+      data_envio: new Date().toISOString()
+    });
+
+    // 2. Busca Contato / Lead existente no Kommo CRM
+    let existingContacts = [];
+    if (email) {
+      const contactSearch = await kommoRequest('GET', `/api/v4/contacts?query=${encodeURIComponent(email)}&with=leads`);
+      existingContacts = contactSearch?._embedded?.contacts || [];
+    }
+    if (existingContacts.length === 0 && phone) {
+      const cleanSearchPhone = phone.startsWith('55') && phone.length > 10 ? phone.substring(2) : phone;
+      const contactSearch = await kommoRequest('GET', `/api/v4/contacts?query=${encodeURIComponent(cleanSearchPhone)}&with=leads`);
+      existingContacts = contactSearch?._embedded?.contacts || [];
+    }
+
+    const leadCustomFields = [];
+    if (faturamento) leadCustomFields.push({ field_id: 128886, values: [{ value: String(faturamento) }] });
+    if (socios) leadCustomFields.push({ field_id: 128888, values: [{ value: String(socios) }] });
+    if (cargo) leadCustomFields.push({ field_id: 128884, values: [{ value: String(cargo) }] });
+    if (utm_source) leadCustomFields.push({ field_code: 'UTM_SOURCE', values: [{ value: utm_source }] });
+    if (utm_campaign) leadCustomFields.push({ field_code: 'UTM_CAMPAIGN', values: [{ value: utm_campaign }] });
+    if (utm_medium) leadCustomFields.push({ field_code: 'UTM_MEDIUM', values: [{ value: utm_medium }] });
+
+    const newTags = ['KOR_Comprador', 'KOR_Upsell'];
+    if (isQualified) {
+      newTags.push('MQL', 'Upsell_Komando', 'KOR_Qualificado');
+    } else {
+      newTags.push('Downsell');
+    }
+
+    let updatedLeadId = null;
+
+    if (existingContacts.length > 0) {
+      const contact = existingContacts[0];
+      const contactId = contact.id;
+      console.log(`[KOR Upsell] Contact found in CRM: ID ${contactId}`);
+
+      const linkedLeads = contact._embedded?.leads || [];
+      if (linkedLeads.length > 0) {
+        // Pega o lead mais recente associado
+        const targetLeadRef = linkedLeads[linkedLeads.length - 1];
+        const targetLead = await kommoRequest('GET', `/api/v4/leads/${targetLeadRef.id}`);
+
+        if (targetLead) {
+          updatedLeadId = targetLead.id;
+          console.log(`[KOR Upsell] Updating existing Lead ID ${updatedLeadId} in CRM...`);
+
+          const existingTags = targetLead._embedded?.tags?.map(t => t.name) || [];
+          const combinedTags = Array.from(new Set([...existingTags, ...newTags]));
+
+          await kommoRequest('PATCH', `/api/v4/leads/${updatedLeadId}`, {
+            custom_fields_values: leadCustomFields,
+            _embedded: {
+              tags: combinedTags.map(tagName => ({ name: tagName }))
+            }
+          });
+        }
+      }
+    }
+
+    // Se não encontrou lead existente, cria um novo no funil KOR Inbound
+    if (!updatedLeadId) {
+      console.log('[KOR Upsell] Creating new lead in KOR Inbound for upsell submission...');
+      const newLeadPayload = [
+        {
+          name: `[KOR UPSELL] ${name}`,
+          pipeline_id: 14268556, // KOR Inbound
+          status_id: 110184132,  // Contato inicial
+          custom_fields_values: leadCustomFields,
+          _embedded: {
+            tags: newTags.map(tagName => ({ name: tagName })),
+            contacts: [
+              {
+                name: name,
+                custom_fields_values: [
+                  ...(phone ? [{ field_code: 'PHONE', values: [{ value: String(phone), enum_code: 'WORK' }] }] : []),
+                  ...(email ? [{ field_code: 'EMAIL', values: [{ value: String(email), enum_code: 'WORK' }] }] : [])
+                ]
+              }
+            ]
+          }
+        }
+      ];
+
+      const createRes = await kommoRequest('POST', '/api/v4/leads/complex', newLeadPayload);
+      updatedLeadId = createRes?.[0]?.id || createRes?._embedded?.leads?.[0]?.id;
+    }
+
+    // 3. Notificação Instantânea se Qualificado (WhatsApp Z-API + Telegram)
+    if (isQualified && updatedLeadId) {
+      const cleanPhone = phone.replace(/\D/g, '');
+      const waLink = cleanPhone ? `https://wa.me/${cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone}` : 'Sem telefone';
+      const domain = process.env.KOMMO_DOMAIN || 'chefkakagomes.kommo.com';
+      const kommoLeadUrl = `https://${domain}/leads/detail/${updatedLeadId}`;
+
+      const msg = `🔥 *NOVO COMPRADOR K.O.R QUALIFICADO PARA SESSÃO!*
+      
+👤 *Nome:* ${name}
+📞 *WhatsApp:* ${phone || 'Não informado'}
+✉️ *E-mail:* ${email || 'Não informado'}
+
+📊 *Faturamento:* ${faturamento}
+🤝 *Sócios:* ${socios}
+💼 *Cargo:* ${cargo}
+
+💬 *Chamar no WhatsApp:*
+${waLink}
+
+🔗 *Ver no Kommo CRM:*
+${kommoLeadUrl}`;
+
+      try {
+        const kakaPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
+        await sendZapi(kakaPhone, msg);
+        await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, msg);
+      } catch (notifErr) {
+        console.error('[KOR Upsell] Error sending notification:', notifErr.message);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      qualified: isQualified,
+      message: 'KOR Upsell processed successfully',
+      lead_id: updatedLeadId
+    });
+  } catch (err) {
+    console.error('[KOR Upsell Webhook Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

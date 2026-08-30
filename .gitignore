@@ -18,3 +18,5 @@ perform_full_sync.js
 
 # Arquivo criado por engano (dump do "less --help")
 ter
+
+.env*
