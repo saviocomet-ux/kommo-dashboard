@@ -2777,9 +2777,13 @@ app.post(['/api/ko-webhook', '/api/webhook/komando', '/api/komando-webhook', '/a
       if (utm_term) msg += `🔎 *Termo:* ${utm_term}\n`;
       msg += `🆔 *Lead ID CRM:* ${leadId || 'N/A'}`;
 
-      if (isAlreadyNotified(leadId, phone)) {
-        console.log(`[KO Webhook] Lead ${leadId} (${phone}) was already notified recently. Skipping duplicate dispatch.`);
+      // Se for apenas o passo 1 (sem respostas do quiz ainda), não dispara notificação preliminar incompleta
+      const hasQuizAnswers = Boolean(cargo || faturamento || gargalo || equipe || lider || socios);
+
+      if (!hasQuizAnswers) {
+        console.log(`[KO Webhook] Step 1 lead saved (Lead ID: ${leadId}). Waiting for quiz completion (Step 2) to notify.`);
       } else {
+        // Step 2 com respostas completas do formulário: sempre notifica e envia WhatsApp/Telegram
         markAsNotified(leadId, phone);
         await sendTelegram(process.env.TELEGRAM_CHAT_ID, msg, undefined, threadId);
         console.log(`[KO Webhook] Direct notification sent to Telegram thread ${threadId}`);
