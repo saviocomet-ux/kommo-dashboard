@@ -224,6 +224,38 @@ async function sendZapi(targetPhone, message) {
   }
 }
 
+// Helper to determine if lead is Organic or Paid Traffic based on UTMs
+function determineOrigem(utm_source, utm_campaign, utm_medium) {
+  const s = String(utm_source || '').toLowerCase();
+  const c = String(utm_campaign || '').toLowerCase();
+  const m = String(utm_medium || '').toLowerCase();
+
+  if (s.includes('meta') || s.includes('ad') || s.includes('cpc') || s.includes('feed') || s.includes('stories') || s.includes('reels') ||
+      c.includes('lead') || c.includes('auto') || c.includes('ppto') || c.includes('teste') ||
+      m.includes('cold') || m.includes('adv') || m.includes('interesses')) {
+    return 'Tráfego Pago';
+  }
+  if (s.includes('organico') || s.includes('bio') || s.includes('direct') || (!utm_source && !utm_campaign && !utm_medium)) {
+    return 'Orgânico';
+  }
+  return utm_source ? `Tráfego (${utm_source})` : 'Orgânico';
+}
+
+// Helper to format concise, simplified Z-API WhatsApp notification
+function formatZapiLeadMessage({ origem, nome, faturamento, cargo, dor, phone }) {
+  const cleanPhone = phone ? String(phone).replace(/\D/g, '') : '';
+  const fullPhone = cleanPhone ? (cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone) : '';
+  const waLink = fullPhone ? `https://wa.me/${fullPhone}` : 'Não informado';
+
+  let msg = `📍 *Origem:* ${origem || 'Tráfego Pago'}\n`;
+  msg += `👤 *Nome:* ${nome || 'Não informado'}\n`;
+  msg += `💰 *Faturamento:* ${faturamento || 'Não informado'}\n`;
+  msg += `💼 *Cargo:* ${cargo || 'Não informado'}\n`;
+  msg += `⚠️ *Dor:* ${dor || 'Não informado'}\n\n`;
+  msg += `📱 *WhatsApp:* ${waLink}`;
+  return msg;
+}
+
 const DEFAULT_TELEGRAM_BOT_TOKEN = '7574776106:AAEEI8lYQcStvYp52t86bM4j6l1-e8LpYv0';
 const DEFAULT_TELEGRAM_CHAT_ID = '-1002344793617';
 
@@ -2788,10 +2820,18 @@ app.post(['/api/ko-webhook', '/api/webhook/komando', '/api/komando-webhook', '/a
         await sendTelegram(process.env.TELEGRAM_CHAT_ID, msg, undefined, threadId);
         console.log(`[KO Webhook] Direct notification sent to Telegram thread ${threadId}`);
 
-        // Se qualificado e Komando Inbound, envia para Z-API WhatsApp
+        // Se qualificado e Komando Inbound, envia para Z-API WhatsApp no formato simplificado
         if (isQualified && !isEbookEvent) {
           try {
-            await sendZapi(process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763', msg);
+            const zapiMsg = formatZapiLeadMessage({
+              origem: determineOrigem(utm_source, utm_campaign, utm_medium),
+              nome: name,
+              faturamento: faturamento,
+              cargo: cargo,
+              dor: gargalo,
+              phone: phone
+            });
+            await sendZapi(process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763', zapiMsg);
           } catch(zErr) {
             console.warn('[KO Webhook] Z-API dispatch warning:', zErr.message);
           }
@@ -3507,9 +3547,17 @@ app.post('/api/kommo-lead-created', async (req, res) => {
       // Mark as notified to prevent duplicate dispatches
       markAsNotified(leadId, cleanPhone);
 
-      // 5. Send message via WhatsApp (SOMENTE leads de [KO] Inbound vão para o WhatsApp do Kaká)
+      // 5. Send message via WhatsApp (SOMENTE leads de [KO] Inbound vão para o WhatsApp do Kaká no formato simplificado)
       if (Number(pipelineId) === PIPELINES.KO_INBOUND && targetPhone) {
-        await sendZapi(targetPhone, message);
+        const zapiMsg = formatZapiLeadMessage({
+          origem: determineOrigem(utmSource, utmCampaign, utmMedium),
+          nome: clientName,
+          faturamento: displayFaturamento,
+          cargo: displayCargo,
+          dor: gargalo,
+          phone: phone
+        });
+        await sendZapi(targetPhone, zapiMsg);
       } else if (isMlfpPipeline && targetPhone) {
         await sendWhatsApp(targetPhone, message);
       }
@@ -3648,9 +3696,17 @@ app.post('/api/resend-lead', async (req, res) => {
     const threadId = process.env.TELEGRAM_THREAD_KO || 2;
     await sendTelegram(process.env.TELEGRAM_CHAT_ID, msg, replyMarkup, threadId);
 
-    // Send WhatsApp Kaká
+    // Send WhatsApp Kaká (formato simplificado)
     const kakaPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
-    await sendZapi(kakaPhone, msg);
+    const zapiMsg = formatZapiLeadMessage({
+      origem: determineOrigem(utmSource, utmCampaign, utmMedium),
+      nome: clientName,
+      faturamento: faturamento,
+      cargo: cargo,
+      dor: gargalo,
+      phone: phone
+    });
+    await sendZapi(kakaPhone, zapiMsg);
 
     res.status(200).json({ success: true, message: 'Re-dispatched successfully', leadId });
   } catch (err) {
