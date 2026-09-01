@@ -2553,6 +2553,50 @@ function isFaturamentoAbove3k(faturamento, renda) {
   return fVal >= 3000 || rVal >= 3000;
 }
 
+// Helper to validate Komando MQL (Must be Decision Maker / Partner / Owner AND billing strictly above 50k)
+function isKomandoQualified(cargo, faturamento) {
+  const fat = String(faturamento || '').toLowerCase().trim();
+  
+  // Rejeita explicitamente sub-50k / até 50 mil / não iniciei
+  if (
+    !fat ||
+    fat.includes('até r$ 50') ||
+    fat.includes('até 50 mil') ||
+    fat.includes('ate 50 mil') ||
+    fat.includes('ate r$ 50') ||
+    fat.includes('sub-50k') ||
+    fat.includes('menos de 50') ||
+    fat.includes('não iniciei') ||
+    fat.includes('nao iniciei')
+  ) {
+    return false;
+  }
+
+  // Precisa ser Dono / Sócio / Decisor
+  if (!isPartnerOrOwner(cargo, '')) return false;
+
+  // Precisa ser da faixa de R$ 50k a 100k para cima
+  if (
+    fat.includes('50k a 100k') ||
+    fat.includes('50 a 100') ||
+    fat.includes('50 mil a') ||
+    fat.includes('100 a 150') ||
+    fat.includes('150 a 300') ||
+    fat.includes('300 a 600') ||
+    fat.includes('600 mil a 1 milhão') ||
+    fat.includes('600 e 1 milhão') ||
+    fat.includes('600 e 1 milhao') ||
+    fat.includes('mais de 1 milhão') ||
+    fat.includes('mais de 1 milhao') ||
+    fat.includes('acima de')
+  ) {
+    return true;
+  }
+
+  const num = parseFaturamentoNumber(faturamento);
+  return num >= 50000;
+}
+
 app.post(['/api/ko-webhook', '/api/webhook/komando', '/api/komando-webhook', '/api/webhook/ko-webhook', '/api/webhook/ko'], async (req, res) => {
   console.log('[KO Webhook] Received form submission');
   
@@ -2644,10 +2688,8 @@ app.post(['/api/ko-webhook', '/api/webhook/komando', '/api/komando-webhook', '/a
     if (instagram) leadCustomFields.push({ field_id: 311994, values: [{ value: instagram }] }); // Seu instagram?
     if (ab_variant) leadCustomFields.push({ field_id: 494249, values: [{ value: String(ab_variant) }] }); // Variante A/B (Página)
 
-    // Calculate qualification upfront
-    const isQualifiedRole = isPartnerOrOwner(cargo, '');
-    const isQualifiedBilling = isFaturamentoAbove50k(faturamento, '');
-    const isQualified = isQualifiedBilling || (isQualifiedRole && isFaturamentoAbove3k(faturamento, ''));
+    // Calculate qualification upfront (Komando MQL: Cargo Decisor + Faturamento estritamente ACIMA de R$ 50 mil / mês)
+    const isQualified = isKomandoQualified(cargo, faturamento);
 
     let leadId = null;
     let activeLead = null;
@@ -3357,12 +3399,10 @@ app.post('/api/kommo-lead-created', async (req, res) => {
       let headerTitle = '';
       
       if (isKoPipeline) {
-        const isQualifiedRole = isPartnerOrOwner(displayCargo, '');
-        const isQualifiedBilling = isFaturamentoAbove50k(displayFaturamento, '');
-        isQualified = isQualifiedBilling || (isQualifiedRole && isFaturamentoAbove3k(displayFaturamento, ''));
+        isQualified = isKomandoQualified(displayCargo, displayFaturamento);
         
-        // SOMENTE [KO] Inbound vai para o WhatsApp do Kaká (Ebooks NÃO envia WhatsApp)
-        if (Number(pipelineId) === PIPELINES.KO_INBOUND) {
+        // SOMENTE leads QUALIFICADOS de [KO] Inbound vão para o WhatsApp do Kaká
+        if (Number(pipelineId) === PIPELINES.KO_INBOUND && isQualified) {
           targetPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
         } else {
           targetPhone = '';
@@ -3373,9 +3413,9 @@ app.post('/api/kommo-lead-created', async (req, res) => {
         
         console.log(`[Z-API Webhook] KO Lead ${leadId} qualification check:
           Pipeline: ${pipelineName} (Target WhatsApp: "${targetPhone ? 'Sim' : 'Não'}")
-          Role Check (Partner/Owner): ${isQualifiedRole} (Cargo/Perfil: "${displayCargo}")
-          Billing Check (>= 50k): ${isQualifiedBilling} (Faturamento/Renda: "${displayFaturamento}")
-          Overall Qualified: ${isQualified}
+          Cargo/Perfil: "${displayCargo}"
+          Faturamento/Renda: "${displayFaturamento}"
+          Overall Qualified (MQL > 50k): ${isQualified}
         `);
 
         if (isQualified && (pipelineId === PIPELINES.KO_INBOUND || pipelineId === PIPELINES.KO_EBOOKS)) {
@@ -4931,10 +4971,10 @@ async function getDailyLeadsReport(isYesterday) {
     let isMql = tags.includes('MQL');
     if (lead.pipeline_id === PIPELINES.MLFP && isAux) {
       isMql = false; // Auxiliares da MLFP não entram como MQL
+    } else if (lead.pipeline_id === PIPELINES.KO_INBOUND || lead.pipeline_id === PIPELINES.KO_EBOOKS) {
+      isMql = isKomandoQualified(cargo, faturamento);
     } else if (!isMql) {
-      if (lead.pipeline_id === PIPELINES.KO_INBOUND || lead.pipeline_id === PIPELINES.KO_EBOOKS) {
-        isMql = isPartnerOrOwner(cargo, '') && isFaturamentoAbove50k(faturamento, '');
-      } else if (lead.pipeline_id === PIPELINES.MLFP) {
+      if (lead.pipeline_id === PIPELINES.MLFP) {
         isMql = isFaturamentoAbove3k(faturamento, '');
       } else if (lead.pipeline_id === PIPELINES.KOP) {
         // KOP MQL: Same rule as Komando (Cargo + Faturamento >= 100k)
@@ -6568,8 +6608,101 @@ app.post('/api/track-pageview', async (req, res) => {
   }
 });
 
-// (Rota duplicada de /api/page-analytics removida: o Express registrava duas
-// e a segunda nunca era alcançada. O agregador ativo fica logo acima.)
+// --- Vagas & Candidatos API ---
+
+const CANDIDATOS_FILE_NAME = 'candidatos_vagas.json';
+
+async function readCandidatos() {
+  try {
+    const dados = await lerCache(CANDIDATOS_FILE_NAME, []);
+    return Array.isArray(dados) ? dados : [];
+  } catch (err) {
+    console.error('[Vagas API] Error reading candidatos:', err.message);
+    return [];
+  }
+}
+
+async function writeCandidatos(data) {
+  try {
+    await gravarCache(CANDIDATOS_FILE_NAME, data);
+  } catch (err) {
+    console.error('[Vagas API] Error writing candidatos:', err.message);
+  }
+}
+
+app.options('/api/vagas-candidatura', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+
+app.post('/api/vagas-candidatura', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const cand = req.body || {};
+    if (!cand.nome || !cand.telefone) {
+      return res.status(400).json({ success: false, error: 'Nome e telefone são obrigatórios.' });
+    }
+
+    let list = await readCandidatos();
+    
+    cand.id = cand.id || ('cand_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4));
+    cand.timestamp = cand.timestamp || new Date().toISOString();
+    cand.status = cand.status || 'novo';
+
+    list.unshift(cand);
+    if (list.length > 500) list = list.slice(0, 500);
+
+    await writeCandidatos(list);
+
+    // Notificação Z-API / Telegram
+    try {
+      const cleanPh = (cand.telefone || '').replace(/\D/g, '');
+      const msg = `🎯 *NOVA CANDIDATURA — GESTOR DE TRÁFEGO*\n` +
+                  `👤 *Nome:* ${cand.nome}\n` +
+                  `📱 *WhatsApp:* https://wa.me/55${cleanPh}\n` +
+                  `⭐ *Score:* ${cand.score || 'N/A'}/100 (${cand.score_classificacao || 'Avaliando'})\n` +
+                  `🧠 *DISC:* ${cand.disc_perfil_predominante || 'N/A'}\n` +
+                  `💼 *Experiência:* ${cand.experiencia_infoprodutos || 'N/A'}\n` +
+                  `💰 *Maior Budget:* ${cand.maior_budget || 'N/A'}\n` +
+                  `🔗 *Portfólio:* ${cand.portfolio_link || 'N/A'}`;
+      
+      const kakaPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
+      sendZapi(kakaPhone, msg).catch(() => {});
+      sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, msg).catch(() => {});
+    } catch(e) {}
+
+    res.json({ success: true, id: cand.id });
+  } catch (err) {
+    console.error('[Vagas API] Erro ao salvar candidatura:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.options('/api/vagas-candidatos', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+
+app.get('/api/vagas-candidatos', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const list = await readCandidatos();
+    res.json({ success: true, data: list, total: list.length });
+  } catch (err) {
+    console.error('[Vagas API] Erro ao buscar candidatos:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 
 // Start Server when run locally (not in serverless environment)
