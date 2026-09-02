@@ -403,6 +403,11 @@ app.use((req, res, next) => {
 // Serve static files from the parent (root) directory where index.html, style.css, app.js live
 app.use(express.static(path.join(__dirname, '..')));
 
+// Simulador SDR IA Page Route
+app.get(['/simulador', '/simulador-sdr', '/sdr', '/api/simulador'], (req, res) => {
+  res.sendFile(path.join(__dirname, '../simulador.html'));
+});
+
 // Vercel Environment Detection
 const isVercel = process.env.VERCEL === '1' || !!process.env.NOW_REGION;
 const CACHE_DIR = __dirname;
@@ -5084,6 +5089,362 @@ app.get('/api/cron/daily-report-evening', async (req, res) => {
   }
 });
 
+// ============================================================
+//  AGENTE DE GESTÃO DE TRÁFEGO
+// ============================================================
+// Coleta as duas contas de anúncios, compara com a média móvel de 7 dias e
+// manda um resumo no Telegram duas vezes por dia.
+//
+// A ordenação é sempre por CPL. A análise de agosto/2026 mostrou que CTR
+// (r = −0,08) e retenção de vídeo (r = +0,20) não preveem custo por lead —
+// a campanha de melhor CTR e menor CPC da conta gerou 2 leads a R$ 1.482.
+// Por isso nenhum alerta aqui dispara por métrica de topo de funil.
+
+const CONTAS_TRAFEGO = [
+  { id: 'act_322391662838622', nome: 'Distribuição' },
+  { id: 'act_202384504675778', nome: 'Anunciante' }
+];
+
+// Cada funil tem um objetivo diferente e por isso uma métrica diferente.
+// Medir tudo por lead era errado: KOR e KOP vendem, engajamento busca alcance.
+//   'lead'        — mede cadastro e CPL
+//   'venda'       — mede compra, CPA e ROAS
+//   'engajamento' — mede interação e custo por interação; não tem meta de conversão
+const OBJETIVO_FUNIL = {
+  komando: 'lead',
+  mlfp: 'lead',
+  kor: 'venda',
+  kop: 'venda',
+  ebook: 'venda',
+  recuperacao: 'venda',
+  engajamento: 'engajamento',
+  outros: 'nenhum'
+};
+
+// Teto de CPL. Komando: R$ 866 de receita por lead ÷ 3 (meta ROAS 3×).
+const TETO_CPL = { komando: 289, mlfp: null };
+
+// ROAS abaixo disso em funil de venda vira alerta
+const ROAS_MINIMO = 1.0;
+
+// Verba mínima para um criativo ser considerado testado (≈3 leads ao CPL médio).
+// Não é usada no resumo diário — num único dia quase todo criativo fica abaixo
+// disso, e o alerta viraria ruído. Serve de referência para análise de período.
+const VERBA_MINIMA_TESTE = 450;
+
+const ACOES_LEAD = ['offsite_conversion.fb_pixel_lead', 'lead', 'onsite_web_lead', 'leadgen_grouped'];
+const ACOES_COMPRA = ['purchase', 'offsite_conversion.fb_pixel_purchase', 'omni_purchase', 'onsite_web_purchase'];
+const ACOES_ENGAJAMENTO = ['post_engagement', 'page_engagement'];
+const ACOES_CURTIDA = ['onsite_conversion.post_net_like'];
+
+
+// valor=true lê action_values (receita) em vez de actions (contagem)
+function _valorAcao(linha, tipos, valor) {
+  const m = {};
+  ((valor ? linha.action_values : linha.actions) || []).forEach(a => { m[a.action_type] = parseFloat(a.value) || 0; });
+  for (const t of tipos) if (m[t] !== undefined) return m[t];
+  return 0;
+}
+
+// Datas no fuso de Brasília (UTC−3), independentemente do fuso do servidor
+function dataBrasilia(diasAtras = 0) {
+  const agora = new Date(Date.now() - 3 * 60 * 60 * 1000);
+  agora.setUTCDate(agora.getUTCDate() - diasAtras);
+  return agora.toISOString().slice(0, 10);
+}
+
+async function _insightsConta(contaId, since, until, nivel, tentativa = 1) {
+  const token = (process.env.META_ACCESS_TOKEN && process.env.META_ACCESS_TOKEN.trim()) || DEFAULT_META_ACCESS_TOKEN;
+  const params = new URLSearchParams({
+    time_range: JSON.stringify({ since, until }),
+    fields: 'campaign_name,ad_name,spend,impressions,clicks,ctr,actions,action_values',
+    level: nivel,
+    limit: '500',
+    access_token: token
+  });
+  const r = await fetch(`https://graph.facebook.com/v20.0/${contaId}/insights?${params}`);
+  const j = await r.json();
+  if (j.error) {
+    if (tentativa <= 3) {
+      await new Promise(res => setTimeout(res, tentativa * 5000));
+      return _insightsConta(contaId, since, until, nivel, tentativa + 1);
+    }
+    console.error(`[Tráfego] ${contaId} falhou: ${j.error.message}`);
+    return [];
+  }
+  return j.data || [];
+}
+
+// Coleta as duas contas e agrega por funil e por criativo
+async function coletarTrafego(since, until) {
+  const linhas = [];
+  for (const conta of CONTAS_TRAFEGO) {
+    const camp = await _insightsConta(conta.id, since, until, 'campaign');
+    const ads = await _insightsConta(conta.id, since, until, 'ad');
+    camp.forEach(l => linhas.push({ ...l, conta: conta.nome, nivel: 'campanha' }));
+    ads.forEach(l => linhas.push({ ...l, conta: conta.nome, nivel: 'anuncio' }));
+  }
+
+  const funis = {};
+  const criativos = {};
+  let gasto = 0, leads = 0, impressoes = 0, cliques = 0;
+
+  linhas.filter(l => l.nivel === 'campanha').forEach(l => {
+    const g = parseFloat(l.spend) || 0;
+    const le = _valorAcao(l, ACOES_LEAD);
+    const co = _valorAcao(l, ACOES_COMPRA);
+    const rc = _valorAcao(l, ACOES_COMPRA, true);
+    const en = _valorAcao(l, ACOES_ENGAJAMENTO);
+    const cu = _valorAcao(l, ACOES_CURTIDA);
+    const f = classifyCampaignFunnel(l.campaign_name);
+    if (!funis[f]) funis[f] = { gasto: 0, leads: 0, compras: 0, receita: 0, engajamentos: 0, curtidas: 0, campanhas: [] };
+    funis[f].gasto += g;
+    funis[f].leads += le;
+    funis[f].compras += co;
+    funis[f].receita += rc;
+    funis[f].engajamentos += en;
+    funis[f].curtidas += cu;
+    funis[f].campanhas.push({ nome: l.campaign_name, conta: l.conta, gasto: g, leads: le, compras: co, receita: rc });
+    gasto += g; leads += le;
+    impressoes += parseInt(l.impressions) || 0;
+    cliques += parseInt(l.clicks) || 0;
+  });
+
+  linhas.filter(l => l.nivel === 'anuncio').forEach(l => {
+    const k = `${l.conta}|${l.ad_name || '(sem nome)'}`;
+    if (!criativos[k]) criativos[k] = { nome: l.ad_name || '(sem nome)', conta: l.conta, gasto: 0, leads: 0 };
+    criativos[k].gasto += parseFloat(l.spend) || 0;
+    criativos[k].leads += _valorAcao(l, ACOES_LEAD);
+  });
+
+  return {
+    periodo: { since, until },
+    gasto, leads, impressoes, cliques,
+    cpl: leads ? gasto / leads : null,
+    funis,
+    criativos: Object.values(criativos)
+  };
+}
+
+// Média diária dos 7 dias anteriores, para comparação
+async function referencia7Dias(ateOntem) {
+  const fim = ateOntem;
+  const d = new Date(fim + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 6);
+  const ini = d.toISOString().slice(0, 10);
+  const base = await coletarTrafego(ini, fim);
+  return {
+    gastoDia: base.gasto / 7,
+    leadsDia: base.leads / 7,
+    cpl: base.cpl,
+    cplPorFunil: Object.fromEntries(
+      Object.entries(base.funis).map(([f, v]) => [f, v.leads ? v.gasto / v.leads : null])
+    )
+  };
+}
+
+// Regras de alerta — nenhuma dispara por CTR ou CPC
+function analisarTrafego(hoje, ref) {
+  const alertas = [];
+
+  for (const [funil, v] of Object.entries(hoje.funis)) {
+    if (v.gasto < 50) continue;
+    const objetivo = OBJETIVO_FUNIL[funil] || 'nenhum';
+
+    // Marca e alcance não têm meta de conversão — nunca alertam por isso
+    if (objetivo === 'engajamento' || objetivo === 'nenhum') continue;
+
+    if (objetivo === 'venda') {
+      if (v.compras === 0) {
+        alertas.push({ peso: v.gasto, txt: `*${funil}*: R$ ${v.gasto.toFixed(0)} gastos, nenhuma venda` });
+        continue;
+      }
+      const roas = v.gasto ? v.receita / v.gasto : 0;
+      if (roas < ROAS_MINIMO) {
+        alertas.push({ peso: v.gasto, txt: `*${funil}*: ROAS ${roas.toFixed(2)}× — abaixo do ponto de equilíbrio` });
+      }
+      continue;
+    }
+
+    // objetivo === 'lead'
+    if (v.leads === 0) {
+      alertas.push({ peso: v.gasto, txt: `*${funil}*: R$ ${v.gasto.toFixed(0)} gastos, nenhum lead` });
+      continue;
+    }
+    const cpl = v.gasto / v.leads;
+    const teto = TETO_CPL[funil];
+    if (teto && cpl > teto) {
+      alertas.push({ peso: v.gasto, txt: `*${funil}*: CPL R$ ${cpl.toFixed(0)} — acima do teto de R$ ${teto}` });
+    } else {
+      const cplRef = ref.cplPorFunil[funil];
+      if (cplRef && cpl > cplRef * 1.8) {
+        alertas.push({ peso: v.gasto, txt: `*${funil}*: CPL R$ ${cpl.toFixed(0)}, ${((cpl / cplRef - 1) * 100).toFixed(0)}% acima da média de 7d` });
+      }
+    }
+  }
+
+  // Criativos com verba consumida e nenhum lead
+  hoje.criativos
+    .filter(c => c.gasto >= 100 && c.leads === 0)
+    .sort((a, b) => b.gasto - a.gasto)
+    .slice(0, 3)
+    .forEach(c => alertas.push({ peso: c.gasto, txt: `Criativo *${c.nome}*: R$ ${c.gasto.toFixed(0)} sem lead` }));
+
+  // maior dinheiro em risco primeiro
+  alertas.sort((a, b) => b.peso - a.peso);
+
+  const melhores = hoje.criativos
+    .filter(c => c.leads > 0)
+    .map(c => ({ ...c, cpl: c.gasto / c.leads }))
+    .sort((a, b) => a.cpl - b.cpl)
+    .slice(0, 3);
+
+  return { alertas, melhores };
+}
+
+const ICONE_FUNIL = { komando: '🔴', kop: '📦', kor: '🔄', recuperacao: '♻️', mlfp: '🔵', ebook: '📚', engajamento: '📲', outros: '⚪' };
+
+function montarMensagemTrafego(tipo, hoje, ref, analise) {
+  const brl = v => v == null ? '—' : 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  // menorEhMelhor: no CPL, cair é bom; no gasto, é só informativo
+  const delta = (a, b, menorEhMelhor) => {
+    if (!b || !a) return '—';
+    const p = (a / b - 1) * 100;
+    const sinal = `${p >= 0 ? '+' : ''}${p.toFixed(0)}%`;
+    if (!menorEhMelhor) return sinal;
+    return `${sinal} ${p <= 0 ? '✅' : '⚠️'}`;
+  };
+  const [ano, mes, dia] = hoje.periodo.since.split('-');
+  const dataFmt = `${dia}/${mes}`;
+
+  const cab = tipo === 'manha'
+    ? `📊 *Tráfego · ontem (${dataFmt})*\n_fechamento do dia_`
+    : `📊 *Tráfego · hoje (${dataFmt})*\n_parcial até agora_`;
+
+  const linhas = [cab, ''];
+
+  // ROAS só faz sentido sobre a verba dos funis de venda. Dividir a receita
+  // pelo gasto total incluiria os funis de lead e produziria um número falso.
+  const deVenda = Object.entries(hoje.funis).filter(([f]) => OBJETIVO_FUNIL[f] === 'venda');
+  const gastoVenda = deVenda.reduce((s, [, v]) => s + v.gasto, 0);
+  const totalCompras = deVenda.reduce((s, [, v]) => s + (v.compras || 0), 0);
+  const totalReceita = deVenda.reduce((s, [, v]) => s + (v.receita || 0), 0);
+
+  let totalTxt = `*Total* ${brl(hoje.gasto)} · ${hoje.leads} leads · CPL ${brl(hoje.cpl)}`;
+  if (gastoVenda > 0) {
+    const roasVenda = totalReceita / gastoVenda;
+    totalTxt += `\n*Vendas* ${totalCompras} · receita ${brl(totalReceita)} · ROAS ${roasVenda.toFixed(2)}× _(sobre ${brl(gastoVenda)} de funil de venda)_`;
+  }
+  linhas.push(totalTxt);
+  if (ref && ref.gastoDia) {
+    linhas.push(`_vs média 7d · gasto ${delta(hoje.gasto, ref.gastoDia, false)} · CPL ${delta(hoje.cpl, ref.cpl, true)}_`);
+  }
+  linhas.push('');
+
+  const funisOrd = Object.entries(hoje.funis)
+    .filter(([, v]) => v.gasto >= 1)
+    .sort((a, b) => b[1].gasto - a[1].gasto);
+
+  if (funisOrd.length) {
+    linhas.push('*Por funil*');
+    funisOrd.forEach(([f, v]) => {
+      const ico = ICONE_FUNIL[f] || '⚪';
+      const objetivo = OBJETIVO_FUNIL[f] || 'nenhum';
+      let corpo;
+
+      if (objetivo === 'venda') {
+        const roas = v.gasto ? v.receita / v.gasto : 0;
+        const cpa = v.compras ? brl(v.gasto / v.compras) : '—';
+        corpo = `${v.compras} venda${v.compras === 1 ? '' : 's'} · CPA ${cpa} · ROAS ${roas.toFixed(2)}×`;
+      } else if (objetivo === 'engajamento') {
+        const cpe = v.engajamentos ? (v.gasto / v.engajamentos) : null;
+        corpo = `${v.engajamentos.toLocaleString('pt-BR')} interações · ${cpe ? 'R$ ' + cpe.toFixed(2) : '—'}/interação`;
+        if (v.curtidas) corpo += ` · ${v.curtidas} curtidas`;
+      } else if (objetivo === 'lead') {
+        const cpl = v.leads ? brl(v.gasto / v.leads) : '—';
+        corpo = `${v.leads} lead${v.leads === 1 ? '' : 's'} · CPL ${cpl}`;
+      } else {
+        // funil sem objetivo definido: só o gasto, sem métrica de conversão
+        corpo = '_sem objetivo definido_';
+      }
+
+      linhas.push(`${ico} ${f} · ${brl(v.gasto)} · ${corpo}`);
+    });
+    // nota só aparece quando há campanha de engajamento no período
+    if (funisOrd.some(([f]) => OBJETIVO_FUNIL[f] === 'engajamento')) {
+      linhas.push('_engajamento é medido por interação: visitas ao perfil e seguidores não vêm na API de Anúncios._');
+    }
+    linhas.push('');
+  }
+
+  if (analise.alertas.length) {
+    linhas.push('⚠️ *Precisa de atenção*');
+    analise.alertas.slice(0, 5).forEach(a => linhas.push(`• ${a.txt}`));
+    linhas.push('');
+  }
+
+  if (analise.melhores.length) {
+    linhas.push('🏆 *Melhores criativos*');
+    analise.melhores.forEach(c => linhas.push(`• ${c.nome} · ${c.leads} lead${c.leads === 1 ? '' : 's'} · ${brl(c.cpl)}`));
+    linhas.push('');
+  }
+
+  if (!hoje.gasto) {
+    linhas.push('_Nenhum investimento registrado no período._');
+  }
+
+  return linhas.join('\n');
+}
+
+async function executarRelatorioTrafego(tipo, diaForcado) {
+  // manhã: fecha o dia anterior · noite: parcial do dia corrente
+  // diaForcado permite conferir uma data específica sem esperar o cron
+  const dia = diaForcado || (tipo === 'manha' ? dataBrasilia(1) : dataBrasilia(0));
+  const hoje = await coletarTrafego(dia, dia);
+  let ref = null;
+  try { ref = await referencia7Dias(dataBrasilia(1)); } catch (e) { console.error('[Tráfego] referência 7d falhou:', e.message); }
+  const analise = analisarTrafego(hoje, ref || { cplPorFunil: {} });
+  return montarMensagemTrafego(tipo, hoje, ref, analise);
+}
+
+// 09:00 de Brasília = 12:00 UTC
+app.get(['/api/cron/trafego-manha', '/api/reports/trafego-manha'], async (req, res) => {
+  try {
+    const msg = await executarRelatorioTrafego('manha');
+    await sendTelegram(process.env.TELEGRAM_CHAT_ID_TRAFEGO || process.env.TELEGRAM_CHAT_ID, msg);
+    res.json({ success: true, tipo: 'manha', preview: msg });
+  } catch (err) {
+    console.error('[Cron Tráfego manhã]', err);
+    await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, `🚨 *[Erro Tráfego manhã]*\n${err.message}`).catch(() => {});
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 22:00 de Brasília = 01:00 UTC do dia seguinte
+app.get(['/api/cron/trafego-noite', '/api/reports/trafego-noite'], async (req, res) => {
+  try {
+    const msg = await executarRelatorioTrafego('noite');
+    await sendTelegram(process.env.TELEGRAM_CHAT_ID_TRAFEGO || process.env.TELEGRAM_CHAT_ID, msg);
+    res.json({ success: true, tipo: 'noite', preview: msg });
+  } catch (err) {
+    console.error('[Cron Tráfego noite]', err);
+    await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, `🚨 *[Erro Tráfego noite]*\n${err.message}`).catch(() => {});
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Pré-visualização sem enviar nada ao Telegram
+app.get('/api/trafego/preview', async (req, res) => {
+  try {
+    const tipo = req.query.tipo === 'noite' ? 'noite' : 'manha';
+    const dia = /^\d{4}-\d{2}-\d{2}$/.test(req.query.data || '') ? req.query.data : null;
+    res.type('text/plain').send(await executarRelatorioTrafego(tipo, dia));
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+
 // Telegram Callback Query Handler (handles button clicks)
 async function handleTelegramCallback(callbackQuery, res) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -6704,6 +7065,28 @@ app.get('/api/vagas-candidatos', async (req, res) => {
   }
 });
 
+app.delete('/api/vagas-candidatos', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const id = req.body?.id || req.query?.id;
+    const telefone = req.body?.telefone || req.query?.telefone;
+    let list = await readCandidatos();
+    if (id) {
+      list = list.filter(c => c.id !== id);
+    } else if (telefone) {
+      const clean = telefone.replace(/\D/g, '');
+      list = list.filter(c => (c.telefone || '').replace(/\D/g, '') !== clean);
+    }
+    await writeCandidatos(list);
+    res.json({ success: true, total: list.length });
+  } catch (err) {
+    console.error('[Vagas API] Erro ao deletar candidato:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // Start Server when run locally (not in serverless environment)
 if (!isVercel) {

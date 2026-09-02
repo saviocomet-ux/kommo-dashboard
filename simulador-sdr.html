@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador SDR I.A. — Carol (Chef Kaká Gomes)</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 0.3; transform: scale(0.8); }
+      50% { opacity: 1; transform: scale(1.1); }
+    }
+    .typing-dot:nth-child(1) { animation: pulse-dot 1.2s infinite ease-in-out 0s; }
+    .typing-dot:nth-child(2) { animation: pulse-dot 1.2s infinite ease-in-out 0.2s; }
+    .typing-dot:nth-child(3) { animation: pulse-dot 1.2s infinite ease-in-out 0.4s; }
+    
+    .chat-scroll::-webkit-scrollbar { width: 5px; }
+    .chat-scroll::-webkit-scrollbar-track { background: transparent; }
+    .chat-scroll::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.3); border-radius: 4px; }
+    
+    .waveform-bar {
+      display: inline-block;
+      width: 3px;
+      margin: 0 1px;
+      background-color: #60a5fa;
+      border-radius: 2px;
+      transition: height 0.2s ease;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans flex flex-col antialiased selection:bg-orange-500 selection:text-white">
+
+  <!-- Top Navigation Bar -->
+  <header class="bg-slate-900/90 border-b border-slate-800 backdrop-blur sticky top-0 z-30 px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center space-x-3">
+      <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-orange-600 to-amber-500 flex items-center justify-center font-bold text-white shadow-lg shadow-orange-500/20">
+        <i class="fa-solid fa-robot text-lg"></i>
+      </div>
+      <div>
+        <div class="flex items-center space-x-2">
+          <h1 class="font-bold text-base md:text-lg text-white">Carol AI — Simulador SDR Inteligente</h1>
+          <span class="px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Chef Kaká Gomes</span>
+        </div>
+        <p class="text-xs text-slate-400">Atendimento Consultivo • SPIN Selling • Formação MLFP & KOR</p>
+      </div>
+    </div>
+
+    <div class="flex items-center space-x-2">
+      <button onclick="openPromptModal()" class="px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 flex items-center space-x-1.5 transition">
+        <i class="fa-solid fa-code text-orange-400"></i>
+        <span class="hidden sm:inline">Ver Prompt do Sistema</span>
+      </button>
+      <button onclick="resetConversation()" class="px-3 py-1.5 text-xs font-semibold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded-lg border border-rose-500/30 flex items-center space-x-1.5 transition">
+        <i class="fa-solid fa-rotate-left"></i>
+        <span>Reiniciar</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Content Layout -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-3 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Left / Center Column: WhatsApp Simulation (7 Cols on LG) -->
+    <div class="lg:col-span-7 flex flex-col bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl h-[750px] relative">
+      
+      <!-- WhatsApp Header -->
+      <div class="bg-slate-800/95 px-4 py-3 border-b border-slate-700 flex items-center justify-between z-10">
+        <div class="flex items-center space-x-3">
+          <div class="relative">
+            <img src="https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=120&auto=format&fit=crop&q=80" alt="Carol SDR" class="w-10 h-10 rounded-full object-cover border border-emerald-500/50">
+            <span class="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-slate-800 rounded-full"></span>
+          </div>
+          <div>
+            <div class="flex items-center space-x-2">
+              <span class="font-bold text-sm text-white">Carol • SDR Chef Kaká</span>
+              <i class="fa-solid fa-circle-check text-blue-400 text-xs" title="Verificada"></i>
+            </div>
+            <p id="sdr-status" class="text-xs text-emerald-400 flex items-center space-x-1 font-medium">
+              <span>online</span>
+            </p>
+          </div>
+        </div>
+
+        <!-- Funnel Badge Indicator -->
+        <div id="funnel-badge" class="px-2.5 py-1 text-xs font-bold rounded-lg bg-blue-500/20 text-blue-300 border border-blue-500/30 flex items-center space-x-1">
+          <i class="fa-solid fa-utensils text-blue-400"></i>
+          <span>Funil: Formação MLFP</span>
+        </div>
+      </div>
+
+      <!-- WhatsApp Messages Body -->
+      <div id="chat-messages" class="flex-1 p-4 overflow-y-auto chat-scroll space-y-3 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:16px_16px] bg-slate-950/60">
+        <!-- Messages will be rendered dynamically -->
+      </div>
+
+      <!-- Typing Indicator (Hidden by default) -->
+      <div id="typing-indicator" class="hidden px-4 py-2 bg-transparent">
+        <div class="inline-flex items-center space-x-2 bg-slate-800 text-slate-300 text-xs px-3 py-2 rounded-2xl rounded-bl-sm border border-slate-700">
+          <i class="fa-solid fa-microphone text-orange-400 text-xs animate-pulse"></i>
+          <span>Carol está digitando</span>
+          <span class="inline-flex space-x-1">
+            <span class="w-1.5 h-1.5 bg-orange-400 rounded-full typing-dot"></span>
+            <span class="w-1.5 h-1.5 bg-orange-400 rounded-full typing-dot"></span>
+            <span class="w-1.5 h-1.5 bg-orange-400 rounded-full typing-dot"></span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Quick Interactive Suggestions for Lead -->
+      <div class="bg-slate-900/90 border-t border-slate-800 p-2 overflow-x-auto whitespace-nowrap space-x-2 flex items-center">
+        <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider pl-1"><i class="fa-solid fa-bolt text-amber-400 mr-1"></i>Respostas Rápidas:</span>
+        <button onclick="sendQuickReply(this.innerText)" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-full border border-slate-700 transition">Minha brigada vive desorganizada e os pedidos atrasam</button>
+        <button onclick="sendQuickReply(this.innerText)" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-full border border-slate-700 transition">Quanto custa a formação?</button>
+        <button onclick="sendQuickReply(this.innerText)" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-full border border-slate-700 transition">Não tenho tempo pra reunião, vivo na correria</button>
+        <button onclick="sendQuickReply(this.innerText)" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-full border border-slate-700 transition">Preciso falar com meu sócio primeiro</button>
+        <button onclick="sendQuickReply(this.innerText)" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-full border border-slate-700 transition">Quero agendar o diagnóstico gratuito amanhã às 15h!</button>
+      </div>
+
+      <!-- WhatsApp Input Bar -->
+      <form onsubmit="handleUserSubmit(event)" class="bg-slate-850 p-3 border-t border-slate-800 flex items-center space-x-2">
+        <input id="user-input" type="text" placeholder="Digite uma resposta como lead para testar a I.A..." class="flex-1 bg-slate-900 border border-slate-700 focus:border-orange-500 focus:ring-1 focus:ring-orange-500 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 outline-none transition">
+        <button type="submit" class="w-10 h-10 bg-orange-600 hover:bg-orange-500 text-white rounded-xl flex items-center justify-center transition shadow-lg shadow-orange-600/20 active:scale-95">
+          <i class="fa-solid fa-paper-plane text-sm"></i>
+        </button>
+      </form>
+    </div>
+
+    <!-- Right Column: SDR Intelligence, Personas & Strategy (5 Cols on LG) -->
+    <div class="lg:col-span-5 space-y-5 flex flex-col h-[750px] overflow-y-auto chat-scroll pr-1">
+      
+      <!-- 1. Persona & Funnel Selector Card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-bold text-white uppercase tracking-wide flex items-center">
+            <i class="fa-solid fa-users-viewfinder text-orange-500 mr-2"></i>Escolha o Cenário / Persona
+          </h2>
+          <span class="text-xs text-slate-400">Simule perfis reais</span>
+        </div>
+
+        <div class="grid grid-cols-1 gap-2">
+          <!-- Persona 1: MLFP Chef Marcelo -->
+          <div onclick="selectPersona('mlfp_marcelo')" id="persona-mlfp_marcelo" class="persona-card p-3 rounded-xl border border-blue-500/40 bg-blue-950/20 hover:bg-blue-950/40 cursor-pointer transition flex items-start space-x-3">
+            <div class="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold shrink-0 text-xs">
+              👨‍🍳
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between">
+                <h3 class="text-xs font-bold text-blue-300 truncate">Chef Marcelo • Cozinha no Caos</h3>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-semibold">MLFP</span>
+              </div>
+              <p class="text-[11px] text-slate-400 line-clamp-1 mt-0.5">Chef executivo, 8 funcionários, sem processos, vive apagando fogo.</p>
+            </div>
+          </div>
+
+          <!-- Persona 2: MLFP Ana Subchef -->
+          <div onclick="selectPersona('mlfp_ana')" id="persona-mlfp_ana" class="persona-card p-3 rounded-xl border border-slate-800 bg-slate-950 hover:bg-slate-800/60 cursor-pointer transition flex items-start space-x-3">
+            <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold shrink-0 text-xs">
+              👩‍🍳
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between">
+                <h3 class="text-xs font-bold text-slate-200 truncate">Ana • Subchef Buscando Reconhecimento</h3>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400 font-semibold">MLFP</span>
+              </div>
+              <p class="text-[11px] text-slate-400 line-clamp-1 mt-0.5">Brigada não obedece, ganha R$ 3.800, quer liderar com autoridade.</p>
+            </div>
+          </div>
+
+          <!-- Persona 3: KOR Rodrigo (Downsell) -->
+          <div onclick="selectPersona('kor_rodrigo')" id="persona-kor_rodrigo" class="persona-card p-3 rounded-xl border border-slate-800 bg-slate-950 hover:bg-slate-800/60 cursor-pointer transition flex items-start space-x-3">
+            <div class="w-8 h-8 rounded-lg bg-orange-600 flex items-center justify-center text-white font-bold shrink-0 text-xs">
+              🍔
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between">
+                <h3 class="text-xs font-bold text-slate-200 truncate">Rodrigo • Dono Hamburgueria (R$ 35k)</h3>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400 font-semibold">KOR Downsell</span>
+              </div>
+              <p class="text-[11px] text-slate-400 line-clamp-1 mt-0.5">CMV em 42%, descontrole de estoque. Perfil ideal para KOR R$ 97.</p>
+            </div>
+          </div>
+
+          <!-- Persona 4: KOR Upsell Carlos -->
+          <div onclick="selectPersona('kor_carlos')" id="persona-kor_carlos" class="persona-card p-3 rounded-xl border border-slate-800 bg-slate-950 hover:bg-slate-800/60 cursor-pointer transition flex items-start space-x-3">
+            <div class="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white font-bold shrink-0 text-xs">
+              📈
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between">
+                <h3 class="text-xs font-bold text-slate-200 truncate">Carlos • Comprador KOR (Fatura R$ 120k)</h3>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-semibold">Upsell Komando</span>
+              </div>
+              <p class="text-[11px] text-slate-400 line-clamp-1 mt-0.5">Comprou o KOR de R$ 97, mas tem alto faturamento. MQL imediato!</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Live SDR Brain & Strategy Monitor -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+          <h2 class="text-sm font-bold text-white uppercase tracking-wide flex items-center">
+            <i class="fa-solid fa-brain text-purple-400 mr-2"></i>Raio-X da Estratégia (I.A. Thinking)
+          </h2>
+          <span class="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded border border-purple-500/30 font-semibold animate-pulse">Tempo Real</span>
+        </div>
+
+        <!-- SPIN Stage Progression Bar -->
+        <div>
+          <div class="flex justify-between text-xs mb-1.5">
+            <span class="text-slate-400 font-medium">Estágio Metodologia SPIN:</span>
+            <span id="spin-stage-text" class="text-orange-400 font-bold">1. Situação (Investigação)</span>
+          </div>
+          <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden flex">
+            <div id="spin-bar" class="bg-gradient-to-r from-orange-500 to-amber-400 h-full w-1/4 transition-all duration-500"></div>
+          </div>
+          <div class="flex justify-between text-[10px] text-slate-500 mt-1 font-mono">
+            <span>[S] Situação</span>
+            <span>[P] Problema</span>
+            <span>[I] Implicação</span>
+            <span>[N] Solução/CTA</span>
+          </div>
+        </div>
+
+        <!-- Strategic Cards Matrix -->
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+            <span class="text-slate-400 block text-[10px] uppercase font-bold">Qualificação Lead (MQL):</span>
+            <span id="mql-status" class="text-emerald-400 font-bold text-sm">🔥 85% Qualificado</span>
+          </div>
+          <div class="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+            <span class="text-slate-400 block text-[10px] uppercase font-bold">Intenção / Objeção:</span>
+            <span id="detected-objection" class="text-amber-400 font-bold text-sm">Problema de Gestão</span>
+          </div>
+        </div>
+
+        <!-- Next Tactical Move -->
+        <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+          <span class="text-slate-400 block text-[10px] uppercase font-bold mb-1 flex items-center">
+            <i class="fa-solid fa-crosshairs text-orange-500 mr-1.5"></i>Próximo Movimento da SDR:
+          </span>
+          <p id="next-move-text" class="text-xs text-slate-300 leading-relaxed">
+            Fazer pergunta aberta sobre a rotina da cozinha para extrair a dor do apagamento de incêndio diário.
+          </p>
+        </div>
+
+        <!-- Live CRM Tags To Apply -->
+        <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+          <span class="text-slate-400 block text-[10px] uppercase font-bold mb-1.5 flex items-center">
+            <i class="fa-solid fa-tags text-blue-400 mr-1.5"></i>Tags no Kommo CRM (Simuladas):
+          </span>
+          <div id="crm-tags-container" class="flex flex-wrap gap-1.5">
+            <span class="px-2 py-0.5 text-[10px] font-semibold bg-blue-500/20 text-blue-300 rounded border border-blue-500/30">LP_MLFP</span>
+            <span class="px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 rounded border border-emerald-500/30">MQL</span>
+            <span class="px-2 py-0.5 text-[10px] font-semibold bg-slate-800 text-slate-300 rounded border border-slate-700">Tentando Contato</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Modal: System Prompt Architecture -->
+  <div id="prompt-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 w-full max-w-4xl rounded-2xl max-h-[85vh] flex flex-col shadow-2xl">
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <i class="fa-solid fa-terminal text-orange-500"></i>
+          <h3 class="font-bold text-white text-base">Prompt de Sistema do Agente SDR (Carol AI)</h3>
+        </div>
+        <button onclick="closePromptModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="p-4 overflow-y-auto chat-scroll flex-1 font-mono text-xs text-slate-300 leading-relaxed bg-slate-950">
+        <div class="flex justify-between items-center mb-2">
+          <span class="text-slate-400 font-bold uppercase">Copie para seu n8n, Typebot, Vapi ou Evolution API:</span>
+          <button onclick="copyPromptToClipboard()" id="copy-btn" class="px-3 py-1 bg-orange-600 hover:bg-orange-500 text-white rounded text-xs transition">
+            <i class="fa-solid fa-copy mr-1"></i>Copiar Prompt
+          </button>
+        </div>
+        <pre id="prompt-text" class="p-4 bg-slate-900 rounded-xl border border-slate-800 whitespace-pre-wrap selection:bg-orange-600 selection:text-white">
+Você é a Carol, SDR Comercial e Consultora Sênior da equipe do Chef Kaká Gomes.
+Seu objetivo principal é qualificar donos de restaurante, chefs e líderes de cozinha que solicitaram contato e conduzi-los para o AGENDAMENTO de uma Sessão de Diagnóstico Exclusiva (15 a 20 min com o Especialista).
+
+# 1. PERSONAS E PRODUTOS QUE VOCÊ REPRESENTA:
+
+A) FORMAÇÃO LÍDER FAIXA PRETA (MLFP) - R$ 3.497:
+- Público: Chefs, Líderes de Cozinha, Subchefs, Gerentes e Gestores de Gastronomia (renda >= R$ 3k).
+- Dores: Cozinha caótica, equipe desorganizada, falta de processos, pedidos atrasados, viver apagando fogo e dormindo mal.
+- Gancho da LP: Diagnóstico Exclusivo Gratuito para Chefs e Líderes.
+- Regra de Ouro: NUNCA chame de "curso" ou "mentoria". É a "Formação Líder Faixa Preta".
+
+B) K.O.R. (KOMANDO PARA RESTAURANTES) - R$ 97:
+- Público: Donos de restaurante de menor porte (< R$ 50k faturamento) que não têm como investir na Formação/Komando agora.
+- Downsell: Se o lead disser que não tem dinheiro ou for desqualificado para a Formação, apresente o K.O.R. como porta de entrada.
+
+C) CONSULTORIA KOMANDO (HIGH-TICKET) - R$ 30.000:
+- Público: Donos e Sócios com faturamento > R$ 50k/mês.
+
+# 2. DIRETRIZES DE COMUNICAÇÃO NO WHATSAPP (ULTRA HUMANO):
+- Fale como uma pessoa real no WhatsApp: use mensagens curtas (1 a 3 parágrafos curtos).
+- Use pontuação natural, emojis moderados (👋, 🎯, 🍳, ☀️, 🤝) e quebras de linha.
+- Nunca mande blocos gigantescos de texto ou listas robóticas no primeiro contato.
+- Faça SEMPRE uma única pergunta clara no final de cada mensagem para manter a conversa fluindo.
+- Escuta Ativa: antes de responder, valide o que o lead disse ("Entendo perfeitamente, Chef...", "Com certeza, isso é muito comum em cozinhas...").
+
+# 3. METODOLOGIA DE VENDAS (SPIN SELLING):
+1. [SITUAÇÃO]: Pergunte como é a estrutura hoje (tamanho da brigada, tipo de cardápio).
+2. [PROBLEMA]: Identifique o maior gargalo (correria nos pedidos, CMV alto, rotatividade).
+3. [IMPLICAÇÃO]: Mostre o custo de não resolver (exaustão física, perda de dinheiro, brigadas sem processo).
+4. [NECESSIDADE/CTA]: Conecte com o Diagnóstico Gratuito e ofereça duas opções de horário ("Fica melhor amanhã às 10h ou às 15h?").
+
+# 4. TRATAMENTO DE OBJEÇÕES:
+- "Quanto custa?": "A sessão de Diagnóstico com nosso especialista é 100% gratuita! No final dela, se fizer sentido pra sua cozinha, a gente te apresenta as condições da Formação. Posso reservar seu horário?"
+- "Não tenho tempo": "Com certeza! É exatamente por estar sobrecarregado que você precisa dessa conversa de 15 minutos: pra sair do operacional e parar de apagar fogo."
+- "Preciso falar com meu sócio": "Perfeito! Na nossa sessão de diagnóstico, a gente monta um resumo estratégico que você pode mostrar pro seu sócio em 5 minutos."
+        </pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Client-Side Simulation Logic -->
+  <script>
+    // State
+    let currentPersona = 'mlfp_marcelo';
+    let spinStage = 1; // 1: S, 2: P, 3: I, 4: N/CTA
+    let leadName = 'Chef Marcelo';
+    let isTyping = false;
+
+    const personas = {
+      mlfp_marcelo: {
+        name: 'Chef Marcelo',
+        role: 'Chef Executivo',
+        funnel: 'Formação MLFP',
+        badgeColor: 'blue',
+        faturamento: 'R$ 80k restaurante',
+        team: '8 cozinheiros',
+        initialMessage: 'Fala, Marcelo! Tudo bem? 👋 Aqui é a Carol, da equipe do Chef Kaká Gomes.\n\nVi que você solicitou o seu **Diagnóstico Exclusivo para Chefs e Líderes de Cozinha** 🍳🎯\n\nAntes de agendarmos sua sessão, me conta: qual é o maior desafio que você enfrenta hoje na sua cozinha? (Falta de processos, correria nos pedidos, equipe desmotivada?)',
+        tags: ['LP_MLFP', 'MQL', 'Tentando Contato']
+      },
+      mlfp_ana: {
+        name: 'Ana',
+        role: 'Subchef de Cozinha',
+        funnel: 'Formação MLFP',
+        badgeColor: 'indigo',
+        faturamento: 'Renda R$ 3.800',
+        team: '5 ajudantes',
+        initialMessage: 'Olá, Ana! Tudo bem? 👋 Aqui é a Carol, da equipe do Chef Kaká Gomes.\n\nVi que você se cadastrou para o **Diagnóstico Gratuito para Líderes de Cozinha**.\n\nVocê já atua hoje como líder ou subchef na sua brigada? Qual tem sido sua maior dificuldade com a equipe?',
+        tags: ['LP_MLFP', 'Subchef', 'Tentando Contato']
+      },
+      kor_rodrigo: {
+        name: 'Rodrigo',
+        role: 'Dono de Hamburgueria',
+        funnel: 'KOR (Downsell)',
+        badgeColor: 'orange',
+        faturamento: 'R$ 35k/mês',
+        team: '3 pessoas',
+        initialMessage: 'Fala, Rodrigo! Tudo bem? 😊 Aqui é a Carol do time do Chef Kaká.\n\nVi que você tem uma hamburgueria faturando cerca de R$ 35 mil. O Kaká criou o **K.O.R. — Komando para Restaurantes** (treinamento prático de R$ 97) para donos que precisam organizar ficha técnica e baixar o CMV em até 30%.\n\nComo está o seu controle de desperdício e CMV hoje?',
+        tags: ['KOR_Downsell', 'Hamburgueria', 'Faturamento_35k']
+      },
+      kor_carlos: {
+        name: 'Carlos',
+        role: 'Dono de Restaurante',
+        funnel: 'Upsell Komando',
+        badgeColor: 'emerald',
+        faturamento: 'R$ 120k/mês',
+        team: '14 colaboradores',
+        initialMessage: 'Carlos, parabéns pela compra do K.O.R.! 🎉 Aqui é a Carol, do time do Chef Kaká.\n\nVi aqui no seu cadastro pós-compra que seu restaurante já fatura R$ 120k/mês. Com essa estrutura, você já tem perfil para ir direto para a **Consultoria Komando** com o próprio Kaká.\n\nPodemos marcar uma sessão estratégica rápida essa semana para alinhar seu plano de escala?',
+        tags: ['KOR_Comprador', 'MQL', 'Upsell_Komando', 'Faturamento_120k']
+      }
+    };
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      selectPersona('mlfp_marcelo');
+    });
+
+    function selectPersona(key) {
+      currentPersona = key;
+      const p = personas[key];
+      leadName = p.name;
+      spinStage = 1;
+
+      // Update Persona UI highlight
+      document.querySelectorAll('.persona-card').forEach(card => {
+        card.classList.remove('border-blue-500/80', 'bg-blue-950/40', 'border-indigo-500/80', 'border-orange-500/80', 'border-emerald-500/80');
+        card.classList.add('border-slate-800', 'bg-slate-950');
+      });
+
+      const activeCard = document.getElementById(`persona-${key}`);
+      if (activeCard) {
+        activeCard.classList.remove('border-slate-800', 'bg-slate-950');
+        activeCard.classList.add(`border-${p.badgeColor}-500/80`, `bg-${p.badgeColor}-950/30`);
+      }
+
+      // Update Funnel Badge
+      const badge = document.getElementById('funnel-badge');
+      badge.innerHTML = `<i class="fa-solid fa-utensils mr-1"></i><span>Funil: ${p.funnel}</span>`;
+      badge.className = `px-2.5 py-1 text-xs font-bold rounded-lg bg-${p.badgeColor}-500/20 text-${p.badgeColor}-300 border border-${p.badgeColor}-500/30 flex items-center space-x-1`;
+
+      // Clear & render initial chat
+      const chat = document.getElementById('chat-messages');
+      chat.innerHTML = '';
+
+      renderMessage('sdr', p.initialMessage);
+      updateStrategyPanel();
+    }
+
+    function renderMessage(sender, text, isAudio = false) {
+      const chat = document.getElementById('chat-messages');
+      const time = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const msgDiv = document.createElement('div');
+
+      if (sender === 'sdr') {
+        msgDiv.className = 'flex flex-col items-start max-w-[85%]';
+        
+        let contentHtml = '';
+        if (isAudio) {
+          contentHtml = `
+            <div class="bg-slate-800 border border-slate-700 text-slate-100 p-3 rounded-2xl rounded-tl-sm shadow-md flex items-center space-x-3 w-64">
+              <button onclick="toggleAudio(this)" class="w-8 h-8 rounded-full bg-orange-600 hover:bg-orange-500 text-white flex items-center justify-center shrink-0 transition">
+                <i class="fa-solid fa-play text-xs pl-0.5"></i>
+              </button>
+              <div class="flex-1">
+                <div class="flex items-center space-x-0.5 h-6">
+                  <span class="waveform-bar h-2"></span>
+                  <span class="waveform-bar h-4"></span>
+                  <span class="waveform-bar h-5"></span>
+                  <span class="waveform-bar h-3"></span>
+                  <span class="waveform-bar h-6"></span>
+                  <span class="waveform-bar h-4"></span>
+                  <span class="waveform-bar h-2"></span>
+                  <span class="waveform-bar h-5"></span>
+                  <span class="waveform-bar h-3"></span>
+                </div>
+                <div class="flex justify-between text-[10px] text-slate-400 mt-0.5">
+                  <span>0:24</span>
+                  <span>Nota de voz da Simone</span>
+                </div>
+              </div>
+            </div>
+            <span class="text-[10px] text-slate-500 mt-1 pl-1">${time}</span>
+          `;
+        } else {
+          // Format markdown bold & breaks
+          const formatted = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+          contentHtml = `
+            <div class="bg-slate-800 border border-slate-700 text-slate-100 px-3.5 py-2.5 rounded-2xl rounded-tl-sm shadow-md text-xs leading-relaxed">
+              ${formatted}
+            </div>
+            <span class="text-[10px] text-slate-500 mt-1 pl-1">${time}</span>
+          `;
+        }
+        msgDiv.innerHTML = contentHtml;
+      } else {
+        msgDiv.className = 'flex flex-col items-end ml-auto max-w-[85%]';
+        const formatted = text.replace(/\n/g, '<br>');
+        msgDiv.innerHTML = `
+          <div class="bg-orange-600 text-white px-3.5 py-2.5 rounded-2xl rounded-tr-sm shadow-md text-xs leading-relaxed">
+            ${formatted}
+          </div>
+          <span class="text-[10px] text-slate-500 mt-1 pr-1 flex items-center space-x-1">
+            <span>${time}</span>
+            <i class="fa-solid fa-check-double text-blue-400 text-[10px]"></i>
+          </span>
+        `;
+      }
+
+      chat.appendChild(msgDiv);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function handleUserSubmit(e) {
+      e.preventDefault();
+      const input = document.getElementById('user-input');
+      const text = input.value.trim();
+      if (!text) return;
+
+      input.value = '';
+      renderMessage('user', text);
+      processSdrResponse(text);
+    }
+
+    function sendQuickReply(text) {
+      renderMessage('user', text);
+      processSdrResponse(text);
+    }
+
+    function processSdrResponse(userText) {
+      const lower = userText.toLowerCase();
+      const typing = document.getElementById('typing-indicator');
+      const chat = document.getElementById('chat-messages');
+      typing.classList.remove('hidden');
+      chat.scrollTop = chat.scrollHeight;
+
+      let delay = 1400;
+
+      setTimeout(() => {
+        typing.classList.add('hidden');
+        let reply = '';
+        let objection = 'Nenhuma';
+
+        // Intent / Objection Detection Engine
+        if (lower.includes('quanto custa') || lower.includes('preço') || lower.includes('valor')) {
+          objection = 'Objeção de Preço (Ancoragem)';
+          reply = `Entendo sua dúvida, ${leadName}! 😊\n\nNossa sessão de **Diagnóstico é 100% gratuita** e sem compromisso. Nela a gente traça o raio-x da sua operação e, se fizer sentido para o momento da sua cozinha, apresentamos os detalhes da Formação.\n\nFica melhor pra você amanhã às 10h ou às 15h?`;
+          spinStage = 4;
+        } else if (lower.includes('tempo') || lower.includes('correria') || lower.includes('ocupado') || lower.includes('loucura')) {
+          objection = 'Objeção de Tempo';
+          reply = `Com certeza, ${leadName}! Eu sei que chão de cozinha é uma loucura diária. 🍳\n\nMas é justamente por estar sobrecarregado que essa conversa de 15 minutos é essencial: para você parar de apagar incêndios e montar processos que te devolvam tempo.\n\nPodemos fazer bem rápido às 14h ou às 17h?`;
+          spinStage = 3;
+        } else if (lower.includes('sócio') || lower.includes('socio') || lower.includes('parceiro')) {
+          objection = 'Decisor Compartilhado (Sócio)';
+          reply = `Perfeito! Inclusive é ótimo alinhar com o sócio. 🤝\n\nNa nossa sessão a gente monta um plano prático com pontos de melhoria que você pode mostrar para ele em 5 minutos.\n\nVocê prefere agendar hoje no fim do dia ou amanhã de manhã?`;
+          spinStage = 4;
+        } else if (lower.includes('desorganizada') || lower.includes('processo') || lower.includes('atrasa') || lower.includes('equipe') || lower.includes('gente')) {
+          objection = 'Dor Operacional Revelada';
+          reply = `É exatamente isso que o Chef Kaká mais vê em cozinhas pelo Brasil: quando não há fichas técnicas e método de praça, tudo estoura no colo do líder.\n\nQuanto tempo você estima que perde por dia tendo que refazer pratos ou cobrir funcionário que faltou?`;
+          spinStage = 3;
+        } else if (lower.includes('agendar') || lower.includes('amanhã') || lower.includes('15h') || lower.includes('10h') || lower.includes('sim') || lower.includes('quero')) {
+          objection = 'Pronto para Fechamento (Show-Up)';
+          reply = `Sensacional, ${leadName}! 🚀 Sua sessão está pré-agendada!\n\n📅 **Horário reservado com o especialista.**\n📍 Vou gerar o link do Google Meet e te mandar aqui.\n\nPeço só que confirme presença para travarmos o horário na agenda, combinado?`;
+          spinStage = 4;
+        } else {
+          // Default SPIN Progression
+          if (spinStage === 1) {
+            reply = `Entendi, ${leadName}. E me diz uma coisa: quantos cozinheiros você comanda hoje e qual tem sido a maior dor de cabeça na hora do pico dos pedidos?`;
+            spinStage = 2;
+          } else if (spinStage === 2) {
+            reply = `Isso é pesado demais... Quando a brigada não tem autonomia, você vira refém da cozinha e não consegue ter vida fora do restaurante.\n\nNo nosso **Diagnóstico Gratuito**, a gente te mostra como aplicar o método Faixa Preta pra ter uma equipe que roda sozinha.\n\nPodemos fazer amanhã às 11h ou às 16h?`;
+            spinStage = 4;
+          } else {
+            reply = `Perfeito! O especialista já está com a agenda aberta para te atender. Qual horário funciona melhor para você essa semana?`;
+          }
+        }
+
+        renderMessage('sdr', reply);
+        updateStrategyPanel(objection);
+      }, delay);
+    }
+
+    function updateStrategyPanel(objection = 'Nenhuma') {
+      const stageText = document.getElementById('spin-stage-text');
+      const spinBar = document.getElementById('spin-bar');
+      const mqlStatus = document.getElementById('mql-status');
+      const objText = document.getElementById('detected-objection');
+      const nextMove = document.getElementById('next-move-text');
+      const tagsCont = document.getElementById('crm-tags-container');
+
+      if (spinStage === 1) {
+        stageText.innerText = '1. Situação (Investigando Cenário)';
+        spinBar.style.width = '25%';
+        mqlStatus.innerText = '🟡 60% Qualificando';
+        nextMove.innerText = 'Entender o tamanho da equipe e a rotina de trabalho do líder.';
+      } else if (spinStage === 2) {
+        stageText.innerText = '2. Problema (Identificando Gargalo)';
+        spinBar.style.width = '50%';
+        mqlStatus.innerText = '🟡 75% Qualificado';
+        nextMove.innerText = 'Fazer o lead admitir onde estão os maiores atritos e atrasos da cozinha.';
+      } else if (spinStage === 3) {
+        stageText.innerText = '3. Implicação (Profundidade da Dor)';
+        spinBar.style.width = '75%';
+        mqlStatus.innerText = '🔥 90% MQL Confirmado';
+        nextMove.innerText = 'Mostrar o impacto de continuar apagando fogo e propor a solução.';
+      } else {
+        stageText.innerText = '4. Necessidade & CTA (Agendamento)';
+        spinBar.style.width = '100%';
+        mqlStatus.innerText = '🔥 100% Pronto p/ Show-Up';
+        nextMove.innerText = 'Fechar data e horário para a sessão de Diagnóstico Gratuito.';
+      }
+
+      if (objection !== 'Nenhuma') {
+        objText.innerText = objection;
+      }
+
+      // Render simulated CRM tags
+      const currentP = personas[currentPersona];
+      let tags = [...currentP.tags];
+      if (spinStage >= 3) tags.push('Dor_Validada');
+      if (spinStage === 4) tags.push('Reuniao_Agendada');
+
+      tagsCont.innerHTML = tags.map(t => {
+        let color = 'bg-slate-800 text-slate-300 border-slate-700';
+        if (t === 'MQL') color = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
+        if (t.includes('MLFP')) color = 'bg-blue-500/20 text-blue-300 border-blue-500/30';
+        if (t.includes('Reuniao')) color = 'bg-orange-500/20 text-orange-300 border-orange-500/30';
+        return `<span class="px-2 py-0.5 text-[10px] font-semibold rounded border ${color}">${t}</span>`;
+      }).join('');
+    }
+
+    function resetConversation() {
+      selectPersona(currentPersona);
+    }
+
+    function toggleAudio(btn) {
+      const icon = btn.querySelector('i');
+      if (icon.classList.contains('fa-play')) {
+        icon.classList.remove('fa-play', 'pl-0.5');
+        icon.classList.add('fa-pause');
+        setTimeout(() => {
+          icon.classList.remove('fa-pause');
+          icon.classList.add('fa-play', 'pl-0.5');
+        }, 3000);
+      } else {
+        icon.classList.remove('fa-pause');
+        icon.classList.add('fa-play', 'pl-0.5');
+      }
+    }
+
+    function openPromptModal() {
+      document.getElementById('prompt-modal').classList.remove('hidden');
+    }
+
+    function closePromptModal() {
+      document.getElementById('prompt-modal').classList.add('hidden');
+    }
+
+    function copyPromptToClipboard() {
+      const text = document.getElementById('prompt-text').innerText;
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('copy-btn');
+        btn.innerHTML = '<i class="fa-solid fa-check mr-1"></i>Copiado!';
+        btn.classList.remove('bg-orange-600', 'hover:bg-orange-500');
+        btn.classList.add('bg-emerald-600', 'hover:bg-emerald-500');
+        setTimeout(() => {
+          btn.innerHTML = '<i class="fa-solid fa-copy mr-1"></i>Copiar Prompt';
+          btn.classList.add('bg-orange-600', 'hover:bg-orange-500');
+          btn.classList.remove('bg-emerald-600', 'hover:bg-emerald-500');
+        }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>
