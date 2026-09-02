@@ -1,5 +1,8 @@
 {
   "rewrites": [
+    { "source": "/simulador", "destination": "/simulador.html" },
+    { "source": "/simulador-sdr", "destination": "/simulador.html" },
+    { "source": "/sdr", "destination": "/simulador.html" },
     { "source": "/api/:path*", "destination": "/api" }
   ],
   "crons": [
@@ -18,6 +21,14 @@
     {
       "path": "/api/cron/sla-check",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/trafego-manha",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/trafego-noite",
+      "schedule": "0 1 * * *"
     }
   ]
 }
