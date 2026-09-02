@@ -2695,11 +2695,20 @@ app.post(['/api/ko-webhook', '/api/webhook/komando', '/api/komando-webhook', '/a
 
     // Calculate qualification upfront (Komando MQL: Cargo Decisor + Faturamento estritamente ACIMA de R$ 50 mil / mês)
     const isQualified = isKomandoQualified(cargo, faturamento);
+    const hasQuiz = Boolean(faturamento || cargo || equipe || gargalo);
 
     let leadId = null;
     let activeLead = null;
     const baseTags = isEbookEvent ? ['KO_Ebooks', 'Ebook'] : ['KO_Inbound'];
-    if (isQualified) baseTags.push('MQL');
+    if (hasQuiz) {
+      if (isQualified) {
+        baseTags.push('MQL');
+      } else {
+        baseTags.push('Downsell');
+      }
+    } else {
+      baseTags.push('Abandono_Quiz');
+    }
     if (ab_variant) baseTags.push(`AB_${String(ab_variant).substring(0, 30)}`);
 
     if (existingContacts.length > 0) {
@@ -2756,7 +2765,12 @@ app.post(['/api/ko-webhook', '/api/webhook/komando', '/api/komando-webhook', '/a
         console.log(`[KO Webhook] Updating existing active lead ID ${leadId} in KO pipeline...`);
         
         const existingTags = activeLead._embedded?.tags?.map(t => t.name) || [];
-        const newTags = Array.from(new Set([...baseTags, ...existingTags]));
+        // Se agora preencheu o quiz (passo 2), remove 'Abandono_Quiz' das tags existentes
+        let cleanedTags = existingTags;
+        if (hasQuiz) {
+          cleanedTags = cleanedTags.filter(t => t !== 'Abandono_Quiz' && t !== 'Abandono');
+        }
+        const newTags = Array.from(new Set([...baseTags, ...cleanedTags]));
         
         await kommoRequest('PATCH', `/api/v4/leads/${leadId}`, {
           custom_fields_values: leadCustomFields.length > 0 ? leadCustomFields : undefined,
@@ -3387,10 +3401,23 @@ app.post('/api/kommo-lead-created', async (req, res) => {
       const displayFaturamento = faturamento;
 
       // Se for lead da Komando Inbound e ainda não tiver campos preenchidos (lead incompleto do passo 1),
-      // NÃO envia notificação prematura com "Não informado" — aguarda o envio completo do quiz via ko-webhook
+      // Adiciona tag de Abandono_Quiz e NÃO envia notificação prematura com "Não informado" (aguarda o quiz via ko-webhook)
       if (pipelineId === PIPELINES.KO_INBOUND) {
         if ((!displayCargo || displayCargo === 'Não informado') && (!displayFaturamento || displayFaturamento === 'Não informado')) {
-          console.log(`[Z-API Webhook] Skipping KO Inbound lead ${leadId}: Custom fields missing (step 1 lead, waiting for quiz).`);
+          console.log(`[Z-API Webhook] KO Inbound lead ${leadId}: Custom fields missing (step 1 lead). Tagging 'Abandono_Quiz' and skipping notification.`);
+          
+          const currentTags = leadDetails._embedded?.tags?.map(t => t.name) || [];
+          if (!currentTags.includes('Abandono_Quiz')) {
+            try {
+              const updatedTags = Array.from(new Set([...currentTags, 'Abandono_Quiz', 'KO_Inbound']));
+              await kommoRequest('PATCH', `/api/v4/leads/${leadId}`, {
+                _embedded: { tags: updatedTags.map(name => ({ name })) }
+              });
+              console.log(`[Z-API Webhook] Added 'Abandono_Quiz' tag to lead ${leadId}`);
+            } catch (tagErr) {
+              console.error(`[Z-API Webhook] Error tagging Abandono_Quiz on lead ${leadId}:`, tagErr.message);
+            }
+          }
           continue;
         }
       }
