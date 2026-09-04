@@ -621,6 +621,38 @@ function isTestLead(lead) {
   return false;
 }
 
+// Identifica leads que pertencem ou foram para o funil de Repescagem / Leads Antigos
+// Mesmo que tenham entrado no Inbound, se foram para a Repescagem são desconsiderados do Inbound
+function isRepescagemLead(lead) {
+  if (!lead) return false;
+  // 1. Pipeline 14008652 é o pipeline oficial de [MLFP] Leads Antigos (Repescagem)
+  if (lead.pipeline_id === 14008652) return true;
+
+  // 2. Tags indicando repescagem / leads antigos / reciclagem
+  const tags = (lead._embedded?.tags || lead.tags || []).map(t => {
+    const tName = typeof t === 'string' ? t : (t?.name || '');
+    return tName.toUpperCase();
+  });
+  if (tags.some(t => 
+    t.includes('REPESCAGEM') || 
+    t.includes('LEADS ANTIGOS') || 
+    t.includes('MLFP LEADS ANTIGOS') || 
+    t.includes('REPESCA') || 
+    t.includes('RECICLAGEM') ||
+    t.includes('REPESCAGEM_MLFP')
+  )) {
+    return true;
+  }
+
+  // 3. Nome do lead indicando repescagem / leads antigos
+  const name = String(lead.name || '').toUpperCase();
+  if (name.includes('REPESCAGEM') || name.includes('LEADS ANTIGOS') || name.includes('REPESCA')) {
+    return true;
+  }
+
+  return false;
+}
+
 // Leitura síncrona (disco → bundled). Mantida para os pontos que ainda
 // não são assíncronos; não enxerga o Blob.
 function readCacheFile(filename, defaultVal) {
@@ -1034,13 +1066,14 @@ app.get('/api/page-analytics', async (req, res) => {
     const FUNIS_COMERCIAIS = [13304583, 13304659, 13537971, 14173256, 14268556, 14104532, 13956952];
 
     const filteredLeads = allLeads.filter(l => {
+      if (isTestLead(l)) return false;
       const created = l.created_at || 0;
       return FUNIS_COMERCIAIS.includes(l.pipeline_id) && created >= dFromSec && created <= dToSec;
     });
 
     // Categorize leads by page/pipeline
     const koLeads = filteredLeads.filter(l => l.pipeline_id === 13304659); // Komando
-    const mlfpLeads = filteredLeads.filter(l => l.pipeline_id === 13304583); // Mentoria (chefkaka.com)
+    const mlfpLeads = filteredLeads.filter(l => l.pipeline_id === 13304583 && !isRepescagemLead(l)); // Mentoria (chefkaka.com) Inbound Oficial
     const kopLeads = filteredLeads.filter(l => l.pipeline_id === 14173256); // KOP
     const korLeads = filteredLeads.filter(l => l.pipeline_id === 14268556); // KOR
     const ebookLeads = filteredLeads.filter(l => l.pipeline_id === 13537971); // Ebooks
@@ -3948,10 +3981,14 @@ app.get(['/api/cron/mlfp-weekly-report', '/api/reports/mlfp-weekly'], async (req
       return list.filter(l => !isTestLead(l));
     }
 
-    const [leadsInbound, leadsAntigos] = await Promise.all([
+    const [leadsInboundRaw, leadsAntigosRaw] = await Promise.all([
       fetchLeads(PIPELINES_CONFIG.INBOUND.id),
       fetchLeads(PIPELINES_CONFIG.ANTIGOS.id)
     ]);
+
+    // Separação estrita: qualquer lead de repescagem é desconsiderado do Inbound
+    const leadsInbound = leadsInboundRaw.filter(l => !isRepescagemLead(l));
+    const leadsAntigos = [...leadsAntigosRaw, ...leadsInboundRaw.filter(l => isRepescagemLead(l))];
 
     // Count MQLs (excluding Auxiliares)
     function countMQL(leadsList) {
@@ -4001,11 +4038,24 @@ app.get(['/api/cron/mlfp-weekly-report', '/api/reports/mlfp-weekly'], async (req
     const movedLeadsInbound = new Set(eventsInbound.map(e => e.entity_id));
     const movedLeadsAntigos = new Set(eventsAntigos.map(e => e.entity_id));
 
+    // Carregar cache de leads para identificar leads que foram para repescagem
+    const allLeadsData = await lerCache('all_leads.json', []);
+    const repescagemLeadIdSet = new Set(
+      (allLeadsData || []).filter(l => isRepescagemLead(l)).map(l => l.id)
+    );
+
     function analyzeFunnelLifecycle(pipeConfig) {
+      const isPipeInbound = pipeConfig.id === PIPELINES_CONFIG.INBOUND.id;
       const pipeEvents = statusEvents.filter(e => {
         const afterPId = parseInt(e.value_after?.[0]?.lead_status?.pipeline_id);
-        const beforePId = parseInt(e.value_before?.[0]?.lead_status?.pipeline_id);
-        return afterPId === pipeConfig.id || beforePId === pipeConfig.id;
+        const lId = e.entity_id;
+        // Se estamos analisando o Inbound, desconsidera totalmente qualquer lead que foi para a repescagem
+        if (isPipeInbound) {
+          if (repescagemLeadIdSet.has(lId)) return false;
+          return afterPId === pipeConfig.id;
+        } else {
+          return afterPId === pipeConfig.id || repescagemLeadIdSet.has(lId);
+        }
       });
 
       const allMarked = new Set();
@@ -4084,25 +4134,26 @@ app.get(['/api/cron/mlfp-weekly-report', '/api/reports/mlfp-weekly'], async (req
     ]);
 
     // Build leadId -> pipelineId map from cache
-    const allLeadsData = await lerCache('all_leads.json', []);
     const leadPipeMap = {};
     (allLeadsData || []).forEach(l => {
-      leadPipeMap[l.id] = l.pipeline_id;
+      leadPipeMap[l.id] = isRepescagemLead(l) ? PIPELINES_CONFIG.ANTIGOS.id : l.pipeline_id;
     });
 
     let msgsOutInbound = 0, msgsOutAntigos = 0;
     let msgsInInbound = 0, msgsInAntigos = 0;
 
     outgoingMsgs.forEach(e => {
+      const isRepescagem = repescagemLeadIdSet.has(e.entity_id);
       const pId = leadPipeMap[e.entity_id];
-      if (pId === PIPELINES_CONFIG.INBOUND.id) msgsOutInbound++;
-      else if (pId === PIPELINES_CONFIG.ANTIGOS.id) msgsOutAntigos++;
+      if (!isRepescagem && pId === PIPELINES_CONFIG.INBOUND.id) msgsOutInbound++;
+      else if (isRepescagem || pId === PIPELINES_CONFIG.ANTIGOS.id) msgsOutAntigos++;
     });
 
     incomingMsgs.forEach(e => {
+      const isRepescagem = repescagemLeadIdSet.has(e.entity_id);
       const pId = leadPipeMap[e.entity_id];
-      if (pId === PIPELINES_CONFIG.INBOUND.id) msgsInInbound++;
-      else if (pId === PIPELINES_CONFIG.ANTIGOS.id) msgsInAntigos++;
+      if (!isRepescagem && pId === PIPELINES_CONFIG.INBOUND.id) msgsInInbound++;
+      else if (isRepescagem || pId === PIPELINES_CONFIG.ANTIGOS.id) msgsInAntigos++;
     });
 
     // Formatting date window
@@ -4160,17 +4211,15 @@ app.get(['/api/cron/mlfp-weekly-report', '/api/reports/mlfp-weekly'], async (req
     message += `⚡ *Taxa de Resposta:* ${txRespAntigos}% dos disparos\n\n`;
 
     message += `━━━━━━━━━━━━━━━━━━━━━\n`;
-    message += `🎯 *3. CONSOLIDADO GERAL MLFP*\n`;
-    message += `📥 *Total Novos Leads:* ${totNovos}\n`;
-    message += `💬 *Total Leads Atendidos:* ${totAtendidos}\n`;
-    message += `🔄 *Total Leads Movimentados:* ${totMovimentados} _(${totTransicoes} transições)_\n`;
-    message += `📅 *Total Reuniões Marcadas:* ${totMarcadas}\n`;
-    message += `🤝 *Total Reuniões Realizadas:* ${totRealizadas} _(${txShowUpGeral}% show-up)_\n`;
-    message += `👻 *Total No Show:* ${totNoShow} _(${txNoShowGeral}% no-show)_\n`;
-    message += `🏆 *Total Vendas Fechadas:* ${totVendas}\n`;
-    message += `✉️ *Total Mensagens Enviadas:* ${totMsgsOut}\n`;
-    message += `📥 *Total Mensagens Recebidas/Respondidas:* ${totMsgsIn}\n\n`;
-    message += `_Relatório gerado automaticamente analisando os eventos comerciais da semana._`;
+    message += `🎯 *3. COMPARATIVO: INBOUND (TRÁFEGO PAGO) × REPESCAGEM (BASE ANTIGA)*\n`;
+    message += `• *Novos Leads:* ${leadsInbound.length} (Inbound) | ${leadsAntigos.length} (Repescagem)\n`;
+    message += `• *MQLs:* ${mqlInbound} (Inbound) | ${mqlAntigos} (Repescagem)\n`;
+    message += `• *Atendidos:* ${metricsInbound.atendidos} (Inbound) | ${metricsAntigos.atendidos} (Repescagem)\n`;
+    message += `• *Reuniões Marcadas:* ${metricsInbound.marcadas} (Inbound) | ${metricsAntigos.marcadas} (Repescagem)\n`;
+    message += `• *Reuniões Realizadas:* ${metricsInbound.realizadas} (Inbound) | ${metricsAntigos.realizadas} (Repescagem)\n`;
+    message += `• *Show-Up:* ${metricsInbound.txShowUp}% (Inbound) | ${metricsAntigos.txShowUp}% (Repescagem)\n`;
+    message += `• *Vendas Ganhas:* ${metricsInbound.vendas} (Inbound) | ${metricsAntigos.vendas} (Repescagem)\n\n`;
+    message += `_Nota: Dados de Repescagem mantidos 100% isolados para não distorcer o funil e métricas de tráfego pago._`;
 
     // Send weekly report to Telegram (both to group thread and direct admin chat)
     const threadId = process.env.TELEGRAM_THREAD_MLFP || 4;
@@ -4375,6 +4424,7 @@ async function getExecutiveMetrics(funnel = 'all', timeframe = 'this_month') {
     kop: [14173256],
     kor: [14268556, 13956952],
     ebook: [13537971],
+    repescagem: [14008652],
     all: [13304583, 13304659, 13537971, 14173256, 14268556, 13956952, 13956856]
   };
 
@@ -4384,6 +4434,11 @@ async function getExecutiveMetrics(funnel = 'all', timeframe = 'this_month') {
   // Filter leads in range
   const periodLeads = allLeads.filter(l => {
     if (l.created_at < startSec || l.created_at > endSec) return false;
+    if (fKey === 'repescagem') {
+      return l.pipeline_id === 14008652 || isRepescagemLead(l);
+    }
+    // Nos demais funis de captação (mlfp, all, etc.), desconsidera estritamente qualquer lead que foi para a repescagem
+    if (isRepescagemLead(l)) return false;
     const tags = (l._embedded?.tags || []).map(t => t.name.toUpperCase());
     const name = (l.name || '').toUpperCase();
     if (fKey === 'kor') {
@@ -5830,6 +5885,7 @@ const META_AD_ACCOUNTS = [
 function classifyCampaignFunnel(campaignName) {
   const n = (campaignName || '').toUpperCase();
 
+  if (n.includes('REPESCAGEM') || n.includes('LEADS ANTIGOS') || n.includes('REPESCA') || n.includes('RECICLAGEM')) return 'repescagem';
   if (n.includes('KOP')) return 'kop';
   if (n.includes('KOR')) return 'kor';
   if (n.includes('RECUPERAC') || n.includes('RECUPERAÇ')) return 'recuperacao';
@@ -6030,6 +6086,7 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
       kop: [14173256],
       kor: [14268556, 13956952],
       ebook: [13537971],
+      repescagem: [14008652],
       all: [13304583, 13304659, 13537971, 14173256, 14268556, 13956952]
     };
     const activePipelines = PIPELINE_MAP[funnelFilter] || PIPELINE_MAP.all;
@@ -6038,6 +6095,11 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
     const allLeads = await lerCache('all_leads.json', []);
     const commercialLeads = allLeads.filter(l => {
       if (isTestLead(l)) return false;
+      if (funnelFilter === 'repescagem') {
+        return l.pipeline_id === 14008652 || isRepescagemLead(l);
+      }
+      // Nos funis de tráfego/comercial Inbound (mlfp, all, etc.), desconsidera estritamente qualquer lead que foi para a repescagem
+      if (isRepescagemLead(l)) return false;
       const tags = (l._embedded?.tags || []).map(t => t.name.toUpperCase());
       const name = (l.name || '').toUpperCase();
       if (funnelFilter === 'kor') {

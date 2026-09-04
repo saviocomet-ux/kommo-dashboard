@@ -84,6 +84,38 @@ function isTestLead(lead) {
   return false;
 }
 
+// Identifica leads que pertencem ou foram para o funil de Repescagem / Leads Antigos
+// Mesmo que tenham entrado no Inbound, se foram para a Repescagem são desconsiderados do Inbound
+function isRepescagemLead(lead) {
+  if (!lead) return false;
+  // 1. Pipeline 14008652 é o pipeline oficial de [MLFP] Leads Antigos (Repescagem)
+  if (lead.pipeline_id === PIPELINES.MLFP_ANTIGOS || lead.pipeline_id === 14008652) return true;
+
+  // 2. Tags indicando repescagem / leads antigos / reciclagem
+  const tags = (lead._embedded?.tags || lead.tags || []).map(t => {
+    const tName = typeof t === 'string' ? t : (t?.name || '');
+    return tName.toUpperCase();
+  });
+  if (tags.some(t => 
+    t.includes('REPESCAGEM') || 
+    t.includes('LEADS ANTIGOS') || 
+    t.includes('MLFP LEADS ANTIGOS') || 
+    t.includes('REPESCA') || 
+    t.includes('RECICLAGEM') ||
+    t.includes('REPESCAGEM_MLFP')
+  )) {
+    return true;
+  }
+
+  // 3. Nome do lead indicando repescagem / leads antigos
+  const name = String(lead.name || '').toUpperCase();
+  if (name.includes('REPESCAGEM') || name.includes('LEADS ANTIGOS') || name.includes('REPESCA')) {
+    return true;
+  }
+
+  return false;
+}
+
 // Etapas declaradas POR FUNIL, usando o nome real da etapa no Kommo.
 // Antes existia uma lista única de IDs aplicada a todos os funis, o que
 // rotulava "Contato inicial" (KOP) e "Em Negociação" (Recuperação) como
@@ -876,11 +908,19 @@ function applyFilters() {
   // 1. Pipeline Filter
   if (state.pipelineId && state.pipelineId !== 'all') {
     const pipeList = String(state.pipelineId).split(',').map(id => parseInt(id.trim())).filter(n => !isNaN(n));
-    filtered = filtered.filter(lead => pipeList.includes(lead.pipeline_id));
+    if (pipeList.length === 1 && pipeList[0] === PIPELINES.MLFP) {
+      // Aba MLFP Inbound: desconsidera estritamente qualquer lead que foi para a repescagem
+      filtered = filtered.filter(lead => lead.pipeline_id === PIPELINES.MLFP && !isRepescagemLead(lead));
+    } else if (pipeList.length === 1 && pipeList[0] === PIPELINES.MLFP_ANTIGOS) {
+      // Aba MLFP Leads Antigos (Repescagem): reúne os leads de repescagem
+      filtered = state.leads.filter(lead => !isTestLead(lead) && (lead.pipeline_id === PIPELINES.MLFP_ANTIGOS || isRepescagemLead(lead)));
+    } else {
+      filtered = filtered.filter(lead => pipeList.includes(lead.pipeline_id));
+    }
   } else {
-    // "Todos os Funis" = apenas funis comerciais.
-    // Exclui Base de Clientes (registro de pagamento) e Leads Antigos.
-    filtered = filtered.filter(lead => FUNIS_COMERCIAIS.includes(lead.pipeline_id));
+    // "Todos os Funis" = apenas funis comerciais de captação Inbound.
+    // Exclui Base de Clientes (registro de pagamento), Leads Antigos e qualquer lead que foi para Repescagem.
+    filtered = filtered.filter(lead => FUNIS_COMERCIAIS.includes(lead.pipeline_id) && !isRepescagemLead(lead));
   }
 
   // 2. Owner Filter
@@ -2547,20 +2587,21 @@ const PIPELINE_FUNNEL_MAP = {
   14173256: 'kop',         // KOP Inbound (produto independente)
   14268556: 'kor',         // [KOR] Inbound (produto independente)
   13956952: 'recuperacao', // Funil de Recuperação
-  13304583: 'mlfp',        // Mentoria MLFP
-  14008652: 'mlfp',        // [MLFP] Leads Antigos (Repescagem)
+  13304583: 'mlfp',        // Mentoria MLFP Inbound (Tráfego Pago Oficial)
+  14008652: 'repescagem',  // [MLFP] Leads Antigos (Repescagem / Base Antiga - Isolado do Inbound)
   13537971: 'ebook',       // KO Ebooks
   14104532: 'engajamento'  // Instagram (Social Selling)
 };
 
 const FUNNEL_DISPLAY = {
-  mlfp: { label: 'MLFP', tagClass: 'tag-mlfp', icon: '🔵' },
+  mlfp: { label: 'MLFP Inbound', tagClass: 'tag-mlfp', icon: '🔵' },
   komando: { label: 'Komando', tagClass: 'tag-komando', icon: '🔴' },
   kop: { label: 'KOP', tagClass: 'tag-kop', icon: '📦' },
   kor: { label: 'KOR Inbound', tagClass: 'tag-kor', icon: '🔄' },
   recuperacao: { label: 'Recuperação', tagClass: 'tag-kor', icon: '♻️' },
   ebook: { label: 'Ebook', tagClass: 'tag-ebook', icon: '📚' },
   engajamento: { label: 'Social Selling', tagClass: 'tag-engajamento', icon: '📲' },
+  repescagem: { label: 'MLFP Repescagem', tagClass: 'tag-outros', icon: '⏳' },
   outros: { label: 'Outros', tagClass: 'tag-outros', icon: '📦' }
 };
 
@@ -2665,8 +2706,10 @@ function renderMediaPaga(metaData) {
   // Count leads and MQLs per funnel from Kommo CRM
   const kommoFunnels = {};
   for (const lead of dateFiltered) {
+    // Isolamento estrito: Leads de repescagem NUNCA contam na Mídia Paga Inbound
+    if (isRepescagemLead(lead)) continue;
     const funnelKey = PIPELINE_FUNNEL_MAP[lead.pipeline_id];
-    if (!funnelKey) continue;
+    if (!funnelKey || funnelKey === 'repescagem') continue;
     if (!kommoFunnels[funnelKey]) {
       kommoFunnels[funnelKey] = { leads: 0, mqls: 0, wonRevenue: 0, wonCount: 0 };
     }
@@ -3023,7 +3066,7 @@ function renderGA4Analytics(ga4Data) {
       return leadsBase.filter(l => (l._embedded?.tags || []).some(t => t.name.toLowerCase().includes('eduzz'))).length;
     }
     if (full.includes('chefkaka') || full.includes('diagnostico') || full.includes('faixapreta')) {
-      return leadsBase.filter(l => l.pipeline_id === 13304583).length;
+      return leadsBase.filter(l => l.pipeline_id === 13304583 && !isRepescagemLead(l)).length;
     }
     return null;
   }
@@ -3168,8 +3211,8 @@ function renderEcosystemTable() {
   ];
 
   products.forEach(prod => {
-    const periodLeads = leadsBase.filter(l => l.pipeline_id === prod.pipelineId);
-    const totalLeads = allLeads.filter(l => l.pipeline_id === prod.pipelineId);
+    const periodLeads = leadsBase.filter(l => l.pipeline_id === prod.pipelineId && (prod.id === 'mlfp' ? !isRepescagemLead(l) : true));
+    const totalLeads = allLeads.filter(l => l.pipeline_id === prod.pipelineId && (prod.id === 'mlfp' ? !isRepescagemLead(l) : true));
     const kpiEl = document.getElementById(prod.kpiElId);
     if (kpiEl) {
       kpiEl.innerText = `${periodLeads.length.toLocaleString('pt-BR')} leads`;
@@ -3179,9 +3222,9 @@ function renderEcosystemTable() {
   if (!tbody) return;
 
   tbody.innerHTML = products.map(prod => {
-    const periodLeads = leadsBase.filter(l => l.pipeline_id === prod.pipelineId);
-    const totalLeads = allLeads.filter(l => l.pipeline_id === prod.pipelineId);
-    const wonLeads = totalLeads.filter(l => l.status_id === 142);
+    const periodLeads = leadsBase.filter(l => l.pipeline_id === prod.pipelineId && (prod.id === 'mlfp' ? !isRepescagemLead(l) : true));
+    const totalLeads = allLeads.filter(l => l.pipeline_id === prod.pipelineId && (prod.id === 'mlfp' ? !isRepescagemLead(l) : true));
+    const wonLeads = totalLeads.filter(l => l.status_id === 142 && (prod.id === 'mlfp' ? !isRepescagemLead(l) : true));
 
     return `
       <tr>
