@@ -47,18 +47,38 @@ const DEFAULT_META_ACCESS_TOKEN = 'EAAWTmZBZCudBcBSDyr5qIfwdotZCyzL9GTxRiy0BNiu5
 const CAPI_LIMITE_PADRAO_S = 7 * 24 * 60 * 60;
 const CAPI_LIMITE_OFFLINE_S = 62 * 24 * 60 * 60;
 
+// Pixel unico do ecossistema Chef Kaká.
+//
+// Havia dois pixels ativos, ambos instalados nos dois dominios, e as campanhas
+// otimizavam em pixels diferentes: Komando no 825634764746487, KOR e MLFP no
+// 1601746558049023. Isso partia o sinal de conversao sem separar nada de fato.
+//
+// A consolidacao ficou no 1601746558049023 porque ele concentra 81% a 94% dos
+// eventos de cada dominio — o 825 estava instalado em apenas 6% a 19%. Manter
+// o 825 exigiria reinstalar o pixel em todas as paginas e no checkout da Eduzz.
+//
+// Se um dia voltar a existir mais de um pixel, este valor precisa deixar de ser
+// fixo e passar a ser escolhido por funil.
+const PIXEL_PADRAO = '1601746558049023';
+
 // Send event to Meta Conversions API
 // opcoes.eventTime   — timestamp UNIX do fato (padrao: agora). Use o momento
 //                      real da conversao, nao o do envio.
 // opcoes.actionSource — origem da conversao ('system_generated' por padrao;
 //                      'physical_store' habilita a janela de 62 dias).
 async function sendMetaEvent(eventName, buyerInfo, customData, eventId, opcoes = {}) {
-  const pixelId = process.env.META_PIXEL_ID || '825634764746487';
-  const accessToken = process.env.META_ACCESS_TOKEN || DEFAULT_META_ACCESS_TOKEN;
+  const pixelId = process.env.META_PIXEL_ID || PIXEL_PADRAO;
+
+  // Dois tokens com ciclos de vida diferentes:
+  //   META_CAPI_TOKEN     — usuario de sistema, permanente, so posta evento.
+  //   META_ACCESS_TOKEN   — token de usuario, expira, usado para LER metricas.
+  // Separar evita que a expiracao do token de leitura derrube o envio de
+  // conversao, que e o que alimenta a otimizacao das campanhas.
+  const accessToken = process.env.META_CAPI_TOKEN || process.env.META_ACCESS_TOKEN || DEFAULT_META_ACCESS_TOKEN;
   const testEventCode = process.env.META_TEST_EVENT_CODE;
 
   if (!pixelId || !accessToken) {
-    console.warn('[Meta CAPI] Warning: META_PIXEL_ID or META_ACCESS_TOKEN not set. Skipping event.');
+    console.warn('[Meta CAPI] Warning: META_PIXEL_ID ou token de envio não configurado. Evento ignorado.');
     return { ok: false, motivo: 'credenciais ausentes' };
   }
 
@@ -117,7 +137,7 @@ async function sendMetaEvent(eventName, buyerInfo, customData, eventId, opcoes =
     body.test_event_code = testEventCode;
   }
 
-  const url = `https://graph.facebook.com/v25.0/${pixelId}/events?access_token=${accessToken}`;
+  const url = `https://graph.facebook.com/v26.0/${pixelId}/events?access_token=${accessToken}`;
   console.log(`[Meta CAPI] Dispatching event: ${eventName} (Event ID: ${eventPayload.event_id}) Payload:`, JSON.stringify(body, null, 2));
 
   try {
@@ -552,6 +572,24 @@ async function gravarCache(filename, dados) {
   }
 
   return persistido;
+}
+
+// Atualiza ou insere um lead individual no cache all_leads.json (para webhooks em tempo real)
+async function upsertLeadInCache(leadObj) {
+  if (!leadObj || !leadObj.id) return;
+  try {
+    const allLeads = await lerCache('all_leads.json', []);
+    const idx = allLeads.findIndex(l => l.id === leadObj.id);
+    if (idx >= 0) {
+      allLeads[idx] = { ...allLeads[idx], ...leadObj };
+    } else {
+      allLeads.unshift(leadObj);
+    }
+    await gravarCache('all_leads.json', allLeads);
+    console.log(`[Cache] Lead ${leadObj.id} atualizado em tempo real no cache (Total: ${allLeads.length})`);
+  } catch (err) {
+    console.error(`[Cache] Erro ao atualizar lead ${leadObj?.id} no cache:`, err.message);
+  }
 }
 
 // Leitura síncrona (disco → bundled). Mantida para os pontos que ainda
@@ -1433,8 +1471,8 @@ app.get('/api/ga4-analytics', async (req, res) => {
   }
 });
 
-// Sync Data from Kommo CRM
-app.post('/api/sync', async (req, res) => {
+// Sync Data from Kommo CRM (Supports POST for manual trigger and GET for Vercel Cron)
+app.all(['/api/sync', '/api/cron/sync'], async (req, res) => {
   try {
     console.log('[Sync] Starting full synchronization with Kommo CRM...');
     
@@ -1477,28 +1515,31 @@ app.post('/api/sync', async (req, res) => {
       } else {
         page++;
         // Throttling to respect API limits (max 7 req/sec)
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 120));
       }
     }
 
     const persistido = await gravarCache('all_leads.json', allLeads);
     console.log(`[Sync] Sync complete. Saved ${allLeads.length} leads. Persistido: ${persistido}`);
 
-    // Sem persistência real, o sync some no próximo request. Dizer isso na
-    // resposta evita o "sincronizado com sucesso" seguido de dados velhos.
+    const syncInfo = {
+      timestamp: new Date().toISOString(),
+      leadsCount: allLeads.length,
+      usersCount: usersData?._embedded?.users?.length || 0,
+      pipelinesCount: pipelinesData?._embedded?.pipelines?.length || 0,
+      persistido,
+      armazenamento: BLOB_ATIVO ? 'vercel-blob' : (isVercel ? 'tmp-efemero' : 'disco-local')
+    };
+    await gravarCache('sync_info.json', syncInfo);
+
     const aviso = persistido
       ? null
       : 'Os dados foram sincronizados, mas NÃO ficaram persistidos: no Vercel o /tmp é descartado entre requisições. Configure BLOB_READ_WRITE_TOKEN para que a sincronização valha de verdade.';
 
     res.json({
       success: true,
-      leadsCount: allLeads.length,
-      usersCount: usersData?._embedded?.users?.length || 0,
-      pipelinesCount: pipelinesData?._embedded?.pipelines?.length || 0,
-      persistido,
-      armazenamento: BLOB_ATIVO ? 'vercel-blob' : (isVercel ? 'tmp-efemero' : 'disco-local'),
-      aviso,
-      timestamp: new Date().toISOString()
+      ...syncInfo,
+      aviso
     });
   } catch (error) {
     console.error('[Sync] Error during sync:', error);
@@ -1506,6 +1547,16 @@ app.post('/api/sync', async (req, res) => {
       success: false,
       error: error.message
     });
+  }
+});
+
+// Sync Status Endpoint
+app.get('/api/sync-info', async (req, res) => {
+  try {
+    const syncInfo = await lerCache('sync_info.json', null);
+    res.json({ success: true, syncInfo });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -2155,6 +2206,9 @@ app.post('/api/kommo-webhook', async (req, res) => {
       const statusId = lead.status_id;
       
       if (!statusId) continue;
+
+      // Atualiza o status do lead no cache do dashboard em tempo real
+      upsertLeadInCache({ id: parseInt(leadId), status_id: parseInt(statusId) });
       
       const statusInfo = await getStatusInfo(statusId);
       if (!statusInfo) {
@@ -3272,6 +3326,9 @@ app.post('/api/kommo-lead-created', async (req, res) => {
       // Fetch complete lead details with contacts
       let leadDetails = await kommoRequest('GET', `/api/v4/leads/${leadId}?with=contacts`);
       if (!leadDetails) continue;
+
+      // Mantém o cache do dashboard sincronizado em tempo real com novos leads e atualizações
+      await upsertLeadInCache(leadDetails);
 
       const pipelineId = parseInt(leadDetails.pipeline_id || leadObj.pipeline_id || leadObj.raw?.pipeline_id);
       

@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
     { "source": "/simulador", "destination": "/simulador.html" },
     { "source": "/simulador-sdr", "destination": "/simulador.html" },
@@ -6,6 +11,10 @@
     { "source": "/api/:path*", "destination": "/api" }
   ],
   "crons": [
+    {
+      "path": "/api/cron/sync",
+      "schedule": "0 */2 * * *"
+    },
     {
       "path": "/api/cron/mlfp-weekly-report",
       "schedule": "0 21 * * 5"

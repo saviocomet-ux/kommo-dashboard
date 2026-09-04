@@ -628,12 +628,13 @@ function setupEventListeners() {
 async function loadData() {
   try {
     // Eduzz é carregado por fetchEduzzAnalytics(), que aplica o filtro de data
-    const [leadsResponse, pipelinesResponse, usersResponse, fieldsResponse, vturbResponse] = await Promise.all([
+    const [leadsResponse, pipelinesResponse, usersResponse, fieldsResponse, vturbResponse, syncInfoResponse] = await Promise.all([
       fetch('/api/leads').then(res => res.json()),
       fetch('/api/pipelines').then(res => res.json()),
       fetch('/api/users').then(res => res.json()),
       fetch('/api/custom-fields').then(res => res.json()),
-      fetch('/api/vturb-analytics').then(res => res.json()).catch(() => null)
+      fetch('/api/vturb-analytics').then(res => res.json()).catch(() => null),
+      fetch('/api/sync-info').then(res => res.json()).catch(() => null)
     ]);
 
     state.leads = leadsResponse || [];
@@ -648,9 +649,17 @@ async function loadData() {
     }
     
     if (elements.lastSyncDate) {
-      elements.lastSyncDate.innerText = state.leads.length > 0 
-        ? new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-        : 'Nunca sincronizado';
+      if (syncInfoResponse && syncInfoResponse.syncInfo?.timestamp) {
+        const d = new Date(syncInfoResponse.syncInfo.timestamp);
+        elements.lastSyncDate.innerText = d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      } else if (state.leads.length > 0) {
+        const maxLeadTime = Math.max(...state.leads.map(l => l.created_at || 0));
+        elements.lastSyncDate.innerText = maxLeadTime > 0 
+          ? new Date(maxLeadTime * 1000).toLocaleDateString('pt-BR') + ' ' + new Date(maxLeadTime * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+          : 'Nunca sincronizado';
+      } else {
+        elements.lastSyncDate.innerText = 'Nunca sincronizado';
+      }
     }
 
     populateFilters();
