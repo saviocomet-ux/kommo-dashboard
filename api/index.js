@@ -592,6 +592,35 @@ async function upsertLeadInCache(leadObj) {
   }
 }
 
+// Filtro universal de leads de teste: ignora sempre leads com nomes, tags ou contatos indicando teste
+function isTestLead(lead) {
+  if (!lead) return false;
+  
+  // 1. Nome do lead
+  const name = String(lead.name || '').toLowerCase();
+  if (/\btest(e|es|ing|ed|er)?\b/i.test(name) || name.includes('teste') || name.includes('test client') || name.includes('test recovery')) {
+    return true;
+  }
+  
+  // 2. Tags do lead
+  const tags = (lead._embedded?.tags || lead.tags || []).map(t => {
+    const tName = typeof t === 'string' ? t : (t?.name || '');
+    return tName.toLowerCase();
+  });
+  if (tags.some(t => /\btest(e|es)?\b/i.test(t) || t.includes('teste') || t.includes('test_'))) {
+    return true;
+  }
+
+  // 3. Contatos vinculados
+  const contacts = lead._embedded?.contacts || [];
+  for (const c of contacts) {
+    const cName = String(c.name || '').toLowerCase();
+    if (/\btest(e|es|ing|ed|er)?\b/i.test(cName) || cName.includes('teste')) return true;
+  }
+
+  return false;
+}
+
 // Leitura síncrona (disco → bundled). Mantida para os pontos que ainda
 // não são assíncronos; não enxerga o Blob.
 function readCacheFile(filename, defaultVal) {
@@ -648,7 +677,9 @@ async function fetchFromKommo(endpoint) {
 // API Routes
 app.get('/api/leads', async (req, res) => {
   const leads = await lerCache('all_leads.json', []);
-  res.json(leads);
+  // Sempre ignora leads de teste
+  const validLeads = leads.filter(l => !isTestLead(l));
+  res.json(validLeads);
 });
 
 // Batch fetch contact details (name, phone, email) from Kommo CRM
@@ -2207,6 +2238,9 @@ app.post('/api/kommo-webhook', async (req, res) => {
       
       if (!statusId) continue;
 
+      // Sempre ignora leads de teste
+      if (isTestLead(lead)) continue;
+
       // Atualiza o status do lead no cache do dashboard em tempo real
       upsertLeadInCache({ id: parseInt(leadId), status_id: parseInt(statusId) });
       
@@ -2698,6 +2732,12 @@ app.post(['/api/ko-webhook', '/api/webhook/komando', '/api/komando-webhook', '/a
     Variante A/B: ${ab_variant}
   `);
 
+  // Sempre ignora leads com nome ou dados de teste
+  if (isTestLead({ name, _embedded: { contacts: [{ name }] } })) {
+    console.log(`[KO Webhook] Lead de teste ignorado: "${name}"`);
+    return res.status(200).json({ success: true, message: 'Test lead ignored' });
+  }
+
   const isEbookEvent = (payload.event === 'ebook_lead_captured') || 
                        (utm_campaign && utm_campaign.toLowerCase().includes('ebook'));
   const PIPELINE_KO = isEbookEvent ? 13537971 : 13304659; // KO_EBOOKS (13537971) or KO_INBOUND (13304659)
@@ -3032,6 +3072,12 @@ app.post('/api/lp-webhook', async (req, res) => {
     Cargo: ${cargo}
   `);
 
+  // Sempre ignora leads com nome ou dados de teste
+  if (isTestLead({ name, _embedded: { contacts: [{ name }] } })) {
+    console.log(`[LP Webhook] Lead de teste ignorado: "${name}"`);
+    return res.status(200).json({ success: true, message: 'Test lead ignored' });
+  }
+
   // Save to Google Sheets FIRST (backup)
   const isMqlCheck = isFaturamentoAbove3k(faturamento, renda);
   const gsResult = await saveToGoogleSheets('MLFP', {
@@ -3326,6 +3372,12 @@ app.post('/api/kommo-lead-created', async (req, res) => {
       // Fetch complete lead details with contacts
       let leadDetails = await kommoRequest('GET', `/api/v4/leads/${leadId}?with=contacts`);
       if (!leadDetails) continue;
+
+      // Sempre ignora leads com nome ou padrão de teste
+      if (isTestLead(leadDetails)) {
+        console.log(`[Z-API Webhook] Lead ${leadId} ignorado por ser lead de teste ("${leadDetails.name}")`);
+        continue;
+      }
 
       // Mantém o cache do dashboard sincronizado em tempo real com novos leads e atualizações
       await upsertLeadInCache(leadDetails);
@@ -3893,7 +3945,7 @@ app.get(['/api/cron/mlfp-weekly-report', '/api/reports/mlfp-weekly'], async (req
         page++;
         await new Promise(r => setTimeout(r, 200));
       }
-      return list;
+      return list.filter(l => !isTestLead(l));
     }
 
     const [leadsInbound, leadsAntigos] = await Promise.all([
@@ -4284,11 +4336,12 @@ async function querySpreadsheet(sheetName, searchQuery) {
 // DASHBOARD AI ASSISTANT ENGINE & FUNCTIONS
 // ==========================================
 
-// Helper to get all cached leads and sales safely
+// Helper to get all cached leads and sales safely (sempre ignora leads de teste)
 async function getLoadedCRMData() {
   const allLeads = await lerCache('all_leads.json', []);
+  const validLeads = allLeads.filter(l => !isTestLead(l));
   const rawSales = await lerCache('eduzz_sales_raw.json', []);
-  return { allLeads, rawSales };
+  return { allLeads: validLeads, rawSales };
 }
 
 // Analytics Tool: Aggregate Metrics by Funnel and Timeframe
@@ -5014,7 +5067,8 @@ async function getDailyLeadsReport(isYesterday) {
 
   const endpoint = `/api/v4/leads?filter[created_at][from]=${startTimestamp}&filter[created_at][to]=${endTimestamp}&limit=250&with=contacts`;
   const res = await kommoRequest('GET', endpoint);
-  const leads = res?._embedded?.leads || [];
+  // Sempre ignora leads de teste
+  const leads = (res?._embedded?.leads || []).filter(l => !isTestLead(l));
 
   if (leads.length === 0) {
     return `📭 *Relatório Comercial (${dateLabel})*\nNenhum lead registrado neste período.`;
@@ -5634,7 +5688,8 @@ app.get('/api/cron/sla-check', async (req, res) => {
     const endpoint = `/api/v4/leads?${queryParams}&limit=250&with=contacts`;
     
     const data = await kommoRequest('GET', endpoint);
-    const leads = data?._embedded?.leads || [];
+    // Sempre ignora leads de teste
+    const leads = (data?._embedded?.leads || []).filter(l => !isTestLead(l));
     
     console.log(`[SLA Cron] Found ${leads.length} leads in initial stages.`);
     let alertedCount = 0;
@@ -5979,9 +6034,10 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
     };
     const activePipelines = PIPELINE_MAP[funnelFilter] || PIPELINE_MAP.all;
 
-    // Carregar leads do cache
+    // Carregar leads do cache (excluindo leads de teste)
     const allLeads = await lerCache('all_leads.json', []);
     const commercialLeads = allLeads.filter(l => {
+      if (isTestLead(l)) return false;
       const tags = (l._embedded?.tags || []).map(t => t.name.toUpperCase());
       const name = (l.name || '').toUpperCase();
       if (funnelFilter === 'kor') {
@@ -6354,6 +6410,13 @@ app.post(['/api/lp-webhook', '/api/webhook/lp-webhook'], async (req, res) => {
     console.log('[LP MLFP Webhook] Received payload:', JSON.stringify(data));
 
     const name = data.Seu_nome_completo || data.nome || data.name || data.full_name || 'Lead MLFP';
+
+    // Sempre ignora leads de teste
+    if (isTestLead({ name })) {
+      console.log(`[LP MLFP Webhook] Lead de teste ignorado: "${name}"`);
+      return res.status(200).json({ success: true, message: 'Test lead ignored' });
+    }
+
     const email = data.Seu_melhor_e_mail || data.email || data['e-mail'] || '';
     const phone = data.Seu_WhatsApp_com_DDD || data.whatsapp || data.telefone || data.phone || '';
     const instagram = data.Seu_instagram || data.seu_instagram || data.Instagram || data.instagram || data.insta || data.ig || '';
@@ -6436,6 +6499,13 @@ app.post(['/api/webhook/greatpages-kop', '/api/greatpages-kop'], async (req, res
     console.log('[GreatPages KOP Webhook] Received payload:', JSON.stringify(data));
 
     const name = data.Seu_nome_completo || data.nome || data.name || data.full_name || 'Lead KOP';
+
+    // Sempre ignora leads de teste
+    if (isTestLead({ name })) {
+      console.log(`[GreatPages KOP Webhook] Lead de teste ignorado: "${name}"`);
+      return res.status(200).json({ success: true, message: 'Test lead ignored' });
+    }
+
     const email = data.Seu_melhor_e_mail || data.email || data['e-mail'] || '';
     const phone = data.Seu_WhatsApp_com_DDD || data.whatsapp || data.telefone || data.phone || '';
     const instagram = data.Seu_instagram || data.seu_instagram || data.Instagram || data.instagram || data['Seu_instagram'] || data['Seu instagram?'] || data.insta || data.ig || '';
@@ -6550,6 +6620,13 @@ app.post(['/api/kor-webhook', '/api/webhook/greatpages-kor', '/api/greatpages-ko
     console.log('[KOR Webhook] Received payload:', JSON.stringify(data));
 
     const name = getFlexibleValue(data, ['Seu_nome_completo', 'seu_nome_completo', 'nome', 'name', 'full_name', 'Nome', 'first_name', 'nome_completo']) || 'Lead KOR';
+
+    // Sempre ignora leads de teste
+    if (isTestLead({ name })) {
+      console.log(`[KOR Webhook] Lead de teste ignorado: "${name}"`);
+      return res.status(200).json({ success: true, message: 'Test lead ignored' });
+    }
+
     const email = getFlexibleValue(data, ['Seu_melhor_e_mail', 'seu_melhor_e_mail', 'email', 'e-mail', 'e_mail', 'email_address', 'E-mail', 'Email']).toLowerCase().trim();
     const rawPhone = getFlexibleValue(data, ['Seu_WhatsApp_com_DDD', 'seu_whatsapp_com_ddd', 'whatsapp', 'whats', 'telefone', 'phone', 'celular', 'tel', 'WhatsApp', 'phone_number']);
     const phone = rawPhone.replace(/[^0-9+]/g, '');

@@ -62,6 +62,28 @@ const FUNIS_COMERCIAIS = [
 const STATUS_GANHO = 142;
 const STATUS_PERDIDO = 143;
 
+// Filtro universal para sempre ignorar leads de teste
+function isTestLead(lead) {
+  if (!lead) return false;
+  const name = String(lead.name || '').toLowerCase();
+  if (/\btest(e|es|ing|ed|er)?\b/i.test(name) || name.includes('teste') || name.includes('test client') || name.includes('test recovery')) {
+    return true;
+  }
+  const tags = (lead._embedded?.tags || lead.tags || []).map(t => {
+    const tName = typeof t === 'string' ? t : (t?.name || '');
+    return tName.toLowerCase();
+  });
+  if (tags.some(t => /\btest(e|es)?\b/i.test(t) || t.includes('teste') || t.includes('test_'))) {
+    return true;
+  }
+  const contacts = lead._embedded?.contacts || [];
+  for (const c of contacts) {
+    const cName = String(c.name || '').toLowerCase();
+    if (/\btest(e|es|ing|ed|er)?\b/i.test(cName) || cName.includes('teste')) return true;
+  }
+  return false;
+}
+
 // Etapas declaradas POR FUNIL, usando o nome real da etapa no Kommo.
 // Antes existia uma lista única de IDs aplicada a todos os funis, o que
 // rotulava "Contato inicial" (KOP) e "Em Negociação" (Recuperação) como
@@ -637,7 +659,7 @@ async function loadData() {
       fetch('/api/sync-info').then(res => res.json()).catch(() => null)
     ]);
 
-    state.leads = leadsResponse || [];
+    state.leads = (leadsResponse || []).filter(l => !isTestLead(l));
     state.pipelines = pipelinesResponse || {};
     state.users = usersResponse || {};
     state.fields = fieldsResponse || [];
@@ -849,7 +871,7 @@ function getPipelineName(pipelineId) {
 
 // Apply Filters to Leads list
 function applyFilters() {
-  let filtered = [...state.leads];
+  let filtered = state.leads.filter(l => !isTestLead(l));
 
   // 1. Pipeline Filter
   if (state.pipelineId && state.pipelineId !== 'all') {
