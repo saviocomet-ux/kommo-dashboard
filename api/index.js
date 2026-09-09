@@ -7311,6 +7311,432 @@ app.delete('/api/vagas-candidatos', async (req, res) => {
   }
 });
 
+// --- Pesquisa de Experiência (5 Sentidos) API ---
+
+const PESQUISA_FILE_NAME = 'pesquisa_experiencia_respostas.json';
+
+async function readPesquisaRespostas() {
+  try {
+    const dados = await lerCache(PESQUISA_FILE_NAME, []);
+    return Array.isArray(dados) ? dados : [];
+  } catch (err) {
+    console.error('[Pesquisa API] Erro ao ler respostas:', err.message);
+    return [];
+  }
+}
+
+async function writePesquisaRespostas(data) {
+  try {
+    await gravarCache(PESQUISA_FILE_NAME, data);
+  } catch (err) {
+    console.error('[Pesquisa API] Erro ao gravar respostas:', err.message);
+  }
+}
+
+app.options('/api/pesquisa-feedback', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+
+app.post('/api/pesquisa-feedback', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const payload = req.body || {};
+    let list = await readPesquisaRespostas();
+
+    payload.id = payload.id || ('pesq_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4));
+    payload.timestamp = payload.timestamp || new Date().toISOString();
+    payload.form_id = payload.form_id || 'form_5_sentidos';
+    payload.form_slug = payload.form_slug || '5-sentidos';
+    payload.form_title = payload.form_title || 'Avaliação de Experiência Gastronômica';
+
+    list.unshift(payload);
+    if (list.length > 2000) list = list.slice(0, 2000);
+
+    await writePesquisaRespostas(list);
+
+    res.json({ success: true, id: payload.id });
+  } catch (err) {
+    console.error('[Pesquisa API] Erro ao salvar resposta:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.options('/api/pesquisa-respostas', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+
+app.get('/api/pesquisa-respostas', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    let list = await readPesquisaRespostas();
+    const formId = req.query.form_id || req.query.form_slug;
+
+    if (formId && formId !== 'all') {
+      list = list.filter(r => {
+        if (formId === 'form_5_sentidos' || formId === '5-sentidos') {
+          return !r.form_id || r.form_id === 'form_5_sentidos' || r.form_slug === '5-sentidos';
+        }
+        return r.form_id === formId || r.form_slug === formId;
+      });
+    }
+
+    res.json({ success: true, data: list, total: list.length });
+  } catch (err) {
+    console.error('[Pesquisa API] Erro ao buscar respostas:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/pesquisa-respostas', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const id = req.body?.id || req.query?.id;
+    let list = await readPesquisaRespostas();
+    if (id) {
+      list = list.filter(r => r.id !== id);
+    }
+    await writePesquisaRespostas(list);
+    res.json({ success: true, total: list.length });
+  } catch (err) {
+    console.error('[Pesquisa API] Erro ao deletar resposta:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// --- Gerenciador de Formulários Dinâmicos API ---
+
+const FORMULARIOS_FILE_NAME = 'formularios_cadastrados.json';
+
+const DEFAULT_5_SENTIDOS_FORM = {
+  id: 'form_5_sentidos',
+  slug: '5-sentidos',
+  title: 'Avaliação de Experiência Gastronômica',
+  subtitle: 'Sua percepção sincera através dos 5 sentidos é a ferramenta fundamental para elevarmos os padrões operacionais da casa.',
+  badge: 'MÉTODO 5 SENTIDOS',
+  is_default: true,
+  created_at: '2026-09-09T00:00:00.000Z',
+  updated_at: '2026-09-09T18:00:00.000Z',
+  questions: [
+    {
+      id: 'q1_frase_resumo',
+      title: 'Resumo da Experiência',
+      step_badge: 'PERGUNTA 1 DE 10',
+      description: 'Se você tivesse que resumir a experiência que está tendo conosco hoje em uma frase, qual seria?',
+      type: 'textarea',
+      required: true,
+      placeholder: 'Ex: Um atendimento atento e sabores equilibrados que superaram todas as expectativas.'
+    },
+    {
+      id: 'q2_atendimento',
+      title: 'Expectativa com o Atendimento',
+      step_badge: 'PERGUNTA 2 DE 10 • ATENDIMENTO',
+      description: 'Quanto da sua expectativa em relação ao atendimento que está recebendo foi alcançada?',
+      type: 'radio',
+      required: true,
+      auto_advance: true,
+      options: [
+        'Superou o que eu esperava',
+        'Foi como eu esperava',
+        'Ficou abaixo do que eu esperava'
+      ]
+    },
+    {
+      id: 'q3_paladar',
+      title: 'Paladar — Pratos & Sabores',
+      step_badge: 'SENTIDO 1 DE 5 • PALADAR',
+      description: 'Quanto aos nossos pratos, e tudo que provou durante a visita?',
+      type: 'radio',
+      required: true,
+      auto_advance: true,
+      options: [
+        'Superou o que eu esperava',
+        'Foi como eu esperava',
+        'Ficou abaixo do que eu esperava'
+      ],
+      extra_input: {
+        id: 'q3_destaque',
+        label: 'Qual prato ou sabor mais se destacou? (Opcional)',
+        placeholder: 'Ex: O ponto da carne e a textura da sobremesa.'
+      }
+    },
+    {
+      id: 'q4_visao',
+      title: 'Visão — Ambiente, Decoração & Limpeza',
+      step_badge: 'SENTIDO 2 DE 5 • VISÃO',
+      description: 'Nosso ambiente parece organizado, limpo e bem decorado?',
+      type: 'radio',
+      required: true,
+      auto_advance: true,
+      options: [
+        'Superou o que eu esperava',
+        'É como eu esperava',
+        'Está abaixo do que eu esperava'
+      ]
+    },
+    {
+      id: 'q5_audicao',
+      title: 'Audição — Música, Ruídos & Tom de Voz',
+      step_badge: 'SENTIDO 3 DE 5 • AUDIÇÃO',
+      description: 'Como estão o tom de voz do atendimento, a música ambiente e os ruídos?',
+      type: 'radio',
+      required: true,
+      auto_advance: true,
+      options: [
+        'Muito confortáveis',
+        'Confortáveis',
+        'Indiferentes / Normais',
+        'Desconfortável'
+      ]
+    },
+    {
+      id: 'q6_olfato',
+      title: 'Olfato — Aromas & Identidade da Marca',
+      step_badge: 'SENTIDO 4 DE 5 • OLFATO',
+      description: 'Os aromas dos pratos que você sentiu condizem com a proposta da marca?',
+      type: 'radio',
+      required: true,
+      auto_advance: true,
+      options: [
+        'Sim',
+        'Neutro',
+        'Não'
+      ]
+    },
+    {
+      id: 'q7_tato',
+      title: 'Tato — Conforto Físico & Climatização',
+      step_badge: 'SENTIDO 5 DE 5 • TATO',
+      description: 'Você se sentiu confortável no espaço? (cadeiras, sofás, mesas e temperatura do ambiente)',
+      type: 'radio',
+      required: true,
+      auto_advance: true,
+      options: [
+        'Superou o que eu esperava',
+        'Era o que eu esperava',
+        'Está abaixo do que eu esperava'
+      ]
+    },
+    {
+      id: 'q8_frequencia',
+      title: 'Frequência de Visitas',
+      step_badge: 'PERGUNTA 8 DE 10 • HISTÓRICO',
+      description: 'Quantas vezes você já visitou esta operação?',
+      type: 'radio',
+      required: true,
+      auto_advance: true,
+      options: [
+        'É minha primeira vez',
+        'Duas vezes',
+        'Três vezes',
+        'Mais de cinco vezes',
+        'Mais de dez vezes'
+      ]
+    },
+    {
+      id: 'q9_melhoria',
+      title: 'Oportunidades de Melhoria',
+      step_badge: 'PERGUNTA 9 DE 10 • MELHORIA',
+      description: 'O que podemos fazer para que sua próxima experiência seja ainda melhor?',
+      type: 'textarea',
+      required: false,
+      placeholder: 'Deixe aqui sugestões práticas de melhoria, agilidade, pratos ou detalhes que fariam a diferença...'
+    },
+    {
+      id: 'q10_nps',
+      title: 'Índice de Recomendação',
+      step_badge: 'PERGUNTA 10 DE 10 • NPS',
+      description: 'Em uma escala de 0 a 10, qual a probabilidade de você nos recomendar a um amigo, colega ou sócio?',
+      type: 'nps',
+      required: true
+    }
+  ]
+};
+
+async function readFormularios() {
+  try {
+    const dados = await lerCache(FORMULARIOS_FILE_NAME, null);
+    if (Array.isArray(dados) && dados.length > 0) {
+      // Garante que o default sempre existe
+      const hasDefault = dados.some(f => f.id === 'form_5_sentidos');
+      if (!hasDefault) dados.unshift(DEFAULT_5_SENTIDOS_FORM);
+      return dados;
+    }
+    return [DEFAULT_5_SENTIDOS_FORM];
+  } catch (err) {
+    console.error('[Formulários API] Erro ao ler formulários:', err.message);
+    return [DEFAULT_5_SENTIDOS_FORM];
+  }
+}
+
+async function writeFormularios(data) {
+  try {
+    await gravarCache(FORMULARIOS_FILE_NAME, data);
+  } catch (err) {
+    console.error('[Formulários API] Erro ao gravar formulários:', err.message);
+  }
+}
+
+app.options('/api/formularios', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+
+// GET /api/formularios ou /api/formularios?id=:id / ?slug=:slug
+app.get('/api/formularios', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const forms = await readFormularios();
+    const queryId = req.query.id || req.query.slug;
+
+    if (queryId) {
+      const found = forms.find(f => f.id === queryId || f.slug === queryId);
+      if (!found) {
+        return res.status(404).json({ success: false, error: 'Formulário não encontrado' });
+      }
+      return res.json({ success: true, data: found });
+    }
+
+    // Listagem com resumo
+    const listSummary = forms.map(f => ({
+      id: f.id,
+      slug: f.slug,
+      title: f.title,
+      subtitle: f.subtitle || '',
+      badge: f.badge || 'FORMULÁRIO',
+      is_default: !!f.is_default,
+      questions_count: Array.isArray(f.questions) ? f.questions.length : 0,
+      created_at: f.created_at || null,
+      updated_at: f.updated_at || null
+    }));
+
+    res.json({ success: true, data: listSummary, total: listSummary.length });
+  } catch (err) {
+    console.error('[Formulários API] Erro ao listar formulários:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/formularios (criar ou atualizar formulário)
+app.post('/api/formularios', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const payload = req.body || {};
+    if (!payload.title || !payload.title.trim()) {
+      return res.status(400).json({ success: false, error: 'O título do formulário é obrigatório.' });
+    }
+
+    if (!Array.isArray(payload.questions) || payload.questions.length === 0) {
+      return res.status(400).json({ success: false, error: 'O formulário deve ter pelo menos uma pergunta.' });
+    }
+
+    let forms = await readFormularios();
+
+    // Sanitizar slug
+    const cleanTitle = payload.title.trim();
+    const generatedSlug = payload.slug && payload.slug.trim() 
+      ? payload.slug.toLowerCase().replace(/[^a-z0-9-_]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+      : cleanTitle.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+
+    const formId = payload.id || ('form_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4));
+
+    const updatedForm = {
+      id: formId,
+      slug: generatedSlug || formId,
+      title: cleanTitle,
+      subtitle: (payload.subtitle || '').trim(),
+      badge: (payload.badge || 'AUDITORIA KØMANDO').toUpperCase().trim(),
+      is_default: formId === 'form_5_sentidos',
+      created_at: payload.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      questions: payload.questions.map((q, idx) => ({
+        id: q.id || ('q_' + (idx + 1) + '_' + Math.random().toString(36).substr(2, 4)),
+        title: (q.title || '').trim(),
+        step_badge: (q.step_badge || `PERGUNTA ${idx + 1}`).toUpperCase().trim(),
+        description: (q.description || '').trim(),
+        type: ['radio', 'text', 'textarea', 'nps', 'rating'].includes(q.type) ? q.type : 'radio',
+        required: q.required !== false,
+        auto_advance: q.type === 'radio' ? q.auto_advance !== false : false,
+        placeholder: q.placeholder || '',
+        options: Array.isArray(q.options) ? q.options.map(o => String(o).trim()).filter(Boolean) : [],
+        extra_input: q.extra_input ? {
+          id: q.extra_input.id || ('extra_' + (idx + 1)),
+          label: q.extra_input.label || '',
+          placeholder: q.extra_input.placeholder || ''
+        } : null
+      }))
+    };
+
+    const existingIdx = forms.findIndex(f => f.id === formId || (f.slug === updatedForm.slug && f.id !== 'form_5_sentidos'));
+    if (existingIdx >= 0) {
+      forms[existingIdx] = updatedForm;
+    } else {
+      forms.unshift(updatedForm);
+    }
+
+    await writeFormularios(forms);
+
+    res.json({ success: true, data: updatedForm });
+  } catch (err) {
+    console.error('[Formulários API] Erro ao salvar formulário:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/formularios?id=:id
+app.delete('/api/formularios', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const id = req.body?.id || req.query?.id || req.query?.slug;
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'ID do formulário não fornecido.' });
+    }
+
+    if (id === 'form_5_sentidos' || id === '5-sentidos') {
+      return res.status(400).json({ success: false, error: 'O formulário padrão dos 5 Sentidos não pode ser excluído.' });
+    }
+
+    let forms = await readFormularios();
+    const initialLen = forms.length;
+    forms = forms.filter(f => f.id !== id && f.slug !== id);
+
+    if (forms.length === initialLen) {
+      return res.status(404).json({ success: false, error: 'Formulário não encontrado.' });
+    }
+
+    await writeFormularios(forms);
+    res.json({ success: true, message: 'Formulário excluído com sucesso.' });
+  } catch (err) {
+    console.error('[Formulários API] Erro ao excluir formulário:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Start Server when run locally (not in serverless environment)
 if (!isVercel) {
   app.listen(PORT, () => {
