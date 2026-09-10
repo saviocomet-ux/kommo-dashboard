@@ -4288,6 +4288,107 @@ app.get(['/api/cron/mlfp-weekly-report', '/api/reports/mlfp-weekly'], async (req
   }
 });
 
+// MLFP Telemetry Endpoint — Taxa de Resposta, Automação vs Humano
+app.get('/api/mlfp/telemetry', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const fromSecs = req.query.from ? Math.floor(new Date(req.query.from).getTime() / 1000) : Math.floor(Date.now() / 1000) - (days * 24 * 60 * 60);
+    const toSecs = req.query.to ? Math.floor(new Date(req.query.to).getTime() / 1000) : Math.floor(Date.now() / 1000);
+
+    const allLeads = await lerCache('all_leads.json', []);
+    const validLeads = allLeads.filter(l => 
+      l.pipeline_id === 13304583 && 
+      !isTestLead(l) && 
+      !isRepescagemLead(l) &&
+      l.created_at >= fromSecs && 
+      l.created_at <= toSecs
+    );
+
+    const STAGES_HUMANO = [102598999, 109107608, 102599003, 102599203, 108291644, 142];
+
+    let countHumano = 0;
+    let countAutomacao = 0;
+    let countDownsell = 0;
+    let countSemResp = 0;
+
+    validLeads.forEach(l => {
+      const sId = parseInt(l.status_id);
+      const cfs = l.custom_fields_values || [];
+      const sdr = cfs.find(f => f.field_id === 491903)?.values?.[0]?.value;
+      const closer = cfs.find(f => f.field_id === 491901)?.values?.[0]?.value;
+      const reuniao = cfs.find(f => f.field_id === 490891)?.values?.[0]?.value;
+      const tags = (l._embedded?.tags || []).map(t => (t.name || '').toUpperCase());
+
+      let isAuxiliar = false;
+      for (const f of cfs) {
+        const fn = String(f.field_name || '').toLowerCase();
+        const val = String(f.values?.[0]?.value || '').toUpperCase();
+        if (f.field_id === 128884 || f.field_id === 128474 || fn.includes('cargo') || fn.includes('perfil')) {
+          if (val.includes('AUXILIAR') || val.includes('AJUDANTE') || val.includes('BUSCO EVOLUÇÃO') || val.includes('BUSCO EVOLUCAO')) {
+            isAuxiliar = true;
+            break;
+          }
+        }
+      }
+
+      const hasHumanSign = STAGES_HUMANO.includes(sId) || Boolean(sdr) || Boolean(closer) || Boolean(reuniao) || sId === 142;
+      const isDownsellDireto = (sId === 108619300 || isAuxiliar) && !hasHumanSign;
+      const isParouAutomacao = !hasHumanSign && !isDownsellDireto && (sId === 108619300 || sId === 143 || (sId === 102598995 && tags.some(t => t.includes('RESPOND') || t.includes('CONVERS'))));
+
+      if (hasHumanSign) {
+        countHumano++;
+      } else if (isDownsellDireto) {
+        countDownsell++;
+      } else if (isParouAutomacao) {
+        countAutomacao++;
+      } else {
+        countSemResp++;
+      }
+    });
+
+    const total = validLeads.length;
+    const responderam = countHumano + countAutomacao;
+    const abordados = total - countDownsell;
+
+    res.json({
+      success: true,
+      period: {
+        days,
+        from: new Date(fromSecs * 1000).toISOString(),
+        to: new Date(toSecs * 1000).toISOString()
+      },
+      telemetry: {
+        totalLeads: total,
+        totalResponderam: responderam,
+        taxaRespostaGeral: total > 0 ? ((responderam / total) * 100).toFixed(1) + '%' : '0.0%',
+        taxaRespostaAbordados: abordados > 0 ? ((responderam / abordados) * 100).toFixed(1) + '%' : '0.0%',
+        leadsAbordados: abordados,
+        pararamAutomacao: {
+          count: countAutomacao,
+          pctDoTotal: total > 0 ? ((countAutomacao / total) * 100).toFixed(1) + '%' : '0.0%',
+          pctDasRespostas: responderam > 0 ? ((countAutomacao / responderam) * 100).toFixed(1) + '%' : '0.0%'
+        },
+        atendimentoHumano: {
+          count: countHumano,
+          pctDoTotal: total > 0 ? ((countHumano / total) * 100).toFixed(1) + '%' : '0.0%',
+          pctDasRespostas: responderam > 0 ? ((countHumano / responderam) * 100).toFixed(1) + '%' : '0.0%'
+        },
+        downsellDireto: {
+          count: countDownsell,
+          pctDoTotal: total > 0 ? ((countDownsell / total) * 100).toFixed(1) + '%' : '0.0%'
+        },
+        semResposta: {
+          count: countSemResp,
+          pctDoTotal: total > 0 ? ((countSemResp / total) * 100).toFixed(1) + '%' : '0.0%'
+        }
+      }
+    });
+  } catch (err) {
+    console.error('[API MLFP Telemetry] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Helper for Gemini Agent: Query Leads in Kommo CRM
 async function queryCRMLeads(query) {
   try {
@@ -7354,6 +7455,14 @@ app.post('/api/pesquisa-feedback', async (req, res) => {
     payload.form_id = payload.form_id || 'form_5_sentidos';
     payload.form_slug = payload.form_slug || '5-sentidos';
     payload.form_title = payload.form_title || 'Avaliação de Experiência Gastronômica';
+    payload.restaurante = (payload.restaurante || payload.restaurante_nome || 'Restaurante').trim();
+    payload.restaurante_nome = payload.restaurante;
+    
+    // Identificação ou Anônimo
+    const isAnon = payload.is_anonimo === true || !payload.nome || payload.nome.trim().toLowerCase() === 'anônimo';
+    payload.is_anonimo = isAnon;
+    payload.nome = isAnon ? 'Anônimo' : payload.nome.trim();
+    payload.telefone = isAnon ? '' : (payload.telefone ? String(payload.telefone).trim() : '');
 
     list.unshift(payload);
     if (list.length > 2000) list = list.slice(0, 2000);
@@ -7425,9 +7534,10 @@ const FORMULARIOS_FILE_NAME = 'formularios_cadastrados.json';
 const DEFAULT_5_SENTIDOS_FORM = {
   id: 'form_5_sentidos',
   slug: '5-sentidos',
+  restaurante_nome: 'Restaurante Modelo',
   title: 'Avaliação de Experiência Gastronômica',
-  subtitle: 'Sua percepção sincera através dos 5 sentidos é a ferramenta fundamental para elevarmos os padrões operacionais da casa.',
-  badge: 'MÉTODO 5 SENTIDOS',
+  subtitle: 'Sua percepção sincera é a ferramenta fundamental para elevarmos os padrões operacionais da casa.',
+  badge: 'PESQUISA DE SATISFAÇÃO',
   is_default: true,
   created_at: '2026-09-09T00:00:00.000Z',
   updated_at: '2026-09-09T18:00:00.000Z',
@@ -7540,11 +7650,10 @@ const DEFAULT_5_SENTIDOS_FORM = {
       required: true,
       auto_advance: true,
       options: [
-        'É minha primeira vez',
-        'Duas vezes',
-        'Três vezes',
-        'Mais de cinco vezes',
-        'Mais de dez vezes'
+        '1ª vez hoje',
+        '2ª ou 3ª vez',
+        'Cliente frequente (4 a 10 vezes)',
+        'Cliente fiel (mais de 10 vezes)'
       ]
     },
     {
@@ -7598,7 +7707,7 @@ app.options('/api/formularios', (req, res) => {
   res.sendStatus(200);
 });
 
-// GET /api/formularios ou /api/formularios?id=:id / ?slug=:slug
+// GET /api/formularios ou /api/formularios?id=:id / ?slug=:slug / ?r=:r / ?f=:f
 app.get('/api/formularios', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -7606,10 +7715,16 @@ app.get('/api/formularios', async (req, res) => {
 
   try {
     const forms = await readFormularios();
-    const queryId = req.query.id || req.query.slug;
+    const queryId = req.query.id || req.query.slug || req.query.r || req.query.f;
 
     if (queryId) {
-      const found = forms.find(f => f.id === queryId || f.slug === queryId);
+      const qLower = String(queryId).toLowerCase().trim();
+      const found = forms.find(f => 
+        f.id === queryId || 
+        f.slug === queryId || 
+        f.slug === qLower ||
+        (f.restaurante_nome && f.restaurante_nome.toLowerCase() === qLower)
+      );
       if (!found) {
         return res.status(404).json({ success: false, error: 'Formulário não encontrado' });
       }
@@ -7620,9 +7735,10 @@ app.get('/api/formularios', async (req, res) => {
     const listSummary = forms.map(f => ({
       id: f.id,
       slug: f.slug,
+      restaurante_nome: f.restaurante_nome || f.title,
       title: f.title,
       subtitle: f.subtitle || '',
-      badge: f.badge || 'FORMULÁRIO',
+      badge: f.badge || 'PESQUISA DE SATISFAÇÃO',
       is_default: !!f.is_default,
       questions_count: Array.isArray(f.questions) ? f.questions.length : 0,
       created_at: f.created_at || null,
@@ -7654,20 +7770,21 @@ app.post('/api/formularios', async (req, res) => {
 
     let forms = await readFormularios();
 
-    // Sanitizar slug
+    // Sanitizar slug e restaurante_nome
     const cleanTitle = payload.title.trim();
-    const generatedSlug = payload.slug && payload.slug.trim() 
-      ? payload.slug.toLowerCase().replace(/[^a-z0-9-_]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
-      : cleanTitle.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+    const restauranteNome = (payload.restaurante_nome || payload.restaurante || cleanTitle).trim();
+    const baseForSlug = payload.slug && payload.slug.trim() ? payload.slug.trim() : restauranteNome;
+    const generatedSlug = baseForSlug.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
 
     const formId = payload.id || ('form_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4));
 
     const updatedForm = {
       id: formId,
       slug: generatedSlug || formId,
+      restaurante_nome: restauranteNome,
       title: cleanTitle,
       subtitle: (payload.subtitle || '').trim(),
-      badge: (payload.badge || 'AUDITORIA KØMANDO').toUpperCase().trim(),
+      badge: (payload.badge || 'PESQUISA DE SATISFAÇÃO').toUpperCase().trim(),
       is_default: formId === 'form_5_sentidos',
       created_at: payload.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
