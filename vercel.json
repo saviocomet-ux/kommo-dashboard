@@ -38,6 +38,10 @@
     {
       "path": "/api/cron/trafego-noite",
       "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/cron/auditoria-semanal",
+      "schedule": "0 12 * * 1"
     }
   ]
 }

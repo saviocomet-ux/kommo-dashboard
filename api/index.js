@@ -420,8 +420,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve static files from the parent (root) directory where index.html, style.css, app.js live
-app.use(express.static(path.join(__dirname, '..')));
+// Arquivos estáticos do painel. Só a lista abaixo é servida: express.static
+// sobre a raiz inteira expunha api/all_leads.json (dados pessoais dos leads),
+// api/vagas_auth.json e o próprio código-fonte com tokens.
+const ARQUIVOS_PUBLICOS = new Set(['/', '/index.html', '/app.js', '/style.css', '/simulador.html', '/simulador-sdr.html']);
+const servirEstatico = express.static(path.join(__dirname, '..'), { index: 'index.html' });
+app.use((req, res, next) => {
+  if ((req.method === 'GET' || req.method === 'HEAD') && ARQUIVOS_PUBLICOS.has(req.path)) {
+    return servirEstatico(req, res, next);
+  }
+  next();
+});
 
 // Simulador SDR IA Page Route
 app.get(['/simulador', '/simulador-sdr', '/sdr', '/api/simulador'], (req, res) => {
@@ -745,6 +754,140 @@ app.get('/api/custom-fields', async (req, res) => {
 });
 
 // GET Eduzz Analytics (with real-time & date filter support)
+// ============================================================
+//  KOR — VENDAS REAIS E CONVERSÃO NO META
+// ============================================================
+// O pixel registra ~40–55% das vendas do Kit (cruzamento ago–set/2026: 35 no
+// pixel × 67 compradores na Base Eduzz). A causa provável é Pix/boleto, que
+// aprovam depois que o comprador saiu do checkout. Por isso a venda do KOR é
+// medida pela Base de Clientes Eduzz e enviada ao Meta pelo servidor.
+const PRODUTO_KOR = /KIT DE OPERA[ÇC][ÃA]O DE RESTAURANTES/i;
+// O CRM não guarda o valor das vendas anteriores a 14/09 (bug do webhook);
+// sem valor no lead, usa o preço do Kit
+const PRECO_KOR = parseFloat(process.env.PRECO_KOR) || 97;
+
+// Compradores do Kit na Base Eduzz criados no intervalo (segundos UNIX)
+function vendasKorBaseEduzz(leads, iniSec, fimSec) {
+  let vendas = 0, valor = 0, estimadas = 0;
+  (leads || []).forEach(l => {
+    if (l.pipeline_id !== 13956856) return;
+    if (l.created_at < iniSec || l.created_at > fimSec) return;
+    if (!(l._embedded?.tags || []).some(t => PRODUTO_KOR.test(t.name || ''))) return;
+    vendas++;
+    if (parseFloat(l.price) > 0) valor += parseFloat(l.price);
+    else { valor += PRECO_KOR; estimadas++; }
+  });
+  return { vendas, valor, estimadas };
+}
+
+// 'nao_cartao' (padrão): cartão aprova na hora e o pixel do checkout já
+// registra — enviar de novo duplicaria, porque o event_id do pixel da Eduzz
+// não é conhecido para deduplicar. 'todos' envia tudo; 'desligado' não envia.
+const MODO_CAPI_EDUZZ = (process.env.META_CAPI_EDUZZ_MODO || 'nao_cartao').toLowerCase();
+
+// Produtos de venda direta cujo Purchase sai daqui.
+// Fora da lista, de propósito:
+//  - KOR: desde 15/09/2026 o Purchase vem da integração nativa da Eduzz, que
+//    tem os cookies do checkout (fbp/fbc) e casa melhor com o anúncio.
+//    Enviar também daqui duplicaria a conversão.
+//  - Mentoria MLFP e consultoria Komando: fecham no CRM; o Purchase sai do
+//    webhook do Kommo quando o lead é ganho com valor.
+//  - Produtos sem funil no painel (Black dos Cozinhas, links especiais, kits
+//    em inglês/espanhol): não pertencem às campanhas deste pixel.
+const PRODUTOS_CAPI_EDUZZ = [
+  { categoria: 'KOP', re: /KIT DE OPERA[ÇC][ÃA]O DE PRA[ÇC]A/i },
+  { categoria: 'Ebook', re: /10 PASSOS|E-?BOOK/i },
+  { categoria: 'MLFP Downsell', re: /KIT DE LIDERAN/i }
+];
+
+async function enviarPurchaseEduzz({ payload, eduzzId, email, phone, name, productName, value, clientIp, clientUserAgent }) {
+  if (MODO_CAPI_EDUZZ === 'desligado') return { ok: false, motivo: 'envio desligado' };
+  if (PRODUTO_KOR.test(productName || '')) return { ok: false, motivo: 'KOR: Purchase enviado pela integração da Eduzz' };
+  const produto = PRODUTOS_CAPI_EDUZZ.find(p => p.re.test(productName || ''));
+  if (!produto) return { ok: false, motivo: 'produto sem funil de venda direta mapeado' };
+  // Purchase sem valor ensina ao algoritmo que a venda vale zero
+  if (!(value > 0)) {
+    console.warn(`[Eduzz CAPI] Venda ${eduzzId} sem valor extraído — Purchase não enviado`);
+    return { ok: false, motivo: 'sem valor' };
+  }
+
+  const metodo = String(payload.data?.payment?.method || payload.data?.paymentMethod || payload.sale_payment_method || payload.payment_method || '').toLowerCase();
+  const ehCartao = /card|cart[aã]o|credit|cr[eé]dito/.test(metodo);
+  if (MODO_CAPI_EDUZZ === 'nao_cartao' && ehCartao) {
+    return { ok: false, motivo: 'cartão: já registrado pelo pixel do checkout' };
+  }
+
+  const paidRaw = payload.data?.paidAt || payload.data?.paid_at || payload.date_payment || null;
+  let eventTime;
+  if (paidRaw) {
+    const s = String(paidRaw);
+    const t = Date.parse(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s) ? s : `${s.replace(' ', 'T')}-03:00`);
+    if (!isNaN(t)) eventTime = Math.floor(t / 1000);
+  }
+
+  // 'website' exige user agent; sem ele o Meta recusa o evento
+  const actionSource = clientUserAgent ? 'website' : 'system_generated';
+  const r = await sendMetaEvent(
+    'Purchase',
+    { email, phone, name, clientIp, clientUserAgent },
+    {
+      value: Math.round(value * 100) / 100,
+      currency: 'BRL',
+      content_name: productName,
+      content_category: produto.categoria,
+      order_id: String(eduzzId),
+      payment_method: metodo || 'desconhecido'
+    },
+    `eduzz_${eduzzId}`,
+    { eventTime, actionSource }
+  );
+  console.log(`[Eduzz CAPI] Purchase ${produto.categoria} ${eduzzId} (${metodo || 'método desconhecido'}, R$ ${value}): ${r.ok ? 'enviado' : 'falhou — ' + r.motivo}`);
+  return r;
+}
+
+// Grava uma venda paga no mesmo formato do export da Eduzz (sale_id,
+// date_payment, sale_status 3, sale_total, content_title, utm_*), para que
+// /api/eduzz-analytics e /api/traffic-sales-weekly a leiam sem adaptação.
+// Guarda também os últimos payloads crus, para conferir os nomes de campo.
+async function registrarVendaEduzz({ payload, eduzzId, email, name, phone, productName, value, utm_source, utm_campaign, utm_medium, utm_content }) {
+  const agoraSP = new Date(Date.now() - 3 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  const paidRaw = payload.data?.paidAt || payload.data?.paid_at || payload.date_payment || null;
+  const createdRaw = payload.data?.createdAt || payload.data?.created_at || payload.date_create || null;
+  // Datas ISO com fuso viram horário de Brasília no formato "YYYY-MM-DD HH:mm:ss"
+  const paraSP = raw => {
+    if (!raw) return null;
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) return String(raw);
+    return new Date(d.getTime() - 3 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  };
+
+  const venda = {
+    sale_id: String(eduzzId),
+    date_create: paraSP(createdRaw) || agoraSP,
+    date_payment: paraSP(paidRaw) || agoraSP,
+    sale_status: 3,
+    sale_status_name: 'Paga',
+    sale_total: Math.round(value * 100) / 100,
+    content_title: productName,
+    client_name: name,
+    client_email: email,
+    client_cel: phone,
+    utm_source, utm_campaign, utm_medium, utm_content,
+    origem: 'webhook'
+  };
+
+  const vendas = await lerCache('eduzz_sales_raw.json', []);
+  const semDuplicata = vendas.filter(v => String(v.sale_id) !== venda.sale_id);
+  semDuplicata.push(venda);
+  await gravarCache('eduzz_sales_raw.json', semDuplicata);
+
+  const log = await lerCache('eduzz_webhook_log.json', []);
+  log.push({ recebido_em: agoraSP, valor_extraido: venda.sale_total, payload });
+  await gravarCache('eduzz_webhook_log.json', log.slice(-20));
+
+  console.log(`[Webhook] Venda ${venda.sale_id} registrada no cache Eduzz (R$ ${venda.sale_total})`);
+}
+
 app.get('/api/eduzz-analytics', async (req, res) => {
   try {
     const { from, to } = req.query;
@@ -1538,7 +1681,24 @@ app.get('/api/ga4-analytics', async (req, res) => {
 // Sync Data from Kommo CRM (Supports POST for manual trigger and GET for Vercel Cron)
 app.all(['/api/sync', '/api/cron/sync'], async (req, res) => {
   try {
-    console.log('[Sync] Starting full synchronization with Kommo CRM...');
+    const isFullSync = req.query.full === '1';
+    
+    // Ler cache atual para sincronização incremental
+    const syncInfo = await lerCache('sync_info.json', null);
+    let existingLeads = await lerCache('all_leads.json', []);
+    
+    let lastSyncTimestamp = 0;
+    if (!isFullSync && syncInfo && syncInfo.timestamp && existingLeads.length > 0) {
+      // 5 minutos de margem de segurança
+      lastSyncTimestamp = Math.floor(new Date(syncInfo.timestamp).getTime() / 1000) - 300;
+    }
+
+    if (lastSyncTimestamp > 0) {
+      console.log(`[Sync] Starting INCREMENTAL synchronization since ${new Date(lastSyncTimestamp*1000).toISOString()}`);
+    } else {
+      console.log('[Sync] Starting FULL synchronization with Kommo CRM...');
+      existingLeads = []; // reseta pra full sync
+    }
     
     // 1. Fetch Users
     console.log('[Sync] Fetching users...');
@@ -1555,15 +1715,20 @@ app.all(['/api/sync', '/api/cron/sync'], async (req, res) => {
     const fieldsData = await fetchFromKommo('/api/v4/leads/custom_fields');
     await gravarCache('custom_fields.json', fieldsData || {});
 
-    // 4. Fetch All Leads (paged)
+    // 4. Fetch Leads (paged)
     console.log('[Sync] Fetching leads (paged)...');
-    let allLeads = [];
+    let allLeads = existingLeads;
+    let newOrUpdatedCount = 0;
     let page = 1;
     let hasMore = true;
 
     while (hasMore) {
       console.log(`[Sync] Fetching page ${page} of leads...`);
-      const data = await fetchFromKommo(`/api/v4/leads?limit=250&page=${page}&with=contacts`);
+      const url = lastSyncTimestamp > 0
+        ? `/api/v4/leads?filter[updated_at][from]=${lastSyncTimestamp}&limit=250&page=${page}&with=contacts`
+        : `/api/v4/leads?limit=250&page=${page}&with=contacts`;
+
+      const data = await fetchFromKommo(url);
       
       if (!data || !data._embedded || !data._embedded.leads || data._embedded.leads.length === 0) {
         hasMore = false;
@@ -1571,8 +1736,20 @@ app.all(['/api/sync', '/api/cron/sync'], async (req, res) => {
       }
       
       const leads = data._embedded.leads;
-      allLeads = allLeads.concat(leads);
-      console.log(`[Sync] Page ${page} fetched: ${leads.length} leads. Total so far: ${allLeads.length}`);
+      newOrUpdatedCount += leads.length;
+      
+      if (lastSyncTimestamp > 0) {
+        // Atualizar ou inserir leads incrementais
+        leads.forEach(newLead => {
+          const idx = allLeads.findIndex(l => l.id === newLead.id);
+          if (idx >= 0) allLeads[idx] = newLead;
+          else allLeads.push(newLead);
+        });
+      } else {
+        allLeads = allLeads.concat(leads);
+      }
+      
+      console.log(`[Sync] Page ${page} fetched: ${leads.length} leads. Updated so far: ${newOrUpdatedCount}. Total pool: ${allLeads.length}`);
       
       if (leads.length < 250) {
         hasMore = false;
@@ -1583,10 +1760,13 @@ app.all(['/api/sync', '/api/cron/sync'], async (req, res) => {
       }
     }
 
-    const persistido = await gravarCache('all_leads.json', allLeads);
-    console.log(`[Sync] Sync complete. Saved ${allLeads.length} leads. Persistido: ${persistido}`);
+    // Sort leads by created_at desc to maintain consistency
+    allLeads.sort((a, b) => b.created_at - a.created_at);
 
-    const syncInfo = {
+    const persistido = await gravarCache('all_leads.json', allLeads);
+    console.log(`[Sync] Sync complete. Saved ${allLeads.length} leads (${newOrUpdatedCount} updated). Persistido: ${persistido}`);
+
+    const newSyncInfo = {
       timestamp: new Date().toISOString(),
       leadsCount: allLeads.length,
       usersCount: usersData?._embedded?.users?.length || 0,
@@ -1594,7 +1774,7 @@ app.all(['/api/sync', '/api/cron/sync'], async (req, res) => {
       persistido,
       armazenamento: BLOB_ATIVO ? 'vercel-blob' : (isVercel ? 'tmp-efemero' : 'disco-local')
     };
-    await gravarCache('sync_info.json', syncInfo);
+    await gravarCache('sync_info.json', newSyncInfo);
 
     const aviso = persistido
       ? null
@@ -1602,7 +1782,7 @@ app.all(['/api/sync', '/api/cron/sync'], async (req, res) => {
 
     res.json({
       success: true,
-      ...syncInfo,
+      ...newSyncInfo,
       aviso
     });
   } catch (error) {
@@ -1615,6 +1795,43 @@ app.all(['/api/sync', '/api/cron/sync'], async (req, res) => {
 });
 
 // Sync Status Endpoint
+// Contexto operacional servido num lugar só. Os agentes do Paperclip carregavam
+// este texto dentro das instruções de cada um: 6 a 10 mil caracteres reenviados
+// a cada execução. Agora eles leem daqui quando precisam.
+const CONTEXTO_OPERACAO = `# Contexto operacional — Chef Kaká Gomes
+Atualizado em 16/09/2026. Números medidos em produção.
+
+## Onde está a verdade de cada número
+- Venda do KOR = compra do "Kit de Operação de Restaurantes" na Base de Clientes Eduzz (pipeline 13956856). O funil KOR Inbound (14268556) é só captação.
+- O pixel registra 38% a 56% das vendas do KOR (35 de 67 entre agosto e 14/09/2026). Nunca julgue o KOR pelo CPA do Gerenciador.
+- KOR real: agosto 50 vendas, R$ 3.645, CAC R$ 73, ROAS 1,33x. Setembro (1 a 14): 17 vendas, CAC R$ 113, ROAS 0,86x. CAC semanal subiu de R$ 68 para R$ 130.
+- Venda da Mentoria MLFP = só Mentoria, Faixa Preta, Turma ao Vivo ou link especial. Kit de Liderança é downsell. Outros kits e e-book são "outra compra".
+- Funil de Recuperação (13956952) cobre carrinho, pix e boleto de todos os produtos. As 292 vendas fechadas em 12/08 são migração de junho.
+- Komando e Mentoria fecham no CRM: lead ganho sem valor preenchido zera receita, ROAS e o Purchase enviado ao Meta.
+
+## Meta Ads
+- Contas: act_322391662838622 (atual), act_202384504675778 (antiga, fev a abr/2026), act_342834581 (impulsionamento). Pixel único 1601746558049023.
+- Purchase ao Meta: KOR pela integração nativa da Eduzz; KOP, e-book e Kit de Liderança pelo webhook do dashboard (só Pix e boleto); Mentoria e Komando pelo webhook do Kommo no ganho com valor. Nunca dois envios para o mesmo produto.
+- GreatPages: rastreamento PageView, conversão Lead. Nunca Purchase em página.
+- Campanhas [VIEWS] e [A] são conteúdo: sem CPL nem ROAS. Social Selling (14104532) é prospecção por DM.
+- Audience Network gastou R$ 961 em 13 dias de setembro com quase nenhum lead. Deve ficar desligado.
+- CTR, CPC e retenção não preveem conversão (cinco casos medidos). Amostra mínima de R$ 450 por criativo.
+
+## Pendências conhecidas
+- Rotas /api de leitura estão públicas, sem autenticação.
+- Credenciais expostas até 14/09 precisam de troca; o META_ACCESS_TOKEN de produção não tem permissão e o painel usa o token reserva.
+- 58 de 67 compradores do KOR chegam sem UTM: o botão da página não repassa os parâmetros ao checkout.
+- Ninguém tem token do Meta com escopo ads_management, então nenhuma alteração em campanha pode ser executada por automação.
+
+## Conferências automáticas já rodando (não refaça por conta própria)
+- Relatório de tráfego às 09h e 22h, com alerta de Audience Network e de campanhas duplicadas.
+- Auditoria semanal às segundas, comparando venda real do KOR, captura do pixel, vendas sem valor, frescor do CRM e exposição de arquivos.
+`;
+
+app.get('/api/contexto', (req, res) => {
+  res.type('text/markdown; charset=utf-8').send(CONTEXTO_OPERACAO);
+});
+
 app.get('/api/sync-info', async (req, res) => {
   try {
     const syncInfo = await lerCache('sync_info.json', null);
@@ -1734,6 +1951,9 @@ async function getStatusInfo(statusId) {
   return pipelineStatusesMapCache[statusId] || null;
 }
 
+// Cache para idempotência de vendas processadas da Eduzz no CRM
+const eduzzProcessedSalesCache = new Set();
+
 // Eduzz Webhook Endpoint
 app.post('/api/eduzz-webhook', async (req, res) => {
   console.log('[Webhook] Received Eduzz webhook notification');
@@ -1801,19 +2021,32 @@ app.post('/api/eduzz-webhook', async (req, res) => {
                         payload.product_name || 
                         'Produto Eduzz';
                         
-    const value = parseFloat(payload.data?.gains?.producer?.value) || 
-                  parseFloat(payload.data?.value) || 
-                  parseFloat(payload.data?.amount) || 
-                  parseFloat(payload.sale_total) || 
-                  parseFloat(payload.value) || 
+    // Valor bruto da venda. Desde julho todos os leads criados por aqui ficaram
+    // com price 0: o payload myeduzz traz o valor como objeto { value, currency }
+    // (paid / price / total), e só os campos planos antigos eram lidos.
+    const valorDe = v => {
+      if (v === null || v === undefined) return 0;
+      if (typeof v === 'object') return parseFloat(v.value) || 0;
+      return parseFloat(v) || 0;
+    };
+    const somaItens = (payload.data?.items || []).reduce((acc, it) => acc + valorDe(it.price), 0);
+    const value = valorDe(payload.data?.paid) ||
+                  valorDe(payload.data?.price) ||
+                  valorDe(payload.data?.total) ||
+                  somaItens ||
+                  valorDe(payload.data?.value) ||
+                  valorDe(payload.data?.amount) ||
+                  valorDe(payload.sale_total) ||
+                  valorDe(payload.value) ||
+                  valorDe(payload.data?.gains?.producer) ||
                   0;
-                  
+
     const valueToAdd = isPaidEvent ? value : 0;
-                  
-    const utm_source = payload.data?.utm_source || payload.utm_source || '';
-    const utm_campaign = payload.data?.utm_campaign || payload.utm_campaign || '';
-    const utm_medium = payload.data?.utm_medium || payload.utm_medium || '';
-    const utm_content = payload.data?.utm_content || payload.utm_content || '';
+
+    const utm_source = payload.data?.utm?.source || payload.data?.utm_source || payload.utm_source || '';
+    const utm_campaign = payload.data?.utm?.campaign || payload.data?.utm_campaign || payload.utm_campaign || '';
+    const utm_medium = payload.data?.utm?.medium || payload.data?.utm_medium || payload.utm_medium || '';
+    const utm_content = payload.data?.utm?.content || payload.data?.utm_content || payload.utm_content || '';
     
     const eduzzId = payload.data?.id || 
                     payload.data?.invoice?.id || 
@@ -1858,6 +2091,23 @@ app.post('/api/eduzz-webhook', async (req, res) => {
     if (!isPaidEvent && !isRecoveryEvent) {
       console.log(`[Webhook] Ignoring non-sale and non-recovery event: ${event}`);
       return res.status(200).json({ success: true, message: `Ignored event: ${event}` });
+    }
+
+    // Registra a venda paga no cache que alimenta a aba Eduzz e o painel
+    // semanal. Antes esse cache era só o arquivo empacotado em 17/06 e nada o
+    // atualizava. Falha aqui não pode impedir o registro no Kommo.
+    if (isPaidEvent) {
+      try {
+        await registrarVendaEduzz({ payload, eduzzId, email, name, phone, productName, value, utm_source, utm_campaign, utm_medium, utm_content });
+      } catch (cacheErr) {
+        console.error('[Webhook] Falha ao registrar venda no cache Eduzz:', cacheErr.message);
+      }
+      // Conversão pelo servidor: recupera as vendas que o pixel não enxerga
+      try {
+        await enviarPurchaseEduzz({ payload, eduzzId, email, phone, name, productName, value, clientIp, clientUserAgent });
+      } catch (capiErr) {
+        console.error('[Webhook] Falha ao enviar Purchase ao Meta:', capiErr.message);
+      }
     }
 
     let recoveryStatus = PIPELINES.RECOVERY.STATUS_ABANDONMENT;
@@ -1927,48 +2177,56 @@ app.post('/api/eduzz-webhook', async (req, res) => {
         }
 
         if (existingLead) {
-          console.log(`[Webhook] Paid Event: Updating existing lead ID ${existingLead.id} in Clients Pipeline`);
-          const updatedPrice = (existingLead.price || 0) + Math.round(valueToAdd);
-          
-          // Determinar tag específica do produto (KOR, KOP, MLFP, Komando, Ebook)
-          const pUpper = (productName || '').toUpperCase();
-          let prodTag = 'Outros';
-          if (pUpper.includes('KOR') || pUpper.includes('RESTAURANTE') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO')) {
-            prodTag = 'KOR';
-          } else if (pUpper.includes('KOP') || pUpper.includes('PRAÇA') || pUpper.includes('PRACA')) {
-            prodTag = 'KOP';
-          } else if (pUpper.includes('KOMANDO')) {
-            prodTag = 'Komando';
-          } else if (pUpper.includes('MLFP') || pUpper.includes('MENTORIA') || pUpper.includes('FAIXA PRETA')) {
-            prodTag = 'MLFP';
-          } else if (pUpper.includes('EBOOK') || pUpper.includes('LIVRO')) {
-            prodTag = 'Ebook';
-          }
-
-          // Merge tags
           const existingTags = existingLead._embedded?.tags?.map(t => t.name) || [];
-          const newTags = Array.from(new Set(['Eduzz', prodTag, ...existingTags, productName.substring(0, 50)]));
-          
-          const fieldIds = await getLeadCustomFields();
-          const customFieldsValues = [];
-          if (fieldIds.utm_source && utm_source) customFieldsValues.push({ field_id: fieldIds.utm_source, values: [{ value: utm_source }] });
-          if (fieldIds.utm_campaign && utm_campaign) customFieldsValues.push({ field_id: fieldIds.utm_campaign, values: [{ value: utm_campaign }] });
-          if (fieldIds.utm_medium && utm_medium) customFieldsValues.push({ field_id: fieldIds.utm_medium, values: [{ value: utm_medium }] });
-          if (fieldIds.utm_content && utm_content) customFieldsValues.push({ field_id: fieldIds.utm_content, values: [{ value: utm_content }] });
+          const saleTag = `sale_${eduzzId}`;
+          const isSaleAlreadyRecorded = existingTags.includes(saleTag) || existingTags.includes(String(eduzzId)) || eduzzProcessedSalesCache.has(String(eduzzId));
 
-          await kommoRequest('PATCH', `/api/v4/leads/${existingLead.id}`, {
-            price: updatedPrice,
-            custom_fields_values: customFieldsValues.length > 0 ? customFieldsValues : undefined,
-            _embedded: {
-              tags: newTags.map(name => ({ name }))
+          if (isSaleAlreadyRecorded) {
+            console.log(`[Webhook] Paid Event: Sale ${eduzzId} already processed for lead ${existingLead.id}. Skipping price increment.`);
+          } else {
+            console.log(`[Webhook] Paid Event: Updating existing lead ID ${existingLead.id} in Clients Pipeline`);
+            const updatedPrice = (existingLead.price || 0) + Math.round(valueToAdd);
+            
+            // Determinar tag específica do produto (KOR, KOP, MLFP, Komando, Ebook)
+            const pUpper = (productName || '').toUpperCase();
+            let prodTag = 'Outros';
+            if (pUpper.includes('KOR') || PRODUTO_KOR.test(productName || '') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO')) {
+              prodTag = 'KOR';
+            } else if (pUpper.includes('KOP') || pUpper.includes('PRAÇA') || pUpper.includes('PRACA')) {
+              prodTag = 'KOP';
+            } else if (pUpper.includes('KOMANDO')) {
+              prodTag = 'Komando';
+            } else if (pUpper.includes('MLFP') || pUpper.includes('MENTORIA') || pUpper.includes('FAIXA PRETA')) {
+              prodTag = 'MLFP';
+            } else if (pUpper.includes('EBOOK') || pUpper.includes('LIVRO')) {
+              prodTag = 'Ebook';
             }
-          });
-          console.log(`[Webhook] Lead ${existingLead.id} updated successfully: Price: R$ ${updatedPrice}`);
+
+            // Merge tags
+            const newTags = Array.from(new Set(['Eduzz', prodTag, saleTag, ...existingTags, productName.substring(0, 50)]));
+            
+            const fieldIds = await getLeadCustomFields();
+            const customFieldsValues = [];
+            if (fieldIds.utm_source && utm_source) customFieldsValues.push({ field_id: fieldIds.utm_source, values: [{ value: utm_source }] });
+            if (fieldIds.utm_campaign && utm_campaign) customFieldsValues.push({ field_id: fieldIds.utm_campaign, values: [{ value: utm_campaign }] });
+            if (fieldIds.utm_medium && utm_medium) customFieldsValues.push({ field_id: fieldIds.utm_medium, values: [{ value: utm_medium }] });
+            if (fieldIds.utm_content && utm_content) customFieldsValues.push({ field_id: fieldIds.utm_content, values: [{ value: utm_content }] });
+
+            await kommoRequest('PATCH', `/api/v4/leads/${existingLead.id}`, {
+              price: updatedPrice,
+              custom_fields_values: customFieldsValues.length > 0 ? customFieldsValues : undefined,
+              _embedded: {
+                tags: newTags.map(name => ({ name }))
+              }
+            });
+            console.log(`[Webhook] Lead ${existingLead.id} updated successfully: Price: R$ ${updatedPrice}`);
+            eduzzProcessedSalesCache.add(String(eduzzId));
+          }
         } else {
           console.log('[Webhook] Paid Event: Contact exists but no lead in Clients Pipeline. Creating new lead...');
           const pUpper = (productName || '').toUpperCase();
           let prodTag = 'Outros';
-          if (pUpper.includes('KOR') || pUpper.includes('RESTAURANTE') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO')) {
+          if (pUpper.includes('KOR') || PRODUTO_KOR.test(productName || '') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO')) {
             prodTag = 'KOR';
           } else if (pUpper.includes('KOP') || pUpper.includes('PRAÇA') || pUpper.includes('PRACA')) {
             prodTag = 'KOP';
@@ -1997,6 +2255,7 @@ app.post('/api/eduzz-webhook', async (req, res) => {
               tags: [
                 { name: 'Eduzz' },
                 { name: prodTag },
+                { name: `sale_${eduzzId}` },
                 { name: productName.substring(0, 50) }
               ]
             }
@@ -2016,7 +2275,7 @@ app.post('/api/eduzz-webhook', async (req, res) => {
         console.log('[Webhook] Paid Event: Contact not found. Creating new lead + contact in Clients Pipeline...');
         const pUpper = (productName || '').toUpperCase();
         let prodTag = 'Outros';
-        if (pUpper.includes('KOR') || pUpper.includes('RESTAURANTE') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO')) {
+        if (pUpper.includes('KOR') || PRODUTO_KOR.test(productName || '') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO')) {
           prodTag = 'KOR';
         } else if (pUpper.includes('KOP') || pUpper.includes('PRAÇA') || pUpper.includes('PRACA')) {
           prodTag = 'KOP';
@@ -2066,13 +2325,17 @@ app.post('/api/eduzz-webhook', async (req, res) => {
         console.log('[Webhook] New lead + contact created successfully in Clients Pipeline');
       }
 
-      // Notify new approved sale on Telegram (KOR buyers are silenced per user directive)
+      // Notify new approved sale on Telegram (KOR buyers are silenced per user directive; duplicate deliveries skipped)
       try {
         const pUpper = (productName || '').toUpperCase();
-        const isKorSale = pUpper.includes('KOR') || pUpper.includes('RESTAURANTE') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO');
+        const isKorSale = pUpper.includes('KOR') || PRODUTO_KOR.test(productName || '') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO');
+        const isDuplicateSale = eduzzProcessedSalesCache.has(String(eduzzId));
+        eduzzProcessedSalesCache.add(String(eduzzId));
 
         if (isKorSale) {
           console.log(`[Eduzz Webhook] Sale is KOR (${productName}). Silencing notification for Chef Kaká per user directive.`);
+        } else if (isDuplicateSale) {
+          console.log(`[Eduzz Webhook] Sale ${eduzzId} already notified on Telegram. Skipping duplicate alert.`);
         } else {
           const saleMessage = `🎉 *Nova Venda Aprovada!*
           
@@ -2211,32 +2474,37 @@ app.post('/api/eduzz-webhook', async (req, res) => {
     }
     
     // 5. Send Meta Conversions API event
-    try {
-      const eventName = isPaidEvent ? 'Purchase' : 'InitiateCheckout';
-      const eventId = `eduzz_${eduzzId}`;
-      const buyerInfo = {
-        email,
-        phone,
-        name,
-        clientIp,
-        clientUserAgent
-      };
-      
-      const customData = {
-        value: Number(value.toFixed(2)),
-        currency: 'BRL',
-        content_name: productName,
-        content_type: 'product'
-      };
-      
-      if (utm_source) customData.utm_source = utm_source;
-      if (utm_medium) customData.utm_medium = utm_medium;
-      if (utm_campaign) customData.utm_campaign = utm_campaign;
-      if (utm_content) customData.utm_content = utm_content;
+    // CRITICAL FIX: Paid events (Purchase) are handled exclusively by enviarPurchaseEduzz above,
+    // which enforces KOR exclusion, credit-card deduplication, product mapping, and value validation.
+    // For recovery events, send InitiateCheckout.
+    if (!isPaidEvent) {
+      try {
+        const eventName = 'InitiateCheckout';
+        const eventId = `eduzz_ic_${eduzzId}`;
+        const buyerInfo = {
+          email,
+          phone,
+          name,
+          clientIp,
+          clientUserAgent
+        };
+        
+        const customData = {
+          value: Number(value.toFixed(2)),
+          currency: 'BRL',
+          content_name: productName,
+          content_type: 'product'
+        };
+        
+        if (utm_source) customData.utm_source = utm_source;
+        if (utm_medium) customData.utm_medium = utm_medium;
+        if (utm_campaign) customData.utm_campaign = utm_campaign;
+        if (utm_content) customData.utm_content = utm_content;
 
-      await sendMetaEvent(eventName, buyerInfo, customData, eventId);
-    } catch (capiErr) {
-      console.error('[Webhook] Failed to send Meta CAPI event:', capiErr.message);
+        await sendMetaEvent(eventName, buyerInfo, customData, eventId);
+      } catch (capiErr) {
+        console.error('[Webhook] Failed to send Meta CAPI InitiateCheckout event:', capiErr.message);
+      }
     }
     
     res.json({ success: true });
@@ -2305,6 +2573,15 @@ app.post('/api/kommo-webhook', async (req, res) => {
       
       try {
         const leadDetails = await kommoRequest('GET', `/api/v4/leads/${leadId}?with=contacts`);
+
+        // Vendas da Eduzz (Recuperação e Base de Clientes) já têm o Purchase
+        // enviado pelo webhook da Eduzz, com o valor e o momento do pagamento.
+        // Enviar de novo aqui duplicaria a conversão no Meta.
+        if (metaEvent === 'Purchase' && [13956952, 13956856].includes(leadDetails?.pipeline_id)) {
+          console.log(`[Kommo Webhook] Lead ${leadId} é venda Eduzz — Purchase fica a cargo do webhook da Eduzz`);
+          continue;
+        }
+
         const contacts = leadDetails?._embedded?.contacts || [];
         
         if (contacts.length === 0) {
@@ -3024,6 +3301,30 @@ app.post(['/api/ko-webhook', '/api/webhook/komando', '/api/komando-webhook', '/a
             console.warn('[KO Webhook] Z-API dispatch warning:', zErr.message);
           }
         }
+
+        // Disparo garantido de evento MQL no Meta Conversions API
+        if (isQualified && leadId) {
+          try {
+            await sendMetaEvent(
+              'MQL',
+              { email, phone, name },
+              {
+                content_name: `MQL ${isEbookEvent ? '[KO] Ebooks' : '[KO] Inbound'}`,
+                content_type: 'lead',
+                cargo: cargo || 'nao informado',
+                faturamento: faturamento || 'nao informado',
+                utm_source: utm_source || undefined,
+                utm_campaign: utm_campaign || undefined,
+                utm_medium: utm_medium || undefined,
+                utm_content: utm_content || undefined
+              },
+              `mql_${leadId}`
+            );
+            console.log(`[KO Webhook] Evento MQL enviado ao Meta CAPI para o lead ${leadId}`);
+          } catch (capiErr) {
+            console.warn(`[KO Webhook] Falha ao enviar evento MQL ao Meta para o lead ${leadId}:`, capiErr.message);
+          }
+        }
       }
     } catch(notifErr) {
       console.error('[KO Webhook] Direct notification error:', notifErr.message);
@@ -3609,31 +3910,27 @@ app.post('/api/kommo-lead-created', async (req, res) => {
             } catch (tagErr) {
               console.error(`[Z-API Webhook] Error adding 'MQL' tag to lead ${leadId}:`, tagErr);
             }
+          }
 
-            // Evento de meio de funil para o Meta.
-            // Purchase e o sinal certo mas nao tem volume (≈0,4 venda/semana);
-            // o Meta precisa de ~50 conversoes semanais por conjunto para sair
-            // da fase de aprendizado. MQL tem volume e correlaciona com venda,
-            // entao e ele que deve ser o evento de otimizacao das campanhas.
-            try {
-              await sendMetaEvent(
-                'MQL',
-                { email, phone, name: clientName },
-                {
-                  content_name: `MQL ${pipelineName}`,
-                  content_type: 'lead',
-                  cargo: displayCargo || 'nao informado',
-                  faturamento: displayFaturamento || 'nao informado',
-                  utm_source: utmSource || undefined,
-                  utm_campaign: utmCampaign || undefined,
-                  utm_medium: utmMedium || undefined,
-                  utm_content: utmContent || undefined
-                },
-                `mql_${leadId}`
-              );
-            } catch (capiErr) {
-              console.error(`[Z-API Webhook] Falha ao enviar evento MQL ao Meta para o lead ${leadId}:`, capiErr.message);
-            }
+          // Evento de meio de funil para o Meta (disparado com deduplicação por event_id mql_${leadId})
+          try {
+            await sendMetaEvent(
+              'MQL',
+              { email, phone, name: clientName },
+              {
+                content_name: `MQL ${pipelineName}`,
+                content_type: 'lead',
+                cargo: displayCargo || 'nao informado',
+                faturamento: displayFaturamento || 'nao informado',
+                utm_source: utmSource || undefined,
+                utm_campaign: utmCampaign || undefined,
+                utm_medium: utmMedium || undefined,
+                utm_content: utmContent || undefined
+              },
+              `mql_${leadId}`
+            );
+          } catch (capiErr) {
+            console.error(`[Z-API Webhook] Falha ao enviar evento MQL ao Meta para o lead ${leadId}:`, capiErr.message);
           }
         }
       } else if (isMlfpPipeline) {
@@ -3852,27 +4149,36 @@ app.post('/api/resend-lead', async (req, res) => {
       return '';
     };
 
-    const cargo = getVal(leadFields, [128884, 128474], ['cargo', 'perfil']) || 'Dono';
-    const faturamento = getVal(leadFields, [128886, 128476], ['faturamento', 'renda']) || 'R$ 150 a R$ 300 mil / mês';
+    const cargo = getVal(leadFields, [128884, 128474], ['cargo', 'perfil']) || 'Não informado';
+    const faturamento = getVal(leadFields, [128886, 128476], ['faturamento', 'renda']) || 'Não informado';
     const socios = getVal(leadFields, [128888], ['socio']);
-    const equipe = getVal(leadFields, [492035], ['equipe']) || 'Entre 5 e 15 colaboradores';
-    const gargalo = getVal(leadFields, [492037], ['gargalo']) || 'Faturamento estagnado';
-    const lider = getVal(leadFields, [492039], ['lider']) || 'Tenho a pessoa ideal, mas ela precisa ser treinada';
+    const equipe = getVal(leadFields, [492035], ['equipe']);
+    const gargalo = getVal(leadFields, [492037], ['gargalo']);
+    const lider = getVal(leadFields, [492039], ['lider']);
     const instagram = getVal(leadFields, [311994], ['instagram']) || getVal(contactFields, [311994], ['instagram']);
-    const utmSource = getVal(leadFields, [110088], ['utm_source']) || 'meta-ads--Instagram_Feed';
-    const utmCampaign = getVal(leadFields, [110086], ['utm_campaign']) || '15 - [LEAD] [AUTO] [KOMANDO] [COLD] [PPTO] - Vturb - Teste de Criativos';
-    const utmMedium = getVal(leadFields, [110084], ['utm_medium']) || '01 - [COLD] - Interesses - Restaurante';
-    const utmContent = getVal(leadFields, [110082], ['utm_content']) || 'KOMANDO_CAPT_VD_AD03 ALT2';
-    const utmTerm = getVal(leadFields, [110090], ['utm_term']) || 'vsl';
-    const abVariant = getVal(leadFields, [494249], ['variante']) || '2';
+    const utmSource = getVal(leadFields, [110088], ['utm_source']);
+    const utmCampaign = getVal(leadFields, [110086], ['utm_campaign']);
+    const utmMedium = getVal(leadFields, [110084], ['utm_medium']);
+    const utmContent = getVal(leadFields, [110082], ['utm_content']);
+    const utmTerm = getVal(leadFields, [110090], ['utm_term']);
+    const abVariant = getVal(leadFields, [494249], ['variante']);
 
-    const clientName = contactDetails.name || leadDetails.name || 'Carine';
+    const clientName = contactDetails.name || leadDetails.name || 'Lead sem nome';
     const cleanPhone = phone.replace(/\D/g, '');
     const waLink = cleanPhone ? `https://wa.me/${cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone}` : '';
     const domain = process.env.KOMMO_DOMAIN || 'chefkakagomes.kommo.com';
     const kommoLeadUrl = `https://${domain}/leads/detail/${leadId}`;
 
-    let msg = `🔥 *Novo Lead Qualificado Recebido - Komando!*\n\n`;
+    // Identificar pipeline real do lead
+    const leadPipelineId = leadDetails.pipeline_id;
+    let funilNome = '[KO] Inbound';
+    if (leadPipelineId === PIPELINES.KO_EBOOKS) funilNome = '[KO] Ebooks';
+    else if (leadPipelineId === PIPELINES.MLFP) funilNome = 'Mentoria [MLFP]';
+    else if (leadPipelineId === PIPELINES.KOP) funilNome = 'KOP Inbound';
+    else if (leadPipelineId === PIPELINES.KOR) funilNome = 'KOR Inbound';
+    else if (leadPipelineId === 13956952) funilNome = 'Recuperação';
+
+    let msg = `🔄 *Reenvio de Notificação: Lead #${leadId}*\n\n`;
     msg += `👤 *Nome:* ${clientName}\n`;
     msg += `📱 *WhatsApp:* ${phone || 'Não informado'}\n`;
     if (email) msg += `✉️ *Email:* ${email}\n`;
@@ -3881,19 +4187,19 @@ app.post('/api/resend-lead', async (req, res) => {
     msg += `💼 *Cargo:* ${cargo}\n`;
     msg += `💰 *Faturamento Médio:* ${faturamento}\n`;
     if (socios) msg += `👥 *Sócios:* ${socios}\n`;
-    msg += `👥 *Tamanho da Equipe:* ${equipe}\n`;
-    msg += `⚠️ *Maior Gargalo:* ${gargalo}\n`;
-    msg += `👔 *Líder Operacional:* ${lider}\n`;
+    if (equipe) msg += `👥 *Tamanho da Equipe:* ${equipe}\n`;
+    if (gargalo) msg += `⚠️ *Maior Gargalo:* ${gargalo}\n`;
+    if (lider) msg += `👔 *Líder Operacional:* ${lider}\n`;
     if (instagram) msg += `📸 *Instagram:* ${instagram}\n`;
-    msg += `🧪 *Variante A/B:* ${abVariant}\n`;
+    if (abVariant) msg += `🧪 *Variante A/B:* ${abVariant}\n`;
     msg += `\n`;
     msg += `🎯 *INFORMAÇÕES DE TRÁFEGO:*\n`;
-    msg += `📍 *Funil:* [KO] Inbound\n`;
-    msg += `📌 *Origem (Source):* ${utmSource}\n`;
-    msg += `📢 *Campanha:* ${utmCampaign}\n`;
-    msg += `🎯 *Conjunto (Medium):* ${utmMedium}\n`;
-    msg += `🎨 *Criativo (Content):* ${utmContent}\n`;
-    msg += `🔎 *Termo:* ${utmTerm}\n`;
+    msg += `📍 *Funil:* ${funilNome}\n`;
+    if (utmSource) msg += `📌 *Origem (Source):* ${utmSource}\n`;
+    if (utmCampaign) msg += `📢 *Campanha:* ${utmCampaign}\n`;
+    if (utmMedium) msg += `🎯 *Conjunto (Medium):* ${utmMedium}\n`;
+    if (utmContent) msg += `🎨 *Criativo (Content):* ${utmContent}\n`;
+    if (utmTerm) msg += `🔎 *Termo:* ${utmTerm}\n`;
     msg += `🆔 *Lead ID CRM:* ${leadId}\n\n`;
     msg += `💬 _Clique no link abaixo para falar com o lead:_\n${waLink}`;
 
@@ -4543,7 +4849,9 @@ async function getExecutiveMetrics(funnel = 'all', timeframe = 'this_month') {
     const tags = (l._embedded?.tags || []).map(t => t.name.toUpperCase());
     const name = (l.name || '').toUpperCase();
     if (fKey === 'kor') {
-      return l.pipeline_id === 14268556 || l.pipeline_id === 13956952 || (l.pipeline_id === 13956856 && (tags.includes('KOR') || tags.some(t => t.includes('RESTAURANTE')) || name.includes('KOR')));
+      // Base Eduzz: só quem comprou o Kit. "Restaurante" sozinho pegava o
+      // e-book "10 passos para Donos de Restaurante"
+      return l.pipeline_id === 14268556 || l.pipeline_id === 13956952 || (l.pipeline_id === 13956856 && (l._embedded?.tags || []).some(t => PRODUTO_KOR.test(t.name || '')));
     }
     if (fKey === 'kop') {
       return l.pipeline_id === 14173256 || (l.pipeline_id === 13956856 && (tags.includes('KOP') || tags.some(t => t.includes('PRAÇA') || t.includes('PRACA')) || name.includes('KOP')));
@@ -4578,7 +4886,7 @@ async function getExecutiveMetrics(funnel = 'all', timeframe = 'this_month') {
     if (fKey === 'mlfp' && !(title.includes('MENTORIA') || title.includes('MLFP') || title.includes('FAIXA PRETA'))) return false;
     if (fKey === 'komando' && !(title.includes('KOMANDO') && !title.includes('KOP') && !title.includes('KOR'))) return false;
     if (fKey === 'kop' && !(title.includes('KOP') || title.includes('PRAÇA') || title.includes('PRACA'))) return false;
-    if (fKey === 'kor' && !(title.includes('KOR') || title.includes('RESTAURANTE') || title.includes('RECUPERAÇÃO'))) return false;
+    if (fKey === 'kor' && !(title.includes('KOR') || PRODUTO_KOR.test(title) || title.includes('RECUPERAÇÃO'))) return false;
     if (fKey === 'ebook' && !(title.includes('EBOOK') || title.includes('LIVRO'))) return false;
     return true;
   });
@@ -5131,10 +5439,10 @@ app.post('/api/telegram-webhook', async (req, res) => {
   } catch(e) { /* ignore */ }
 
   try {
-    const aiResponse = await runGeminiAgent(userText);
+    const aiResponse = await processDashboardAIAssistant(userText);
     await sendTelegram(chatId, aiResponse);
   } catch (err) {
-    console.error('[Telegram Webhook] Error running Gemini Agent:', err);
+    console.error('[Telegram Webhook] Error running AI Assistant:', err);
     await sendTelegram(chatId, `❌ *Erro ao processar sua pergunta:*\n${err.message}`);
   }
 
@@ -5396,7 +5704,7 @@ app.get('/api/cron/daily-report-evening', async (req, res) => {
 
 const CONTAS_TRAFEGO = [
   { id: 'act_322391662838622', nome: 'Distribuição' },
-  { id: 'act_202384504675778', nome: 'Anunciante' }
+  { id: 'act_342834581', nome: 'Caio Gomes' }
 ];
 
 // Cada funil tem um objetivo diferente e por isso uma métrica diferente.
@@ -5431,6 +5739,92 @@ const ACOES_COMPRA = ['purchase', 'offsite_conversion.fb_pixel_purchase', 'omni_
 const ACOES_ENGAJAMENTO = ['post_engagement', 'page_engagement'];
 const ACOES_CURTIDA = ['onsite_conversion.post_net_like'];
 
+// ============================================================
+//  VERIFICAÇÕES DETERMINÍSTICAS (sem modelo de linguagem)
+// ============================================================
+// Estas conferências eram feitas por agentes do Paperclip: cada uma consumia
+// uma sessão de modelo para chegar a um número que a API já entrega pronto.
+// Aqui custam uma chamada HTTP e entram no relatório que já existe.
+
+const BRL0 = v => 'R$ ' + Math.round(v || 0).toLocaleString('pt-BR');
+
+// Nome-base da campanha: tira a numeração da frente e o sufixo de cópia
+function _baseDoNomeCampanha(nome) {
+  return String(nome || '')
+    .toUpperCase()
+    .replace(/\s*[-–]\s*C[ÓO]PIA.*$/, '')
+    .replace(/^\s*\d+\s*[-–]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Campanhas irmãs no mesmo funil disputam o mesmo leilão e dividem o
+// aprendizado. Em setembro/2026 as campanhas 19 e 20 do Komando somaram 90,8%
+// da verba do funil, e a cópia saiu com CPL 71% pior.
+function detectarCampanhasDuplicadas(funis) {
+  const achados = [];
+  for (const [funil, v] of Object.entries(funis || {})) {
+    if (OBJETIVO_FUNIL[funil] === 'engajamento' || OBJETIVO_FUNIL[funil] === 'nenhum') continue;
+    const grupos = {};
+    (v.campanhas || []).forEach(c => {
+      const base = _baseDoNomeCampanha(c.nome);
+      if (!base) return;
+      (grupos[base] = grupos[base] || []).push(c);
+    });
+    Object.values(grupos).forEach(lista => {
+      if (lista.length < 2) return;
+      const gasto = lista.reduce((s, c) => s + (c.gasto || 0), 0);
+      if (gasto < 50) return;
+      const share = v.gasto ? (gasto / v.gasto) * 100 : 0;
+      const detalhe = lista
+        .sort((a, b) => b.gasto - a.gasto)
+        .map(c => `${String(c.nome).slice(0, 26)} ${BRL0(c.gasto)}/${c.leads} lead`)
+        .join(' · ');
+      achados.push({ funil, qtd: lista.length, gasto, share, detalhe });
+    });
+  }
+  return achados;
+}
+
+// Insights quebrados por posicionamento. O Audience Network entrega clique
+// barato e acesso que não converte: infla CTR e esconde a queda de conversão.
+async function _insightsPorPlataforma(contaId, since, until, tokenForcado = null) {
+  const token = tokenForcado || (process.env.META_ACCESS_TOKEN && process.env.META_ACCESS_TOKEN.trim()) || DEFAULT_META_ACCESS_TOKEN;
+  const params = new URLSearchParams({
+    time_range: JSON.stringify({ since, until }),
+    fields: 'campaign_name,spend,actions',
+    level: 'campaign',
+    breakdowns: 'publisher_platform',
+    limit: '500',
+    access_token: token
+  });
+  const j = await (await fetch(`https://graph.facebook.com/v20.0/${contaId}/insights?${params}`)).json();
+  if (j.error) {
+    if (j.error.code === 200 && token !== DEFAULT_META_ACCESS_TOKEN) {
+      return _insightsPorPlataforma(contaId, since, until, DEFAULT_META_ACCESS_TOKEN);
+    }
+    console.error(`[Tráfego] posicionamento ${contaId}: ${j.error.message}`);
+    return [];
+  }
+  return j.data || [];
+}
+
+async function verificarAudienceNetwork(since, until) {
+  let gasto = 0, leads = 0, compras = 0, gastoTotal = 0;
+  for (const conta of CONTAS_TRAFEGO) {
+    const linhas = await _insightsPorPlataforma(conta.id, since, until);
+    linhas.forEach(l => {
+      const g = parseFloat(l.spend) || 0;
+      gastoTotal += g;
+      if (l.publisher_platform !== 'audience_network') return;
+      gasto += g;
+      leads += _valorAcao(l, ACOES_LEAD);
+      compras += _valorAcao(l, ACOES_COMPRA);
+    });
+  }
+  return { gasto, leads, compras, share: gastoTotal ? (gasto / gastoTotal) * 100 : 0 };
+}
+
 
 // valor=true lê action_values (receita) em vez de actions (contagem)
 function _valorAcao(linha, tipos, valor) {
@@ -5447,8 +5841,8 @@ function dataBrasilia(diasAtras = 0) {
   return agora.toISOString().slice(0, 10);
 }
 
-async function _insightsConta(contaId, since, until, nivel, tentativa = 1) {
-  const token = (process.env.META_ACCESS_TOKEN && process.env.META_ACCESS_TOKEN.trim()) || DEFAULT_META_ACCESS_TOKEN;
+async function _insightsConta(contaId, since, until, nivel, tentativa = 1, tokenForcado = null) {
+  const token = tokenForcado || (process.env.META_ACCESS_TOKEN && process.env.META_ACCESS_TOKEN.trim()) || DEFAULT_META_ACCESS_TOKEN;
   const params = new URLSearchParams({
     time_range: JSON.stringify({ since, until }),
     fields: 'campaign_name,ad_name,spend,impressions,clicks,ctr,actions,action_values',
@@ -5459,9 +5853,19 @@ async function _insightsConta(contaId, since, until, nivel, tentativa = 1) {
   const r = await fetch(`https://graph.facebook.com/v20.0/${contaId}/insights?${params}`);
   const j = await r.json();
   if (j.error) {
+    // Sem permissão (#200) com o token do ambiente: troca na hora, sem esperar.
+    // Antes eram 3 novas tentativas de 5–15s com o mesmo token negado, e o
+    // relatório estourava os 60s da função (FUNCTION_INVOCATION_TIMEOUT).
+    if (j.error.code === 200) {
+      if (token !== DEFAULT_META_ACCESS_TOKEN) {
+        return _insightsConta(contaId, since, until, nivel, tentativa, DEFAULT_META_ACCESS_TOKEN);
+      }
+      console.error(`[Tráfego] ${contaId} sem permissão também no token reserva: ${j.error.message}`);
+      return [];
+    }
     if (tentativa <= 3) {
       await new Promise(res => setTimeout(res, tentativa * 5000));
-      return _insightsConta(contaId, since, until, nivel, tentativa + 1);
+      return _insightsConta(contaId, since, until, nivel, tentativa + 1, tokenForcado);
     }
     console.error(`[Tráfego] ${contaId} falhou: ${j.error.message}`);
     return [];
@@ -5472,12 +5876,19 @@ async function _insightsConta(contaId, since, until, nivel, tentativa = 1) {
 // Coleta as duas contas e agrega por funil e por criativo
 async function coletarTrafego(since, until) {
   const linhas = [];
-  for (const conta of CONTAS_TRAFEGO) {
-    const camp = await _insightsConta(conta.id, since, until, 'campaign');
-    const ads = await _insightsConta(conta.id, since, until, 'ad');
+  // Contas e níveis em paralelo — em série, cada relatório encadeava as
+  // chamadas do dia e dos 7 dias de referência, uma atrás da outra
+  const porConta = await Promise.all(CONTAS_TRAFEGO.map(async conta => {
+    const [camp, ads] = await Promise.all([
+      _insightsConta(conta.id, since, until, 'campaign'),
+      _insightsConta(conta.id, since, until, 'ad')
+    ]);
+    return { conta, camp, ads };
+  }));
+  porConta.forEach(({ conta, camp, ads }) => {
     camp.forEach(l => linhas.push({ ...l, conta: conta.nome, nivel: 'campanha' }));
     ads.forEach(l => linhas.push({ ...l, conta: conta.nome, nivel: 'anuncio' }));
-  }
+  });
 
   const funis = {};
   const criativos = {};
@@ -5510,6 +5921,61 @@ async function coletarTrafego(since, until) {
     criativos[k].gasto += parseFloat(l.spend) || 0;
     criativos[k].leads += _valorAcao(l, ACOES_LEAD);
   });
+
+  try {
+    const todosLeads = await lerCache('all_leads.json', []);
+    const ini = Math.floor(new Date(`${since}T00:00:00-03:00`).getTime() / 1000);
+    const fim = Math.floor(new Date(`${until}T23:59:59-03:00`).getTime() / 1000);
+
+    // KOR: vendas reais da Base Eduzz no CRM. O pixel perde ~metade das compras
+    // (Pix/boleto aprovam fora do checkout); o número dele fica só como referência.
+    if (funis.kor) {
+      const real = vendasKorBaseEduzz(todosLeads, ini, fim);
+      funis.kor.comprasPixel = funis.kor.compras;
+      funis.kor.compras = real.vendas;
+      funis.kor.receita = real.valor;
+    }
+
+    // Sobrescrever LEADS de todos os funis usando o CRM, garantindo que o 
+    // relatório bata exatamente com o Painel Executivo do Dashboard
+    const PIPELINE_MAP = {
+      mlfp: [13304583],
+      komando: [13304659],
+      kop: [14173256],
+      kor: [14268556, 13956952, 13956856],
+      ebook: [13537971]
+    };
+
+    Object.keys(funis).forEach(f => {
+      if (PIPELINE_MAP[f]) {
+        const activePipelines = PIPELINE_MAP[f];
+        const crmLeads = todosLeads.filter(l => {
+          if (isTestLead(l) || isRepescagemLead(l)) return false;
+          if (l.created_at < ini || l.created_at > fim) return false;
+          const tags = (l._embedded?.tags || []).map(t => (t.name || '').toUpperCase());
+          const name = (l.name || '').toUpperCase();
+          if (f === 'kor') {
+            return l.pipeline_id === 14268556 || l.pipeline_id === 13956952 || 
+              (l.pipeline_id === 13956856 && tags.some(t => PRODUTO_KOR.test(t)));
+          }
+          if (f === 'kop') {
+            return l.pipeline_id === 14173256 || 
+              (l.pipeline_id === 13956856 && (tags.includes('KOP') || tags.some(t => t.includes('PRAÇA') || t.includes('PRACA')) || name.includes('KOP')));
+          }
+          return activePipelines.includes(l.pipeline_id);
+        });
+        funis[f].leadsPixel = funis[f].leads;
+        funis[f].leads = crmLeads.length;
+      }
+    });
+
+    // Atualizar o total de leads e recalculando CPL das campanhas se necessário
+    // mas o principal é o total geral para a mensagem do Telegram
+    leads = Object.values(funis).reduce((acc, v) => acc + (v.leads || 0), 0);
+
+  } catch (e) {
+    console.error('[Tráfego] erro ao processar CRM em coletarTrafego, mantendo pixel:', e.message);
+  }
 
   return {
     periodo: { since, until },
@@ -5650,6 +6116,7 @@ function montarMensagemTrafego(tipo, hoje, ref, analise) {
         const roas = v.gasto ? v.receita / v.gasto : 0;
         const cpa = v.compras ? brl(v.gasto / v.compras) : '—';
         corpo = `${v.compras} venda${v.compras === 1 ? '' : 's'} · CPA ${cpa} · ROAS ${roas.toFixed(2)}×`;
+        if (v.comprasPixel != null) corpo += ` _(CRM · pixel: ${v.comprasPixel})_`;
       } else if (objetivo === 'engajamento') {
         const cpe = v.engajamentos ? (v.gasto / v.engajamentos) : null;
         corpo = `${v.engajamentos.toLocaleString('pt-BR')} interações · ${cpe ? 'R$ ' + cpe.toFixed(2) : '—'}/interação`;
@@ -5694,14 +6161,105 @@ async function executarRelatorioTrafego(tipo, diaForcado) {
   // manhã: fecha o dia anterior · noite: parcial do dia corrente
   // diaForcado permite conferir uma data específica sem esperar o cron
   const dia = diaForcado || (tipo === 'manha' ? dataBrasilia(1) : dataBrasilia(0));
-  const hoje = await coletarTrafego(dia, dia);
-  let ref = null;
-  try { ref = await referencia7Dias(dataBrasilia(1)); } catch (e) { console.error('[Tráfego] referência 7d falhou:', e.message); }
+  // Dia, referência de 7 dias e posicionamentos em paralelo
+  const [hoje, ref, an] = await Promise.all([
+    coletarTrafego(dia, dia),
+    referencia7Dias(dataBrasilia(1)).catch(e => { console.error('[Tráfego] referência 7d falhou:', e.message); return null; }),
+    verificarAudienceNetwork(dia, dia).catch(e => { console.error('[Tráfego] posicionamentos falharam:', e.message); return null; })
+  ]);
   const analise = analisarTrafego(hoje, ref || { cplPorFunil: {} });
+
+  // Conferências que antes exigiam um agente
+  if (an && an.gasto >= 20 && (an.leads + an.compras) === 0) {
+    analise.alertas.push({ peso: an.gasto, txt: `*Audience Network*: ${BRL0(an.gasto)} (${an.share.toFixed(0)}% da verba) sem nenhum lead ou venda — desligue o posicionamento` });
+  }
+  detectarCampanhasDuplicadas(hoje.funis).forEach(d => {
+    analise.alertas.push({ peso: d.gasto, txt: `*${d.funil}*: ${d.qtd} campanhas com o mesmo nome somam ${BRL0(d.gasto)} (${d.share.toFixed(0)}% do funil) e dividem o aprendizado — ${d.detalhe}` });
+  });
+  analise.alertas.sort((a, b) => b.peso - a.peso);
+
   return montarMensagemTrafego(tipo, hoje, ref, analise);
 }
 
 // 09:00 de Brasília = 12:00 UTC
+// ============================================================
+//  AUDITORIA SEMANAL DE DADOS (sem modelo de linguagem)
+// ============================================================
+// Confere o que o painel mostra contra as fontes: venda real do KOR na Base
+// Eduzz, captura do pixel, vendas sem valor no CRM, frescor da sincronização e
+// exposição de arquivos sensíveis. Só avisa quando há divergência.
+async function executarAuditoriaSemanal() {
+  const fim = dataBrasilia(1);
+  const ini = dataBrasilia(7);
+  const seg = d => Math.floor(new Date(`${d}T00:00:00-03:00`).getTime() / 1000);
+  const iniSec = seg(ini);
+  const fimSec = seg(fim) + 86399;
+
+  const leads = await lerCache('all_leads.json', []);
+  const korCrm = vendasKorBaseEduzz(leads, iniSec, fimSec);
+
+  let pixelKor = 0, gastoKor = 0;
+  for (const conta of CONTAS_TRAFEGO) {
+    const linhas = await _insightsConta(conta.id, ini, fim, 'campaign');
+    linhas.filter(l => classifyCampaignFunnel(l.campaign_name) === 'kor').forEach(l => {
+      gastoKor += parseFloat(l.spend) || 0;
+      pixelKor += _valorAcao(l, ACOES_COMPRA);
+    });
+  }
+
+  const semValor = leads.filter(l => {
+    if (l.status_id !== 142) return false;
+    const fechado = l.closed_at || l.updated_at || 0;
+    return fechado >= iniSec && fechado <= fimSec && !(parseFloat(l.price) > 0);
+  });
+
+  const sync = await lerCache('sync_info.json', null);
+  const horasSync = sync?.timestamp ? (Date.now() - new Date(sync.timestamp).getTime()) / 3600000 : null;
+
+  const expostos = [];
+  for (const caminho of ['/api/all_leads.json', '/api/index.js', '/perform_full_sync.js', '/CLAUDE.md']) {
+    try {
+      const r = await fetch(`https://kommo-dashboard-delta.vercel.app${caminho}`, { method: 'HEAD' });
+      if (r.status === 200) expostos.push(caminho);
+    } catch (e) { /* rede instável não vira alerta falso */ }
+  }
+
+  const captura = korCrm.vendas ? Math.round((pixelKor / korCrm.vendas) * 100) : null;
+  const linhas = [
+    `🧾 *Auditoria semanal* · ${ini} a ${fim}`,
+    '',
+    `🔄 *KOR* · ${korCrm.vendas} venda${korCrm.vendas === 1 ? '' : 's'} no CRM · ${pixelKor} no pixel${captura !== null ? ` (pixel capturou ${captura}%)` : ''}`,
+    `investido ${BRL0(gastoKor)} · CAC real ${korCrm.vendas ? BRL0(gastoKor / korCrm.vendas) : '—'}${korCrm.estimadas ? ` · ${korCrm.estimadas} com receita estimada` : ''}`,
+    ''
+  ];
+
+  const problemas = [];
+  if (semValor.length) problemas.push(`⚠️ ${semValor.length} venda${semValor.length === 1 ? '' : 's'} ganha${semValor.length === 1 ? '' : 's'} sem valor preenchido no Kommo — receita e ROAS ficam zerados`);
+  if (horasSync === null) problemas.push('🚨 Sem registro de sincronização do CRM — o painel pode estar servindo dados velhos');
+  else if (horasSync > 4) problemas.push(`⚠️ CRM sincronizado há ${horasSync.toFixed(1)}h`);
+  // O pior caso é o CRM não ter a venda que o pixel viu: ou o webhook da Eduzz
+  // parou, ou a sincronização travou. Vale alerta mesmo com volume baixo.
+  if (pixelKor > 0 && korCrm.vendas === 0) problemas.push(`🚨 Pixel registrou ${pixelKor} venda${pixelKor === 1 ? '' : 's'} do KOR e o CRM nenhuma — webhook da Eduzz ou sincronização parada`);
+  else if (captura !== null && captura < 70 && korCrm.vendas >= 3) problemas.push(`⚠️ Pixel registrou só ${captura}% das vendas do KOR — confira a integração da Eduzz`);
+  else if (captura !== null && captura > 130) problemas.push(`⚠️ Pixel registrou ${captura}% das vendas do CRM — possível conversão duplicada no Meta`);
+  if (expostos.length) problemas.push(`🚨 Arquivo sensível público: ${expostos.join(', ')}`);
+
+  linhas.push(problemas.length ? problemas.join('\n') : '✅ Nada divergente: sincronização em dia, vendas com valor e nenhum arquivo sensível exposto.');
+  return linhas.join('\n');
+}
+
+app.get(['/api/cron/auditoria-semanal', '/api/reports/auditoria-semanal'], async (req, res) => {
+  try {
+    const mensagem = await executarAuditoriaSemanal();
+    const enviar = req.query.preview !== '1';
+    if (enviar) await sendTelegram(process.env.TELEGRAM_CHAT_ID, mensagem);
+    res.json({ success: true, enviado: enviar, mensagem });
+  } catch (err) {
+    console.error('[Auditoria Semanal]', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get(['/api/cron/trafego-manha', '/api/reports/trafego-manha'], async (req, res) => {
   try {
     const msg = await executarRelatorioTrafego('manha');
@@ -5987,13 +6545,15 @@ function classifyCampaignFunnel(campaignName) {
   const n = (campaignName || '').toUpperCase();
 
   if (n.includes('REPESCAGEM') || n.includes('LEADS ANTIGOS') || n.includes('REPESCA') || n.includes('RECICLAGEM')) return 'repescagem';
+  // Conteúdo antes dos produtos: "[A] Campanha de Seguidores (Komando)" é
+  // campanha de perfil/seguidores, não de lead — caía em komando e inflava o CPL
+  if (n.includes('[VIEWS]') || n.includes('[A]') || n.includes('POST DO INSTAGRAM') || n.includes('PUBLICAÇÃO DO INSTAGRAM') || n.includes('INSTAGRAM POST')) return 'engajamento';
   if (n.includes('KOP')) return 'kop';
   if (n.includes('KOR')) return 'kor';
   if (n.includes('RECUPERAC') || n.includes('RECUPERAÇ')) return 'recuperacao';
   if (n.includes('EBOOK') || n.includes('E-BOOK')) return 'ebook';
   if (n.includes('MLFP') || n.includes('FAIXA PRETA')) return 'mlfp';
   if (n.includes('KOMANDO') || /\bKO\b/.test(n)) return 'komando';
-  if (n.includes('[VIEWS]') || n.includes('[A]') || n.includes('POST DO INSTAGRAM') || n.includes('PUBLICAÇÃO DO INSTAGRAM') || n.includes('INSTAGRAM POST')) return 'engajamento';
 
   return 'outros';
 }
@@ -6205,7 +6765,7 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
       const name = (l.name || '').toUpperCase();
       if (funnelFilter === 'kor') {
         return l.pipeline_id === 14268556 || l.pipeline_id === 13956952 || 
-          (l.pipeline_id === 13956856 && (tags.includes('KOR') || tags.some(t => t.includes('RESTAURANTE')) || name.includes('KOR')));
+          (l.pipeline_id === 13956856 && (l._embedded?.tags || []).some(t => PRODUTO_KOR.test(t.name || '')));
       }
       if (funnelFilter === 'kop') {
         return l.pipeline_id === 14173256 || 
@@ -6218,6 +6778,178 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
     const rawSales = await lerCache('eduzz_sales_raw.json', []);
     const paidSales = rawSales.filter(s => s.sale_status === 3 || s.sale_status_name === 'Paga' || s.status === 'paid');
 
+    const TIPOS_COMPRA = ['purchase', 'offsite_conversion.fb_pixel_purchase', 'omni_purchase', 'onsite_web_purchase'];
+    // Funis sem objetivo de lead/venda: ficam fora de CPL, CAC e ROAS
+    const FUNIS_SEM_CONVERSAO = ['engajamento', 'outros'];
+    const PIPES_REUNIAO = [13304583, 13304659, 13537971];
+    const vendaDireta = ['kop', 'kor', 'ebook'].includes(funnelFilter);
+
+    // Etapas de reunião por funil (espelho de ETAPAS_POR_PIPELINE no app.js)
+    const ETAPAS_REUNIAO = {
+      13304583: { agendada: [109107608, 102599003], noshow: [108291644], realizada: [102599203] },
+      13304659: { agendada: [102599807], noshow: [104280663], realizada: [102599811] },
+      13537971: { agendada: [104452423], noshow: [104457987], realizada: [104458027] }
+    };
+
+    // Datas do export Eduzz vêm sem fuso e estão em horário de Brasília
+    const dataVendaEduzz = s => {
+      const raw = s.date_payment || s.date_create;
+      if (!raw) return NaN;
+      const iso = String(raw).replace(' ', 'T');
+      const comFuso = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}-03:00`;
+      return Math.floor(new Date(comFuso).getTime() / 1000);
+    };
+
+    const vendaEduzzDoFunil = s => {
+      const title = (s.content_title || s.product_name || '').toUpperCase();
+      if (funnelFilter === 'all') return true;
+      if (funnelFilter === 'mlfp') return title.includes('MENTORIA') || title.includes('MLFP') || title.includes('FAIXA PRETA');
+      if (funnelFilter === 'komando') return title.includes('KOMANDO') && !title.includes('KOP') && !title.includes('KOR');
+      if (funnelFilter === 'kop') return title.includes('KOP') || title.includes('PRAÇA') || title.includes('PRACA');
+      // "Restaurante" sozinho pegava o e-book "10 passos para Donos de Restaurante"
+      if (funnelFilter === 'kor') return title.includes('KOR') || PRODUTO_KOR.test(title) || title.includes('RECUPERAÇÃO') || title.includes('RECUPERACAO');
+      if (funnelFilter === 'ebook') return title.includes('EBOOK') || title.includes('LIVRO');
+      return false;
+    };
+
+    // Cada período usa UMA fonte de vendas. Antes CRM, Eduzz e pixel eram
+    // somados, e a mesma compra podia entrar duas ou três vezes:
+    //   1. Eduzz — pagamento confirmado, é o que valida a venda
+    //   2. sem Eduzz: pixel nos produtos de venda direta, CRM nos de reunião
+    // Receita só com valor real: lead ganho sem price não soma nada (antes
+    // eram inventados R$ 2.997 / R$ 1.000 / R$ 97).
+    // O cache Eduzz tem dois trechos: o export empacotado (até 16/06/2026) e o
+    // que o webhook grava desde a correção de 14/09/2026 (21h33). Entre eles não
+    // há venda nenhuma, então um período que cruze o buraco contaria só parte —
+    // foi o que zerou a semana 13–19/09 do KOR com uma única venda do webhook.
+    // O cache só vale como fonte quando o período cabe inteiro num trecho.
+    const EDUZZ_WEBHOOK_DESDE = Math.floor(Date.parse('2026-09-15T00:33:00Z') / 1000);
+    const datasExport = paidSales.filter(s => s.origem !== 'webhook').map(dataVendaEduzz).filter(n => !isNaN(n));
+    const FIM_EXPORT_EDUZZ = datasExport.length ? Math.max(...datasExport) : -Infinity;
+    const eduzzCobre = (ini, fim) => fim <= FIM_EXPORT_EDUZZ || ini >= EDUZZ_WEBHOOK_DESDE;
+
+    function consolidarVendas(startSec, endSec, pixel) {
+      let eduzzN = 0, eduzzV = 0;
+      paidSales.forEach(s => {
+        if (!vendaEduzzDoFunil(s)) return;
+        const sSecs = dataVendaEduzz(s);
+        if (isNaN(sSecs) || sSecs < startSec || sSecs > endSec) return;
+        eduzzN++;
+        eduzzV += parseFloat(s.sale_total) || parseFloat(s.value) || 0;
+      });
+      // KOR: sempre a Base Eduzz do CRM. O webhook cria o lead ali em toda
+      // venda, então ela cobre o período inteiro — o cache Eduzz, não
+      const baseKor = vendasKorBaseEduzz(allLeads, startSec, endSec);
+      if (funnelFilter === 'kor') {
+        return { vendas: baseKor.vendas, faturamento: baseKor.valor, origemVendas: 'crm_base_eduzz' };
+      }
+
+      if (eduzzN > 0 && eduzzCobre(startSec, endSec)) return { vendas: eduzzN, faturamento: eduzzV, origemVendas: 'eduzz' };
+
+      // Venda conta na data de fechamento, não na criação do lead
+      let crmN = 0, crmV = 0, reuniaoN = 0, reuniaoV = 0;
+      commercialLeads.forEach(l => {
+        if (l.status_id !== 142) return;
+        const fechado = l.closed_at || l.updated_at || 0;
+        if (fechado < startSec || fechado > endSec) return;
+        const valor = parseFloat(l.price) || 0;
+        crmN++; crmV += valor;
+        if (PIPES_REUNIAO.includes(l.pipeline_id)) { reuniaoN++; reuniaoV += valor; }
+      });
+
+      if (vendaDireta) {
+        return pixel.vendas > 0
+          ? { vendas: pixel.vendas, faturamento: pixel.valor, origemVendas: 'pixel' }
+          : { vendas: crmN, faturamento: crmV, origemVendas: 'crm' };
+      }
+      if (funnelFilter === 'all') {
+        return {
+          vendas: reuniaoN + baseKor.vendas + (pixel.vendasNaoKor || 0),
+          faturamento: reuniaoV + baseKor.valor + (pixel.valorNaoKor || 0),
+          origemVendas: 'crm+base_eduzz+pixel'
+        };
+      }
+      return { vendas: crmN, faturamento: crmV, origemVendas: 'crm' };
+    }
+
+    // Investimento e compras do pixel por mês, para o resumo anual.
+    // Uma consulta de jan→mês com time_increment=monthly leva ~30s e falha
+    // ("unknown error") com o ano avançando; por mês é rápida. Mês fechado não
+    // muda mais, então fica em cache e só o primeiro carregamento paga o custo.
+    // Inclui a conta antiga, que rodou fev–abr/2026.
+    async function carregarMetaAno() {
+      const contas = ['act_322391662838622', 'act_202384504675778'];
+      const tarefas = [];
+      for (let m = 1; m < month; m++) contas.forEach(conta => tarefas.push({ conta, mes: `${year}-${pad(m)}` }));
+
+      const buscarMes = async ({ conta, mes }) => {
+        const arquivo = `meta_mensal_${conta}_${mes}.json`;
+        const emCache = await lerCache(arquivo, null);
+        if (emCache) return emCache;
+
+        const [y, mm] = mes.split('-').map(Number);
+        const range = JSON.stringify({ since: `${mes}-01`, until: `${mes}-${pad(new Date(y, mm, 0).getDate())}` });
+        let tokenMes = token;
+        let url = `https://graph.facebook.com/v20.0/${conta}/insights?time_range=${encodeURIComponent(range)}&fields=campaign_name,spend,actions,action_values&level=campaign&limit=500&access_token=${tokenMes}`;
+        const linhas = [];
+        while (url) {
+          let r = await (await fetch(url)).json();
+          // Sem permissão (#200) com o token do ambiente: mesmo fallback das
+          // demais consultas do painel
+          if (r.error && r.error.code === 200 && tokenMes !== DEFAULT_META_ACCESS_TOKEN) {
+            url = url.replace(`access_token=${tokenMes}`, `access_token=${DEFAULT_META_ACCESS_TOKEN}`);
+            tokenMes = DEFAULT_META_ACCESS_TOKEN;
+            r = await (await fetch(url)).json();
+          }
+          if (r.error) r = await (await fetch(url)).json(); // erro transitório do Meta: uma nova tentativa
+          if (r.error) throw new Error(`${conta} ${mes}: ${r.error.message}`);
+          (r.data || []).forEach(c => {
+            const pc = (c.actions || []).find(a => TIPOS_COMPRA.includes(a.action_type));
+            const pv = (c.action_values || []).find(a => TIPOS_COMPRA.includes(a.action_type));
+            linhas.push({
+              campaign_name: c.campaign_name,
+              spend: parseFloat(c.spend || 0),
+              compras: pc ? parseInt(pc.value || 0, 10) : 0,
+              valor: pv ? parseFloat(pv.value || 0) : 0
+            });
+          });
+          url = r.paging?.next || null;
+        }
+        await gravarCache(arquivo, linhas);
+        return linhas;
+      };
+
+      const porMes = {};
+      const fila = [...tarefas];
+      const trabalhador = async () => {
+        while (fila.length) {
+          const t = fila.shift();
+          try {
+            const linhas = await buscarMes(t);
+            if (!porMes[t.mes]) porMes[t.mes] = { investimento: 0, vendas: 0, valor: 0, vendasNaoKor: 0, valorNaoKor: 0 };
+            linhas.forEach(c => {
+              const fType = classifyCampaignFunnel(c.campaign_name);
+              const conta = funnelFilter === 'all' ? !FUNIS_SEM_CONVERSAO.includes(fType) : fType === funnelFilter;
+              if (!conta) return;
+              porMes[t.mes].investimento += c.spend;
+              porMes[t.mes].vendas += c.compras;
+              porMes[t.mes].valor += c.valor;
+              if (fType !== 'kor') {
+                porMes[t.mes].vendasNaoKor += c.compras;
+                porMes[t.mes].valorNaoKor += c.valor;
+              }
+            });
+          } catch (e) {
+            console.error('[Traffic Weekly] Error fetching monthly spend:', e.message);
+          }
+        }
+      };
+      await Promise.all([trabalhador(), trabalhador(), trabalhador(), trabalhador()]);
+      return porMes;
+    }
+    // Começa já, em paralelo com as semanas
+    const metaAnoPromise = carregarMetaAno();
+
     // 1. Processar cada semana em paralelo (Meta Ads + CRM)
     const weeksData = await Promise.all(weeksConfig.map(async (w) => {
       const timeRange = JSON.stringify({ since: w.since, until: w.until });
@@ -6226,6 +6958,10 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
       let clicks = 0;
       let metaPurchases = 0;
       let metaPurchaseValue = 0;
+      let spendConteudo = 0;
+      // Compras do pixel fora do KOR — o KOR usa a Base Eduzz
+      let pixelNaoKorN = 0;
+      let pixelNaoKorV = 0;
 
       try {
         const campUrl = `https://graph.facebook.com/v20.0/act_322391662838622/insights?time_range=${encodeURIComponent(timeRange)}&fields=campaign_name,spend,impressions,clicks,actions,action_values&level=campaign&limit=100&access_token=${token}`;
@@ -6241,7 +6977,11 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
             const fType = classifyCampaignFunnel(c.campaign_name);
             let includeCamp = false;
             if (funnelFilter === 'all') {
-              includeCamp = true;
+              if (FUNIS_SEM_CONVERSAO.includes(fType)) {
+                spendConteudo += parseFloat(c.spend || 0);
+              } else {
+                includeCamp = true;
+              }
             } else if (fType === funnelFilter) {
               includeCamp = true;
             }
@@ -6263,6 +7003,7 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
               );
               const pCount = pAct ? parseInt(pAct.value || 0, 10) : 0;
               metaPurchases += pCount;
+              if (fType !== 'kor') pixelNaoKorN += pCount;
 
               const pValAct = actionValues.find(a => 
                 a.action_type === 'purchase' || 
@@ -6270,8 +7011,9 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
                 a.action_type === 'omni_purchase' ||
                 a.action_type === 'onsite_web_purchase'
               );
-              const pVal = pValAct ? parseFloat(pValAct.value || 0) : (pCount * (fType === 'kor' ? 97 : (fType === 'kop' ? 97 : 0)));
+              const pVal = pValAct ? parseFloat(pValAct.value || 0) : 0;
               metaPurchaseValue += pVal;
+              if (fType !== 'kor') pixelNaoKorV += pVal;
             }
           }
         }
@@ -6287,63 +7029,30 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
 
       let agendadas = 0;
       let comparecidas = 0;
-      let vendas = 0;
-      let faturamento = 0;
       let noShow = 0;
+      let mql = 0;
 
+      // Reuniões da coorte criada na semana, pela etapa mais avançada que o
+      // lead alcançou. Antes contava só quem estava parado na etapa neste
+      // instante, só no MLFP — e "Follow Up 1" contava como realizada.
       wLeads.forEach(l => {
-        const tags = (l._embedded?.tags || []).map(t => t.name.toUpperCase());
+        const tags = (l._embedded?.tags || []).map(t => (typeof t === 'string' ? t : (t?.name || ''))).map(n => String(n).toUpperCase());
+        if (tags.includes('MQL')) mql++;
+
+        const etapas = ETAPAS_REUNIAO[l.pipeline_id];
+        if (!etapas) return;
         const sId = l.status_id;
-        const price = parseFloat(l.price) || 0;
-
-        if (sId === 102599003 || sId === 109107608 || tags.includes('REUNIÃO AGENDADA') || tags.includes('AGENDOU')) {
-          agendadas++;
-        }
-        if (sId === 102599203 || sId === 108066768 || tags.includes('REUNIÃO REALIZADA') || tags.includes('COMPARECEU')) {
-          comparecidas++;
-        }
-        if (sId === 108291644 || tags.includes('NO SHOW') || tags.includes('NÃO COMPARECEU')) {
-          noShow++;
-        }
-        if (sId === 142) {
-          vendas++;
-          faturamento += price > 0 ? price : (funnelFilter === 'mlfp' ? 2997 : (funnelFilter === 'komando' ? 1000 : 97));
-        }
+        const realizada = sId === 142 || etapas.realizada.includes(sId);
+        const faltou = etapas.noshow.includes(sId);
+        if (realizada || faltou || etapas.agendada.includes(sId)) agendadas++;
+        if (realizada) comparecidas++;
+        if (faltou) noShow++;
       });
 
-      // Também computar faturamento Eduzz pago nesta semana para o produto
-      paidSales.forEach(s => {
-        const title = (s.content_title || s.product_name || '').toUpperCase();
-        let matchesProduct = false;
-        if (funnelFilter === 'all') matchesProduct = true;
-        else if (funnelFilter === 'mlfp' && (title.includes('MENTORIA') || title.includes('MLFP') || title.includes('FAIXA PRETA'))) matchesProduct = true;
-        else if (funnelFilter === 'komando' && title.includes('KOMANDO') && !title.includes('KOP') && !title.includes('KOR')) matchesProduct = true;
-        else if (funnelFilter === 'kop' && (title.includes('KOP') || title.includes('PRAÇA') || title.includes('PRACA'))) matchesProduct = true;
-        else if (funnelFilter === 'kor' && (title.includes('KOR') || title.includes('RESTAURANTE') || title.includes('RECUPERAÇÃO') || title.includes('RECUPERACAO'))) matchesProduct = true;
-        else if (funnelFilter === 'ebook' && (title.includes('EBOOK') || title.includes('LIVRO'))) matchesProduct = true;
-
-        if (matchesProduct) {
-          const rawDate = s.date_payment || s.date_create;
-          if (rawDate) {
-            const sSecs = Math.floor(new Date(String(rawDate).replace(' ', 'T')).getTime() / 1000);
-            if (sSecs >= startSec && sSecs <= endSec) {
-              const val = parseFloat(s.sale_total) || parseFloat(s.value) || 0;
-              if (val > 0) faturamento += val;
-            }
-          }
-        }
-      });
-
-      // Para produtos de venda direta (KOP, KOR, EBOOK) ou consolidação, incluir vendas do Pixel da Meta
-      if (funnelFilter === 'kop' || funnelFilter === 'kor' || funnelFilter === 'ebook') {
-        vendas = metaPurchases > 0 ? metaPurchases : vendas;
-        faturamento = metaPurchaseValue > 0 ? metaPurchaseValue : faturamento;
-      } else if (funnelFilter === 'all') {
-        vendas += metaPurchases;
-        faturamento += metaPurchaseValue;
-      }
+      const { vendas, faturamento, origemVendas } = consolidarVendas(startSec, endSec, { vendas: metaPurchases, valor: metaPurchaseValue, vendasNaoKor: pixelNaoKorN, valorNaoKor: pixelNaoKorV });
 
       const cpl = wLeads.length > 0 ? (spend / wLeads.length) : 0;
+      const cpmql = mql > 0 ? (spend / mql) : 0;
       const cpa = agendadas > 0 ? (spend / agendadas) : 0;
       const cpr = comparecidas > 0 ? (spend / comparecidas) : 0;
       const cac = vendas > 0 ? (spend / vendas) : 0;
@@ -6357,9 +7066,12 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
         since: w.since,
         until: w.until,
         investimento: Math.round(spend * 100) / 100,
+        investimentoConteudo: Math.round(spendConteudo * 100) / 100,
+        origemVendas,
         impressions,
         clicks,
         leads: wLeads.length,
+        mql,
         agendadas,
         comparecidas,
         vendas,
@@ -6367,6 +7079,7 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
         noShow,
         noShowPct: Math.round(noShowPct * 10) / 10,
         cpl: Math.round(cpl * 100) / 100,
+        cpmql: Math.round(cpmql * 100) / 100,
         cpa: Math.round(cpa * 100) / 100,
         cpr: Math.round(cpr * 100) / 100,
         cac: Math.round(cac * 100) / 100,
@@ -6379,14 +7092,17 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
     const monthTotals = {
       investimento: Math.round(weeksData.reduce((acc, w) => acc + w.investimento, 0) * 100) / 100,
       leads: weeksData.reduce((acc, w) => acc + w.leads, 0),
+      mql: weeksData.reduce((acc, w) => acc + w.mql, 0),
       agendadas: weeksData.reduce((acc, w) => acc + w.agendadas, 0),
       comparecidas: weeksData.reduce((acc, w) => acc + w.comparecidas, 0),
       vendas: weeksData.reduce((acc, w) => acc + w.vendas, 0),
       faturamento: Math.round(weeksData.reduce((acc, w) => acc + w.faturamento, 0) * 100) / 100,
-      noShow: weeksData.reduce((acc, w) => acc + w.noShow, 0)
+      noShow: weeksData.reduce((acc, w) => acc + w.noShow, 0),
+      investimentoConteudo: Math.round(weeksData.reduce((acc, w) => acc + w.investimentoConteudo, 0) * 100) / 100
     };
     monthTotals.noShowPct = monthTotals.agendadas > 0 ? Math.round((monthTotals.noShow / monthTotals.agendadas) * 1000) / 10 : 0;
     monthTotals.cpl = monthTotals.leads > 0 ? Math.round((monthTotals.investimento / monthTotals.leads) * 100) / 100 : 0;
+    monthTotals.cpmql = monthTotals.mql > 0 ? Math.round((monthTotals.investimento / monthTotals.mql) * 100) / 100 : 0;
     monthTotals.cpa = monthTotals.agendadas > 0 ? Math.round((monthTotals.investimento / monthTotals.agendadas) * 100) / 100 : 0;
     monthTotals.cpr = monthTotals.comparecidas > 0 ? Math.round((monthTotals.investimento / monthTotals.comparecidas) * 100) / 100 : 0;
     monthTotals.cac = monthTotals.vendas > 0 ? Math.round((monthTotals.investimento / monthTotals.vendas) * 100) / 100 : 0;
@@ -6494,44 +7210,34 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
 
     // 4. Resumo Anual Mês a Mês
     const monthsNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+    // Investimento real mês a mês no Meta (antes: valor fixo de R$ 6.000 no
+    // MLFP e R$ 3.000 nos demais para todo mês anterior)
+    const metaPorMes = await metaAnoPromise;
+
     const annualSummary = monthsNames.map((name, idx) => {
       const mNum = idx + 1;
       const mPrefix = `${year}-${pad(mNum)}`;
-      
-      let faturamentoMes = 0;
-      if (mNum === month) {
-        faturamentoMes = monthTotals.faturamento;
-      } else {
-        // Vendas do mês no Eduzz
-        paidSales.forEach(s => {
-          const title = (s.content_title || s.product_name || '').toUpperCase();
-          let matchesProduct = false;
-          if (funnelFilter === 'all') matchesProduct = true;
-          else if (funnelFilter === 'mlfp' && (title.includes('MENTORIA') || title.includes('MLFP') || title.includes('FAIXA PRETA'))) matchesProduct = true;
-          else if (funnelFilter === 'komando' && title.includes('KOMANDO') && !title.includes('KOP') && !title.includes('KOR')) matchesProduct = true;
-          else if (funnelFilter === 'kop' && (title.includes('KOP') || title.includes('PRAÇA') || title.includes('PRACA'))) matchesProduct = true;
-          else if (funnelFilter === 'kor' && (title.includes('KOR') || title.includes('RESTAURANTE') || title.includes('RECUPERAÇÃO') || title.includes('RECUPERACAO'))) matchesProduct = true;
-          else if (funnelFilter === 'ebook' && (title.includes('EBOOK') || title.includes('LIVRO'))) matchesProduct = true;
 
-          if (matchesProduct) {
-            const rawDate = s.date_payment || s.date_create;
-            if (rawDate && String(rawDate).startsWith(mPrefix)) {
-              faturamentoMes += parseFloat(s.sale_total) || parseFloat(s.value) || 0;
-            }
-          }
-        });
-
-        // Faturamento de CRM
-        commercialLeads.forEach(l => {
-          const lDate = new Date(l.created_at * 1000).toISOString().slice(0, 7);
-          if (lDate === mPrefix && l.status_id === 142) {
-            faturamentoMes += parseFloat(l.price) || (funnelFilter === 'mlfp' ? 2997 : 1000);
-          }
-        });
+      if (mNum > month) {
+        return { mes: name, mesNum: mNum, investimento: 0, faturamento: 0, roas: 0, origemVendas: null, status: 'Pendente' };
       }
 
-      // Se for o mês corrente selecionado, usar o valor do mês
-      const investido = (mNum === month) ? monthTotals.investimento : (mNum < month ? (funnelFilter === 'mlfp' ? 6000 : 3000) : 0);
+      let investido, faturamentoMes, origemVendas;
+      if (mNum === month) {
+        investido = monthTotals.investimento;
+        faturamentoMes = monthTotals.faturamento;
+        origemVendas = [...new Set(weeksData.map(w => w.origemVendas))].join(', ');
+      } else {
+        const meta = metaPorMes[mPrefix] || { investimento: 0, vendas: 0, valor: 0, vendasNaoKor: 0, valorNaoKor: 0 };
+        const proxMes = mNum === 12 ? `${year + 1}-01` : `${year}-${pad(mNum + 1)}`;
+        const ini = Math.floor(new Date(`${mPrefix}-01T00:00:00-03:00`).getTime() / 1000);
+        const fim = Math.floor(new Date(`${proxMes}-01T00:00:00-03:00`).getTime() / 1000) - 1;
+        const consolidado = consolidarVendas(ini, fim, { vendas: meta.vendas, valor: meta.valor, vendasNaoKor: meta.vendasNaoKor, valorNaoKor: meta.valorNaoKor });
+        investido = meta.investimento;
+        faturamentoMes = consolidado.faturamento;
+        origemVendas = consolidado.origemVendas;
+      }
+
       const roas = investido > 0 ? (faturamentoMes / investido) : 0;
 
       return {
@@ -6540,7 +7246,8 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
         investimento: Math.round(investido * 100) / 100,
         faturamento: Math.round(faturamentoMes * 100) / 100,
         roas: Math.round(roas * 100) / 100,
-        status: faturamentoMes >= investido && investido > 0 ? 'Lucrativo' : (investido > 0 ? 'Em maturação' : 'Pendente')
+        origemVendas,
+        status: investido > 0 ? (roas >= 1 ? 'Lucrativo' : 'Em maturação') : (faturamentoMes > 0 ? 'Sem mídia paga' : 'Pendente')
       };
     });
 
@@ -7318,14 +8025,14 @@ async function writeCandidatos(data) {
 app.options('/api/vagas-candidatura', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
   res.sendStatus(200);
 });
 
 app.post('/api/vagas-candidatura', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
 
   try {
     const cand = req.body || {};
@@ -7338,6 +8045,10 @@ app.post('/api/vagas-candidatura', async (req, res) => {
     cand.id = cand.id || ('cand_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4));
     cand.timestamp = cand.timestamp || new Date().toISOString();
     cand.status = cand.status || 'novo';
+    cand.vaga_id = cand.vaga_id || 'vaga_geral';
+    cand.vaga = cand.vaga || cand.vaga_titulo || 'Oportunidade';
+    cand.restaurante = cand.restaurante || 'KØMANDO';
+    cand.respostas_detalhadas = Array.isArray(cand.respostas_detalhadas) ? cand.respostas_detalhadas : [];
 
     list.unshift(cand);
     if (list.length > 500) list = list.slice(0, 500);
@@ -7347,21 +8058,22 @@ app.post('/api/vagas-candidatura', async (req, res) => {
     // Notificação Z-API / Telegram
     try {
       const cleanPh = (cand.telefone || '').replace(/\D/g, '');
-      const msg = `🎯 *NOVA CANDIDATURA — GESTOR DE TRÁFEGO*\n` +
-                  `👤 *Nome:* ${cand.nome}\n` +
-                  `📱 *WhatsApp:* https://wa.me/55${cleanPh}\n` +
-                  `⭐ *Score:* ${cand.score || 'N/A'}/100 (${cand.score_classificacao || 'Avaliando'})\n` +
-                  `🧠 *DISC:* ${cand.disc_perfil_predominante || 'N/A'}\n` +
-                  `💼 *Experiência:* ${cand.experiencia_infoprodutos || 'N/A'}\n` +
-                  `💰 *Maior Budget:* ${cand.maior_budget || 'N/A'}\n` +
-                  `🔗 *Portfólio:* ${cand.portfolio_link || 'N/A'}`;
+      const tituloVaga = cand.vaga || cand.vaga_titulo || 'Vaga Operacional';
+      const nomeRest = cand.restaurante || 'KØMANDO';
+      const msg = `*NOVA CANDIDATURA — ${tituloVaga.toUpperCase()}*\n` +
+                  `*Restaurante:* ${nomeRest}\n` +
+                  `*Nome:* ${cand.nome}\n` +
+                  `*WhatsApp:* https://wa.me/55${cleanPh}\n` +
+                  `*Score:* ${cand.score !== undefined ? cand.score : 'N/A'}/100 (${cand.score_classificacao || 'Apto'})\n` +
+                  (cand.cidade ? `*Cidade:* ${cand.cidade}\n` : '') +
+                  (cand.pontos_obtidos !== undefined ? `*Pontos:* ${cand.pontos_obtidos} / ${cand.pontos_maximos || 0}\n` : '');
       
       const kakaPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
       sendZapi(kakaPhone, msg).catch(() => {});
       sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, msg).catch(() => {});
     } catch(e) {}
 
-    res.json({ success: true, id: cand.id });
+    res.json({ success: true, id: cand.id, data: cand });
   } catch (err) {
     console.error('[Vagas API] Erro ao salvar candidatura:', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -7371,17 +8083,41 @@ app.post('/api/vagas-candidatura', async (req, res) => {
 app.options('/api/vagas-candidatos', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
   res.sendStatus(200);
 });
 
 app.get('/api/vagas-candidatos', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
 
   try {
-    const list = await readCandidatos();
+    const authUser = extractAuthUser(req);
+    const { vaga_id, restaurante, status } = req.query;
+    let list = await readCandidatos();
+
+    // Filtro por restaurante do usuário logado se for restaurante
+    if (authUser && authUser.role === 'restaurante') {
+      const restNorm = String(authUser.restaurante || '').toLowerCase().trim();
+      list = list.filter(c => {
+        const candRest = String(c.restaurante || '').toLowerCase().trim();
+        return candRest === restNorm || candRest.includes(restNorm) || restNorm.includes(candRest);
+      });
+    } else if (restaurante) {
+      const restNorm = String(restaurante).toLowerCase().trim();
+      list = list.filter(c => String(c.restaurante || '').toLowerCase().includes(restNorm));
+    }
+
+    // Filtro específico por vaga_id
+    if (vaga_id) {
+      list = list.filter(c => c.vaga_id === vaga_id);
+    }
+
+    if (status) {
+      list = list.filter(c => c.status === status);
+    }
+
     res.json({ success: true, data: list, total: list.length });
   } catch (err) {
     console.error('[Vagas API] Erro ao buscar candidatos:', err.message);
@@ -7741,6 +8477,7 @@ app.get('/api/formularios', async (req, res) => {
       badge: f.badge || 'PESQUISA DE SATISFAÇÃO',
       is_default: !!f.is_default,
       questions_count: Array.isArray(f.questions) ? f.questions.length : 0,
+      questions: f.questions || [],
       created_at: f.created_at || null,
       updated_at: f.updated_at || null
     }));
@@ -7850,6 +8587,666 @@ app.delete('/api/formularios', async (req, res) => {
     res.json({ success: true, message: 'Formulário excluído com sucesso.' });
   } catch (err) {
     console.error('[Formulários API] Erro ao excluir formulário:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ============================================================
+//  API DE VAGAS & CANDIDATURAS (KØMANDO & RESTAURANTES MENTORADOS)
+// ============================================================
+const VAGAS_CANDIDATURAS_FILE_NAME = 'vagas_candidaturas.json';
+
+async function readCandidaturas() {
+  try {
+    const dados = await lerCache(VAGAS_CANDIDATURAS_FILE_NAME, []);
+    return Array.isArray(dados) ? dados : [];
+  } catch (err) {
+    console.error('[Vagas API] Erro ao ler candidaturas:', err.message);
+    return [];
+  }
+}
+
+async function writeCandidaturas(data) {
+  try {
+    await gravarCache(VAGAS_CANDIDATURAS_FILE_NAME, data);
+  } catch (err) {
+    console.error('[Vagas API] Erro ao gravar candidaturas:', err.message);
+  }
+}
+
+app.options(['/api/vagas-candidatura', '/api/vagas-candidatos'], (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+
+// POST /api/vagas-candidatura (submissão de nova candidatura)
+app.post('/api/vagas-candidatura', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const body = req.body || {};
+    if (!body.nome || !body.telefone) {
+      return res.status(400).json({ success: false, error: 'Nome e telefone são obrigatórios.' });
+    }
+
+    const candidatura = {
+      id: 'cand_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+      timestamp: body.timestamp || new Date().toISOString(),
+      vaga: body.vaga || 'Vaga Operacional',
+      restaurante: body.restaurante || 'KØMANDO',
+      nivel: body.nivel || '',
+      nome: String(body.nome).trim(),
+      email: String(body.email || '').trim(),
+      telefone: String(body.telefone || '').trim(),
+      cidade: String(body.cidade || '').trim(),
+      portfolio_link: String(body.portfolio_link || '').trim(),
+      experiencia: body.experiencia || body.experiencia_infoprodutos || body.experiencia_cozinha || '',
+      maior_volume: body.maior_volume || body.maior_budget || body.pracas_dominadas || '',
+      piso_remuneracao: String(body.piso_remuneracao || '').trim(),
+      motivacao: String(body.motivacao || '').trim(),
+      score: typeof body.score === 'number' ? body.score : parseInt(body.score || '0', 10),
+      score_classificacao: body.score_classificacao || 'Pendente',
+      disc_perfil_predominante: body.disc_perfil_predominante || '',
+      disc_perfil_secundario: body.disc_perfil_secundario || '',
+      disc_resumo: body.disc_resumo || '',
+      detalhes_extras: body.detalhes_extras || {},
+      url_origem: body.url || ''
+    };
+
+    const candidaturas = await readCandidaturas();
+    candidaturas.unshift(candidatura);
+    
+    // Mantém as últimas 1.000 candidaturas em cache
+    if (candidaturas.length > 1000) {
+      candidaturas.length = 1000;
+    }
+    await writeCandidaturas(candidaturas);
+
+    console.log(`[Vagas API] Nova candidatura registrada: ${candidatura.nome} (${candidatura.vaga} - ${candidatura.restaurante}) Score: ${candidatura.score}`);
+
+    res.json({
+      success: true,
+      message: 'Candidatura registrada com sucesso.',
+      id: candidatura.id,
+      score: candidatura.score,
+      score_classificacao: candidatura.score_classificacao
+    });
+  } catch (err) {
+    console.error('[Vagas API] Erro ao registrar candidatura:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/vagas-candidatos (consulta candidaturas com filtro opcional por restaurante ou vaga)
+app.get('/api/vagas-candidatos', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const { restaurante, vaga, limit } = req.query;
+    let candidaturas = await readCandidaturas();
+
+    if (restaurante) {
+      const restNorm = String(restaurante).toLowerCase().trim();
+      candidaturas = candidaturas.filter(c => 
+        String(c.restaurante || '').toLowerCase().includes(restNorm)
+      );
+    }
+
+    if (vaga) {
+      const vagaNorm = String(vaga).toLowerCase().trim();
+      candidaturas = candidaturas.filter(c => 
+        String(c.vaga || '').toLowerCase().includes(vagaNorm)
+      );
+    }
+
+    const max = parseInt(limit || '100', 10);
+    const result = candidaturas.slice(0, max);
+
+    res.json({
+      success: true,
+      total: candidaturas.length,
+      retornados: result.length,
+      data: result
+    });
+  } catch (err) {
+    console.error('[Vagas API] Erro ao listar candidaturas:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ============================================================
+//  API DE CONFIGURAÇÃO DE VAGAS & PERGUNTAS WHITE-LABEL
+const VAGAS_AUTH_FILE_NAME = 'vagas_auth.json';
+const VAGAS_CONFIG_FILE_NAME = 'vagas_config.json';
+const VAGAS_AUTH_SECRET = process.env.VAGAS_AUTH_SECRET || 'komando_vagas_jwt_secret_2026_super_secure';
+
+async function readVagasAuth() {
+  try {
+    const dados = await lerCache(VAGAS_AUTH_FILE_NAME, []);
+    return Array.isArray(dados) ? dados : [];
+  } catch (err) {
+    console.error('[Vagas Auth API] Erro ao ler vagas_auth:', err.message);
+    return [];
+  }
+}
+
+async function writeVagasAuth(data) {
+  try {
+    await gravarCache(VAGAS_AUTH_FILE_NAME, data);
+  } catch (err) {
+    console.error('[Vagas Auth API] Erro ao gravar vagas_auth:', err.message);
+  }
+}
+
+function generateSessionToken(user) {
+  const payload = {
+    id: user.id,
+    email: user.email,
+    role: user.role || 'restaurante',
+    nome: user.nome || '',
+    restaurante: user.restaurante || '',
+    exp: Date.now() + 30 * 24 * 60 * 60 * 1000
+  };
+  const dataStr = Buffer.from(JSON.stringify(payload)).toString('base64');
+  const sig = crypto.createHmac('sha256', VAGAS_AUTH_SECRET).update(dataStr).digest('hex');
+  return dataStr + '.' + sig;
+}
+
+function verifySessionToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const dotIdx = token.indexOf('.');
+  if (dotIdx === -1) return null;
+  const dataStr = token.substring(0, dotIdx);
+  const sig = token.substring(dotIdx + 1);
+  const expectedSig = crypto.createHmac('sha256', VAGAS_AUTH_SECRET).update(dataStr).digest('hex');
+  if (sig !== expectedSig) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(dataStr, 'base64').toString('utf8'));
+    if (payload.exp && payload.exp < Date.now()) return null;
+    return payload;
+  } catch (e) {
+    return null;
+  }
+}
+
+function extractAuthUser(req) {
+  const authHeader = req.headers['authorization'] || req.headers['x-auth-token'];
+  let token = req.query?.token;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7);
+  } else if (authHeader) {
+    token = authHeader;
+  }
+  return verifySessionToken(token);
+}
+
+// ------------------------------------------------------------
+// ROTAS DE AUTENTICAÇÃO E GESTÃO DE USUÁRIOS
+// ------------------------------------------------------------
+app.options(['/api/vagas-auth/login', '/api/vagas-auth/me', '/api/vagas-auth/restaurantes'], (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
+  res.sendStatus(200);
+});
+
+// POST /api/vagas-auth/login
+app.post('/api/vagas-auth/login', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
+
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: 'E-mail e senha são obrigatórios.' });
+    }
+
+    const emailNorm = String(email).toLowerCase().trim();
+    let users = await readVagasAuth();
+
+    if (!users || users.length === 0) {
+      users = [
+        {
+          id: 'usr_admin_komando',
+          email: 'admin@consultoriakomando.com.br',
+          password_hash: crypto.createHash('sha256').update('Komando@2026').digest('hex'),
+          role: 'admin',
+          nome: 'Admin KØMANDO',
+          restaurante: 'KØMANDO Central',
+          status: 'active',
+          created_at: new Date().toISOString()
+        },
+        {
+          id: 'usr_rest_bistro',
+          email: 'lebistro@restaurante.com',
+          password_hash: crypto.createHash('sha256').update('Bistro@2026').digest('hex'),
+          role: 'restaurante',
+          nome: 'Le Bistrô Gastronomia',
+          restaurante: 'Le Bistrô',
+          cidade: 'Jardins, São Paulo - SP',
+          telefone: '(11) 99999-8888',
+          status: 'active',
+          created_at: new Date().toISOString()
+        }
+      ];
+      await writeVagasAuth(users);
+    }
+
+    const user = users.find(u => String(u.email).toLowerCase().trim() === emailNorm);
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'E-mail ou senha incorretos.' });
+    }
+
+    if (user.status === 'inactive' || user.status === 'suspended') {
+      return res.status(403).json({ success: false, error: 'Esta conta está inativa ou suspensa. Contate o suporte KØMANDO.' });
+    }
+
+    const inputHash = crypto.createHash('sha256').update(String(password).trim()).digest('hex');
+    const isValid = (user.password_hash === inputHash) || (user.password === String(password).trim());
+
+    if (!isValid) {
+      return res.status(401).json({ success: false, error: 'E-mail ou senha incorretos.' });
+    }
+
+    const token = generateSessionToken(user);
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role || 'restaurante',
+        nome: user.nome,
+        restaurante: user.restaurante,
+        cidade: user.cidade || '',
+        telefone: user.telefone || ''
+      }
+    });
+  } catch (err) {
+    console.error('[Vagas Auth] Erro no login:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/vagas-auth/me
+app.get('/api/vagas-auth/me', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
+
+  const authUser = extractAuthUser(req);
+  if (!authUser) {
+    return res.status(401).json({ success: false, error: 'Não autenticado ou sessão expirada.' });
+  }
+
+  res.json({ success: true, user: authUser });
+});
+
+// GET /api/vagas-auth/restaurantes (Admin only)
+app.get('/api/vagas-auth/restaurantes', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
+
+  const authUser = extractAuthUser(req);
+  if (!authUser || authUser.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Acesso restrito ao Administrador Geral KØMANDO.' });
+  }
+
+  try {
+    const users = await readVagasAuth();
+    const configs = await readVagasConfig();
+    const candidaturas = await readCandidaturas();
+
+    const restaurantes = users
+      .filter(u => u.role === 'restaurante')
+      .map(u => {
+        const vagasRest = configs.filter(c => c.user_id === u.id || String(c.restaurante || '').toLowerCase() === String(u.restaurante || '').toLowerCase());
+        const candRest = candidaturas.filter(cd => String(cd.restaurante || '').toLowerCase() === String(u.restaurante || '').toLowerCase());
+        return {
+          id: u.id,
+          nome: u.nome,
+          email: u.email,
+          restaurante: u.restaurante,
+          cidade: u.cidade || '',
+          telefone: u.telefone || '',
+          status: u.status || 'active',
+          created_at: u.created_at,
+          total_vagas: vagasRest.length,
+          total_candidatos: candRest.length
+        };
+      });
+
+    res.json({ success: true, data: restaurantes, total: restaurantes.length });
+  } catch (err) {
+    console.error('[Vagas Auth] Erro ao listar restaurantes:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/vagas-auth/restaurantes (Admin only)
+app.post('/api/vagas-auth/restaurantes', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
+
+  const authUser = extractAuthUser(req);
+  if (!authUser || authUser.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Acesso restrito ao Administrador Geral KØMANDO.' });
+  }
+
+  try {
+    const body = req.body || {};
+    if (!body.nome || !body.email || !body.restaurante) {
+      return res.status(400).json({ success: false, error: 'Nome do responsável, e-mail e nome do restaurante são obrigatórios.' });
+    }
+
+    let users = await readVagasAuth();
+    const restId = body.id || ('usr_rest_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6));
+    const emailNorm = String(body.email).toLowerCase().trim();
+
+    const existingIdx = users.findIndex(u => u.id === restId || String(u.email).toLowerCase().trim() === emailNorm);
+
+    let passwordHash = '';
+    if (body.password && String(body.password).trim().length > 0) {
+      passwordHash = crypto.createHash('sha256').update(String(body.password).trim()).digest('hex');
+    } else if (existingIdx >= 0) {
+      passwordHash = users[existingIdx].password_hash;
+    } else {
+      passwordHash = crypto.createHash('sha256').update('Restaurante@2026').digest('hex');
+    }
+
+    const restaurantUser = {
+      id: existingIdx >= 0 ? users[existingIdx].id : restId,
+      email: emailNorm,
+      password_hash: passwordHash,
+      role: 'restaurante',
+      nome: String(body.nome).trim(),
+      restaurante: String(body.restaurante).trim(),
+      cidade: String(body.cidade || '').trim(),
+      telefone: String(body.telefone || '').trim(),
+      status: body.status || 'active',
+      created_at: existingIdx >= 0 ? users[existingIdx].created_at : new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    if (existingIdx >= 0) {
+      users[existingIdx] = restaurantUser;
+    } else {
+      users.push(restaurantUser);
+    }
+
+    await writeVagasAuth(users);
+    res.json({
+      success: true,
+      data: {
+        id: restaurantUser.id,
+        nome: restaurantUser.nome,
+        email: restaurantUser.email,
+        restaurante: restaurantUser.restaurante,
+        cidade: restaurantUser.cidade,
+        telefone: restaurantUser.telefone,
+        status: restaurantUser.status
+      }
+    });
+  } catch (err) {
+    console.error('[Vagas Auth] Erro ao salvar restaurante:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/vagas-auth/restaurantes (Admin only)
+app.delete('/api/vagas-auth/restaurantes', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
+
+  const authUser = extractAuthUser(req);
+  if (!authUser || authUser.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Acesso restrito ao Administrador Geral KØMANDO.' });
+  }
+
+  try {
+    const id = req.body?.id || req.query?.id;
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'ID do restaurante não fornecido.' });
+    }
+
+    let users = await readVagasAuth();
+    const initialLen = users.length;
+    users = users.filter(u => u.id !== id && u.email !== id);
+
+    if (users.length === initialLen) {
+      return res.status(404).json({ success: false, error: 'Restaurante não encontrado.' });
+    }
+
+    await writeVagasAuth(users);
+    res.json({ success: true, message: 'Restaurante removido com sucesso.' });
+  } catch (err) {
+    console.error('[Vagas Auth] Erro ao excluir restaurante:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ------------------------------------------------------------
+// API DE CONFIGURAÇÃO DE VAGAS & PERGUNTAS WHITE-LABEL
+// ------------------------------------------------------------
+async function readVagasConfig() {
+  try {
+    const dados = await lerCache(VAGAS_CONFIG_FILE_NAME, []);
+    return Array.isArray(dados) ? dados : [];
+  } catch (err) {
+    console.error('[Vagas Config API] Erro ao ler configs de vagas:', err.message);
+    return [];
+  }
+}
+
+async function writeVagasConfig(data) {
+  try {
+    await gravarCache(VAGAS_CONFIG_FILE_NAME, data);
+  } catch (err) {
+    console.error('[Vagas Config API] Erro ao gravar configs de vagas:', err.message);
+  }
+}
+
+app.options(['/api/vagas-config'], (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
+  res.sendStatus(200);
+});
+
+// GET /api/vagas-config
+app.get('/api/vagas-config', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
+
+  try {
+    const { id, slug, restaurante } = req.query;
+    const configs = await readVagasConfig();
+
+    // 1. Acesso público por ID ou Slug (para candidatos aplicando em vaga.html)
+    if (id || slug) {
+      const match = configs.find(c => c.id === id || c.slug === slug || c.id === slug);
+      if (match) {
+        return res.json({ success: true, data: match });
+      }
+      return res.status(404).json({ success: false, error: 'Vaga não encontrada.' });
+    }
+
+    // 2. Acesso autenticado (Gerenciador de Vagas)
+    const authUser = extractAuthUser(req);
+
+    if (authUser && authUser.role === 'restaurante') {
+      const restNorm = String(authUser.restaurante || '').toLowerCase().trim();
+      const filtered = configs.filter(c => 
+        (c.user_id && c.user_id === authUser.id) || 
+        String(c.restaurante || '').toLowerCase().trim() === restNorm
+      );
+      return res.json({ success: true, data: filtered, total: filtered.length, user_scope: authUser.restaurante });
+    }
+
+    // Se for Admin ou filtro manual explícito
+    if (restaurante) {
+      const restNorm = String(restaurante).toLowerCase().trim();
+      const filtered = configs.filter(c => String(c.restaurante || '').toLowerCase().includes(restNorm));
+      return res.json({ success: true, data: filtered, total: filtered.length });
+    }
+
+    res.json({ success: true, data: configs, total: configs.length });
+  } catch (err) {
+    console.error('[Vagas Config API] Erro ao listar configs:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/vagas-config
+app.post('/api/vagas-config', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
+
+  try {
+    const authUser = extractAuthUser(req);
+    const body = req.body || {};
+
+    if (!body.titulo) {
+      return res.status(400).json({ success: false, error: 'Título da vaga é obrigatório.' });
+    }
+
+    let restauranteNome = String(body.restaurante || '').trim();
+    let userId = body.user_id || '';
+
+    if (authUser) {
+      userId = authUser.id;
+      if (authUser.role === 'restaurante') {
+        restauranteNome = authUser.restaurante;
+      }
+    }
+
+    if (!restauranteNome) {
+      restauranteNome = 'KØMANDO';
+    }
+
+    const vagaId = body.id || ('vaga_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6));
+    const slug = body.slug || (String(restauranteNome).toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + String(body.tipo_base || 'vaga').toLowerCase()).replace(/--+/g, '-');
+
+    // Normaliza perguntas e pontuações/pesos
+    const parsedQuestions = Array.isArray(body.questions) ? body.questions.map((q, idx) => {
+      const hasWeights = q.has_weights === true;
+      const parsedOptions = Array.isArray(q.options) ? q.options.map(o => {
+        if (typeof o === 'object' && o !== null) {
+          return {
+            text: String(o.text || '').trim(),
+            points: typeof o.points === 'number' ? o.points : parseInt(o.points || '0', 10)
+          };
+        }
+        return {
+          text: String(o).trim(),
+          points: 0
+        };
+      }).filter(o => Boolean(o.text)) : [];
+
+      return {
+        id: q.id || ('q_' + (idx + 1) + '_' + Math.random().toString(36).substring(2, 5)),
+        title: String(q.title || 'Pergunta ' + (idx + 1)).trim(),
+        description: String(q.description || '').trim(),
+        badge: String(q.badge || ('ETAPA ' + (idx + 1))).trim(),
+        type: q.type || 'text',
+        required: q.required !== false,
+        auto_advance: q.auto_advance === true,
+        placeholder: q.placeholder || '',
+        has_weights: hasWeights,
+        options: parsedOptions
+      };
+    }) : [];
+
+    let maxPossibleScore = 0;
+    parsedQuestions.forEach(q => {
+      if (q.has_weights && Array.isArray(q.options) && q.options.length > 0) {
+        const pointsList = q.options.map(o => o.points || 0);
+        const bestOption = pointsList.length > 0 ? Math.max(...pointsList) : 0;
+        if (bestOption > 0) maxPossibleScore += bestOption;
+      }
+    });
+
+    const updatedConfig = {
+      id: vagaId,
+      slug: slug,
+      user_id: userId,
+      tipo_base: body.tipo_base || 'cozinheiro',
+      restaurante: restauranteNome,
+      titulo: String(body.titulo).trim(),
+      cidade: String(body.cidade || '').trim(),
+      salario: String(body.salario || '').trim(),
+      modelo: String(body.modelo || 'Presencial').trim(),
+      escala: String(body.escala || '').trim(),
+      beneficios: String(body.beneficios || '').trim(),
+      descricao: String(body.descricao || '').trim(),
+      telefone_gestor: String(body.telefone_gestor || '').trim(),
+      max_possible_score: maxPossibleScore,
+      updated_at: new Date().toISOString(),
+      questions: parsedQuestions
+    };
+
+    let configs = await readVagasConfig();
+    const existingIdx = configs.findIndex(c => c.id === vagaId || c.slug === updatedConfig.slug);
+
+    if (existingIdx >= 0) {
+      if (authUser && authUser.role === 'restaurante') {
+        const old = configs[existingIdx];
+        if (old.user_id && old.user_id !== authUser.id) {
+          return res.status(403).json({ success: false, error: 'Você não tem permissão para alterar vagas de outro restaurante.' });
+        }
+      }
+      configs[existingIdx] = updatedConfig;
+    } else {
+      configs.unshift(updatedConfig);
+    }
+
+    await writeVagasConfig(configs);
+    res.json({ success: true, data: updatedConfig });
+  } catch (err) {
+    console.error('[Vagas Config API] Erro ao salvar vaga config:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/vagas-config
+app.delete('/api/vagas-config', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
+
+  try {
+    const authUser = extractAuthUser(req);
+    const id = req.body?.id || req.query?.id || req.query?.slug;
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'ID da vaga não fornecido.' });
+    }
+
+    let configs = await readVagasConfig();
+    const targetIdx = configs.findIndex(c => c.id === id || c.slug === id);
+
+    if (targetIdx === -1) {
+      return res.status(404).json({ success: false, error: 'Vaga não encontrada.' });
+    }
+
+    if (authUser && authUser.role === 'restaurante') {
+      const target = configs[targetIdx];
+      if (target.user_id && target.user_id !== authUser.id && String(target.restaurante).toLowerCase() !== String(authUser.restaurante).toLowerCase()) {
+        return res.status(403).json({ success: false, error: 'Você não tem permissão para excluir esta vaga.' });
+      }
+    }
+
+    configs.splice(targetIdx, 1);
+    await writeVagasConfig(configs);
+    res.json({ success: true, message: 'Vaga excluída com sucesso.' });
+  } catch (err) {
+    console.error('[Vagas Config API] Erro ao excluir vaga config:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

@@ -52,7 +52,14 @@ body {
   min-height: 100vh;
   position: relative;
   overflow-x: hidden;
+  /* clip corta o excesso lateral sem virar contêiner de rolagem —
+     com hidden, position: sticky não funciona nos descendentes */
+  overflow-x: clip;
   padding: 2rem 1.5rem;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 /* Background glows for spatial depth (Orange highlights) */
@@ -867,7 +874,8 @@ tr:hover td {
   margin-bottom: 0.5rem;
 }
 
-.pipeline-tab-btn {
+.pipeline-tab-btn,
+.traffic-funnel-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
@@ -884,12 +892,14 @@ tr:hover td {
   white-space: nowrap;
 }
 
-.pipeline-tab-btn:hover {
+.pipeline-tab-btn:hover,
+.traffic-funnel-btn:hover {
   background: rgba(255, 107, 0, 0.08);
   color: var(--color-primary);
 }
 
-.pipeline-tab-btn.active {
+.pipeline-tab-btn.active,
+.traffic-funnel-btn.active {
   background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
   color: white;
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
@@ -3014,5 +3024,344 @@ tr:hover td {
     margin-top: 0.5rem;
   }
 }
+
+/* ==========================================
+   MLFP TELEMETRY: AUTOMAÇÃO VS HUMANO
+   ========================================== */
+
+.mlfp-telemetry-section {
+  padding: 1.5rem 1.75rem;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(240, 246, 255, 0.9));
+  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.08);
+}
+
+.telemetry-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.telemetry-header-left h2 {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: var(--text-main);
+  margin: 0.2rem 0;
+}
+
+.telemetry-header-left p {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.telemetry-badge-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 0.2rem 0.65rem;
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+
+.telemetry-period-badge {
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.35rem 0.75rem;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: var(--text-body);
+  border: 1px solid #e2e8f0;
+}
+
+.telemetry-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.telemetry-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1.15rem 1.25rem;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  transition: var(--transition-smooth);
+  position: relative;
+  overflow: hidden;
+}
+
+.telemetry-kpi-card.clickable-card {
+  cursor: pointer;
+}
+
+.telemetry-kpi-card.clickable-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+}
+
+.telemetry-kpi-card.card-blue { border-left: 4px solid #2563eb; }
+.telemetry-kpi-card.card-amber { border-left: 4px solid #f59e0b; }
+.telemetry-kpi-card.card-green { border-left: 4px solid #10b981; }
+.telemetry-kpi-card.card-pink { border-left: 4px solid #ec4899; }
+.telemetry-kpi-card.card-slate { border-left: 4px solid #64748b; }
+
+.telemetry-kpi-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.telemetry-kpi-value {
+  font-family: var(--font-heading);
+  font-size: 1.65rem;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.telemetry-kpi-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.text-pink { color: #ec4899; }
+
+/* Barra de fluxo de telemetria */
+.telemetry-flow-container {
+  margin-top: 1.25rem;
+  background: rgba(248, 250, 252, 0.9);
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+}
+
+.telemetry-flow-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: var(--text-main);
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.telemetry-flow-summary {
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.telemetry-progress-track {
+  height: 10px;
+  border-radius: 6px;
+  display: flex;
+  overflow: hidden;
+  background: #e2e8f0;
+}
+
+.telemetry-bar {
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.bar-humano { background: #10b981; }
+.bar-automacao { background: #f59e0b; }
+.bar-semresp { background: #94a3b8; }
+.bar-downsell { background: #ec4899; }
+
+.telemetry-flow-legend {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  margin-top: 0.65rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot-humano { background: #10b981; }
+.dot-automacao { background: #f59e0b; }
+.dot-semresp { background: #94a3b8; }
+.dot-downsell { background: #ec4899; }
+
+@media (max-width: 768px) {
+  .mlfp-telemetry-section {
+    padding: 1.25rem 1rem;
+  }
+  .telemetry-cards-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .telemetry-cards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================
+   UX: navegação por seções, tabelas enxutas
+   ========================================== */
+[hidden] {
+  display: none !important;
+}
+
+.section-jump-nav {
+  position: sticky;
+  top: 0.5rem;
+  z-index: 40;
+  display: flex;
+  gap: 0.4rem;
+  margin: 0 0 1.25rem;
+  padding: 0.45rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+}
+
+.section-jump-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.jump-link {
+  flex: 0 0 auto;
+  padding: 0.45rem 0.9rem;
+  border-radius: 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: var(--transition-smooth);
+}
+
+.jump-link:hover {
+  color: var(--text-main);
+  background: var(--bg-secondary);
+}
+
+.jump-link.active {
+  color: var(--color-primary);
+  background: var(--color-primary-glow);
+}
+
+/* Seção de destino não fica escondida atrás do menu fixo */
+#secFunil,
+#mediaPagaSection,
+#secRankings,
+#secPerfil,
+#secTime {
+  scroll-margin-top: 5rem;
+}
+
+.btn-toggle-rows {
+  display: block;
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.6rem;
+  border: 1px dashed var(--glass-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-primary);
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.btn-toggle-rows:hover {
+  background: var(--color-primary-glow);
+  border-color: var(--glass-border-hover);
+}
+
+/* Compras fora do produto principal do funil (downsell / outro produto) */
+.layer-extra {
+  display: inline-block;
+  margin-top: 0.4rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.layer-extra-downsell {
+  background: rgba(168, 85, 247, 0.12);
+  color: #7e22ce;
+}
+
+.layer-extra-outro {
+  background: rgba(100, 116, 139, 0.12);
+  color: var(--text-muted);
+}
+
+.badge-outra-compra {
+  font-weight: 700;
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+
+.badge-outra-compra.is-downsell {
+  background: rgba(168, 85, 247, 0.14);
+  color: #7e22ce;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.badge-outra-compra.is-outro {
+  background: rgba(100, 116, 139, 0.12);
+  color: #475569;
+  border: 1px solid rgba(100, 116, 139, 0.25);
+}
+
+/* Painel semanal: semana que ainda não começou */
+.traffic-weekly-table td.col-futura {
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+@media (max-width: 640px) {
+  .section-jump-nav {
+    top: 0.25rem;
+    margin-bottom: 1rem;
+  }
+  .jump-link {
+    padding: 0.4rem 0.7rem;
+    font-size: 0.78rem;
+  }
+}
+
 
 

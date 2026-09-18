@@ -283,9 +283,30 @@ const FUNNEL = {
     const isEngajado = !isAuxiliar && ((etapas.engajado || []).includes(sId) || isNoShow || isAvancado);
     const isMql = !isAuxiliar && (hasMqlTag || isEngajado);
 
+    // Telemetria MLFP: Automação vs Atendimento Humano
+    const cfs = lead.custom_fields_values || [];
+    const sdr = cfs.find(f => f.field_id === 491903)?.values?.[0]?.value;
+    const closer = cfs.find(f => f.field_id === 491901)?.values?.[0]?.value;
+    const reuniao = cfs.find(f => f.field_id === 490891)?.values?.[0]?.value;
+
+    // Etapas onde houve atendimento humano confirmado no MLFP:
+    // 102598999: Contato Feito, 109107608: Closer Direto, 102599003: Agendada, 102599203: Realizada, 108291644: No Show, 142: Ganho
+    const STAGES_HUMANO_MLFP = [102598999, 109107608, 102599003, 102599203, 108291644, 142];
+    const isChegouHumano = isMlfpLead
+      ? (STAGES_HUMANO_MLFP.includes(sId) || Boolean(sdr) || Boolean(closer) || Boolean(reuniao) || isWon)
+      : (isEngajado || isAvancado || isWon);
+
+    const isDownsellDireto = isMlfpLead && (sId === 108619300 || isAuxiliar) && !isChegouHumano;
+    const isParouAutomacao = isMlfpLead && !isChegouHumano && !isDownsellDireto && (sId === 108619300 || sId === 143 || (sId === 102598995 && tags.some(t => t.includes('RESPOND') || t.includes('CONVERS'))));
+    const isSemResposta = isMlfpLead && !isChegouHumano && !isDownsellDireto && !isParouAutomacao;
+
     return {
       sale,
       isWon,
+      // Comprou outro produto (downsell do funil ou produto diferente)
+      isVendaDownsell: sale.outraCompra?.tipo === 'downsell',
+      isOutraCompra: sale.outraCompra?.tipo === 'outro',
+      valorOutraCompra: sale.outraCompra?.valor || 0,
       isLost: sId === STATUS_PERDIDO && !isWon,
       isNoShow,
       isAvancado,
@@ -296,11 +317,15 @@ const FUNNEL = {
         || tags.includes('DOWNSELL')
         || (etapas.downsell || []).includes(sId)
         || (hasDesqualificado && !hasMqlTag),
+      isChegouHumano,
+      isDownsellDireto,
+      isParouAutomacao,
+      isSemResposta,
       revenue: isWon ? (sale.price || lead.price || 0) : 0
     };
   },
 
-  // Aplica o filtro de etapa selecionada (clique numa camada da pirâmide)
+  // Aplica o filtro de etapa selecionada (clique numa camada da pirâmide ou card de telemetria)
   matchesStep(lead, stepKey) {
     if (!stepKey || stepKey === 'all') return true;
     const e = FUNNEL.evaluate(lead);
@@ -312,6 +337,10 @@ const FUNNEL = {
       case 'followup': return e.isEmEspera;
       case 'downsell': return e.isDownsell;
       case 'won': return e.isWon;
+      case 'tel_humano': return e.isChegouHumano;
+      case 'tel_automacao': return e.isParouAutomacao;
+      case 'tel_downsell': return e.isDownsellDireto || e.isDownsell;
+      case 'tel_sem_resposta': return e.isSemResposta;
       default: return true;
     }
   }
@@ -321,26 +350,64 @@ const FUNNEL = {
 // Regra de negócio: a venda nasce no funil comercial (MLFP / KO) mas só é
 // validada quando o pagamento cai, o que é representado por um lead no funil
 // "Base de Clientes Eduzz". A tag EDUZZ sozinha marca origem, não pagamento.
+// Produto principal de cada funil. O pagamento de um contato na Base de
+// Clientes só vira "venda ganha" do funil quando é desse produto: antes
+// qualquer compra contava, e 11 dos 17 leads do MLFP marcados como venda da
+// mentoria tinham comprado kit, e-book ou o Kit de Liderança do downsell.
+// Funis sem entrada aqui mantêm a regra antiga (qualquer produto conta).
+const PRODUTO_MENTORIA_MLFP = /MENTORIA|FAIXA PRETA|TURMA AO VIVO|LINK ESPECIAL/i;
+const PRODUTO_PRINCIPAL = {
+  [PIPELINES.MLFP]: PRODUTO_MENTORIA_MLFP,
+  [PIPELINES.MLFP_ANTIGOS]: PRODUTO_MENTORIA_MLFP,
+  14290224: PRODUTO_MENTORIA_MLFP // [MLFP] Score de Liderança
+};
+
+// Produto oferecido aos desqualificados do funil
+const PRODUTO_DOWNSELL_MLFP = /KIT DE LIDERAN|KITCHEN LEADERSHIP/i;
+const PRODUTO_DOWNSELL = {
+  [PIPELINES.MLFP]: PRODUTO_DOWNSELL_MLFP,
+  [PIPELINES.MLFP_ANTIGOS]: PRODUTO_DOWNSELL_MLFP,
+  14290224: PRODUTO_DOWNSELL_MLFP
+};
+
+// KOR: a venda real é a compra do Kit na Base Eduzz. O funil KOR Inbound não
+// registra venda e o pixel perde ~metade (mesma regra de api/index.js)
+const PRODUTO_KOR = /KIT DE OPERA[ÇC][ÃA]O DE RESTAURANTES/i;
+const PRECO_KOR = 97;
+
+// Tags que o webhook da Eduzz grava e que não identificam o produto
+const TAGS_GENERICAS_VENDA = new Set(['EDUZZ', 'OUTROS', 'KOR', 'KOP', 'MLFP', 'KOMANDO', 'EBOOK', 'KOR_COMPRADOR', 'KOR_UPSELL']);
+
+function nomeDoProduto(leadBase) {
+  const tags = (leadBase._embedded?.tags || []).map(t => t.name).filter(n => !TAGS_GENERICAS_VENDA.has(String(n).toUpperCase()));
+  // A Eduzz manda o título com entidades HTML ("Formação &amp; Mentoria");
+  // sem decodificar, o escapeHTML da tela mostraria "&amp;amp;"
+  const nome = tags.join(' + ') || leadBase.name || 'Venda Eduzz';
+  return nome.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+}
+
+// contato → TODAS as compras dele. Antes guardava só a de maior valor, e
+// como os leads criados pelo webhook desde julho estão com price 0, a compra
+// que sobrava era arbitrária.
 function buildContactSalesIndex(allLeads = state.leads) {
   const salesMap = new Map();
   (allLeads || []).forEach(l => {
     if (l.pipeline_id !== PIPELINES.BASE_CLIENTES) return;
 
+    const venda = {
+      saleLeadId: l.id,
+      price: l.price || 0,
+      paidAt: l.created_at || 0,
+      statusId: l.status_id,
+      pipelineId: l.pipeline_id,
+      productName: nomeDoProduto(l),
+      tags: (l._embedded?.tags || []).map(t => t.name)
+    };
+
     (l._embedded?.contacts || []).forEach(c => {
       if (!c.id) return;
-      const existing = salesMap.get(c.id);
-      const currentPrice = l.price || 0;
-      if (!existing || currentPrice > existing.price) {
-        salesMap.set(c.id, {
-          saleLeadId: l.id,
-          price: currentPrice,
-          paidAt: l.created_at || 0,
-          statusId: l.status_id,
-          pipelineId: l.pipeline_id,
-          productName: l.name || 'Venda Eduzz',
-          tags: (l._embedded?.tags || []).map(t => t.name)
-        });
-      }
+      if (!salesMap.has(c.id)) salesMap.set(c.id, []);
+      salesMap.get(c.id).push(venda);
     });
   });
   state.contactSalesIndex = salesMap;
@@ -379,9 +446,15 @@ function getLeadSaleStatus(lead) {
 
   // Cross-reference: pagamento confirmado pelo mesmo contato
   const contacts = lead._embedded?.contacts || [];
-  for (const c of contacts) {
-    if (c.id && state.contactSalesIndex && state.contactSalesIndex.has(c.id)) {
-      const match = state.contactSalesIndex.get(c.id);
+  const compras = contacts.flatMap(c => (c.id && state.contactSalesIndex?.get(c.id)) || []);
+  const maiorValor = lista => lista.reduce((a, b) => (b.price > a.price ? b : a), lista[0]);
+
+  if (compras.length > 0) {
+    const principal = PRODUTO_PRINCIPAL[lead.pipeline_id];
+    const doProdutoDoFunil = principal ? compras.filter(v => principal.test(v.productName)) : compras;
+
+    if (doProdutoDoFunil.length > 0) {
+      const match = maiorValor(doProdutoDoFunil);
       const price = match.price || lead.price || 0;
       return {
         isWon: true,
@@ -396,6 +469,22 @@ function getLeadSaleStatus(lead) {
         source: 'eduzz'
       };
     }
+
+    // Comprou, mas não o produto do funil: não é venda ganha, não avança o
+    // funil e não soma na receita — aparece separado como downsell ou outra compra
+    const downsell = PRODUTO_DOWNSELL[lead.pipeline_id];
+    const comprasDownsell = downsell ? compras.filter(v => downsell.test(v.productName)) : [];
+    const tipo = comprasDownsell.length > 0 ? 'downsell' : 'outro';
+    const compra = maiorValor(tipo === 'downsell' ? comprasDownsell : compras);
+    return {
+      isWon: false,
+      price: 0,
+      outraCompra: { tipo, produto: compra.productName, valor: compra.price || 0, saleLeadId: compra.saleLeadId },
+      badgeLabel: tipo === 'downsell' ? `🎁 Downsell: ${compra.productName}` : `🛒 Outro produto: ${compra.productName}`,
+      badgeClass: 'badge-outra-compra',
+      matchedLeadId: compra.saleLeadId,
+      source: 'eduzz_outro_produto'
+    };
   }
 
   return {
@@ -583,10 +672,11 @@ function setupEventListeners() {
 
   // Abas de funil (dentro da aba CRM).
   // A troca de aba PRINCIPAL (CRM / VTurb / Eduzz / Pages) é responsabilidade
-  // exclusiva de switchMainTab(); aqui só muda o funil selecionado.
-  document.querySelectorAll('.pipeline-tab-btn').forEach(btn => {
+  // exclusiva de switchMainTab(); aqui só muda o funil selecionado dentro do CRM.
+  const crmPipelineTabs = document.querySelectorAll('#crmMainTabContent .pipeline-navigation-tabs .pipeline-tab-btn');
+  crmPipelineTabs.forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.pipeline-tab-btn').forEach(b => b.classList.remove('active'));
+      crmPipelineTabs.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
 
       state.selectedStep = 'all'; // Reset stage selection when changing tabs
@@ -615,6 +705,21 @@ function setupEventListeners() {
       openLeadModal(step);
     });
   });
+
+  // Telemetry MLFP card clicks to open modal
+  const bindTelClick = (cardId, stepKey) => {
+    const card = document.getElementById(cardId);
+    if (card) {
+      card.addEventListener('click', () => {
+        state.selectedStep = stepKey;
+        openLeadModal(stepKey);
+      });
+    }
+  };
+  bindTelClick('cardTelParouAutomacao', 'tel_automacao');
+  bindTelClick('cardTelHumano', 'tel_humano');
+  bindTelClick('cardTelDownsell', 'tel_downsell');
+  bindTelClick('cardTelSemResposta', 'tel_sem_resposta');
 
   // Modal Close & Search Listeners
   const closeBtn = document.getElementById('closeModalBtn');
@@ -840,7 +945,11 @@ function getCustomFieldValue(lead, fieldId) {
 function normalizeVariantKey(raw) {
   if (!raw) return null;
   const s = String(raw).trim().toLowerCase();
-  const match = s.match(/(?:ab[_\s:]*|var(?:ia[çc][ãa]o|iante)?[_\s:]*|v)?([1-6])/i);
+  // Dígito exato de 1 a 6
+  if (/^[1-6]$/.test(s)) return s;
+  // Prefixos explícitos de variante: ab_1, ab1, ab:1, var_1, variacao 1, variante-1, v1
+  // Evita falso positivo com tags como FOLLOW_UP_2, ETAPA_1, etc.
+  const match = s.match(/(?:^|[\s_:-])(?:ab|var(?:ia[çc][ãa]o|iante)?|v)[_\s:-]*([1-6])(?![0-9a-z])/i);
   if (match && match[1]) return match[1];
   return null;
 }
@@ -942,6 +1051,7 @@ function applyFilters() {
   // Calculate funnel step counts on base filtered set
   const baseFiltered = [...filtered];
   updateGraphicFunnel(baseFiltered);
+  renderMlfpTelemetry(baseFiltered);
   renderCampaignRankings(baseFiltered);
 
   // 4. Step Filter (if user clicked on a specific funnel stage layer)
@@ -988,6 +1098,10 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
   let downsellCount = 0;
   let wonCount = 0;
   let wonRevenue = 0;
+  let vendaDownsellCount = 0;
+  let vendaDownsellValor = 0;
+  let outraCompraCount = 0;
+  let outraCompraValor = 0;
 
   baseLeads.forEach(lead => {
     const e = FUNNEL.evaluate(lead);
@@ -995,6 +1109,14 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
     if (e.isWon) {
       wonCount++;
       wonRevenue += e.revenue;
+    }
+    if (e.isVendaDownsell) {
+      vendaDownsellCount++;
+      vendaDownsellValor += e.valorOutraCompra;
+    }
+    if (e.isOutraCompra) {
+      outraCompraCount++;
+      outraCompraValor += e.valorOutraCompra;
     }
     if (e.isMql) mqlCount++;
     if (e.isEngajado) agendadaCount++;
@@ -1008,7 +1130,12 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
   const agendadaRate = mqlCount > 0 ? ((agendadaCount / mqlCount) * 100).toFixed(1) : '0.0';
   const noShowRate = agendadaCount > 0 ? ((noShowCount / agendadaCount) * 100).toFixed(1) : '0.0';
   const realizadaRate = agendadaCount > 0 ? ((realizadaCount / agendadaCount) * 100).toFixed(1) : '0.0';
-  const wonRate = realizadaCount > 0 ? ((wonCount / realizadaCount) * 100).toFixed(1) : '0.0';
+  // Duas taxas diferentes, antes exibidas como uma só:
+  //  - fechamento: passagem avançado → ganho (o indicador de queda da pirâmide)
+  //  - conversão final: ganhos sobre as entradas (o card de vendas, que antes
+  //    mostrava a de fechamento como "conv. final" — daí os 100%)
+  const fechamentoRate = realizadaCount > 0 ? ((wonCount / realizadaCount) * 100).toFixed(1) : '0.0';
+  const wonRate = total > 0 ? ((wonCount / total) * 100).toFixed(1) : '0.0';
 
   const elLeads = document.getElementById('pyramidLeadsCount');
   const elMql = document.getElementById('pyramidMqlCount');
@@ -1061,11 +1188,24 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
 
   if (elDownsell) elDownsell.innerText = downsellCount.toLocaleString('pt-BR');
   if (elDownsellPct) elDownsellPct.innerText = `${((downsellCount / (total || 1)) * 100).toFixed(1)}% desqualificados`;
+
+  // Compras fora do produto principal, separadas da venda da mentoria
+  const valorEntre = v => (v > 0 ? ` · ${formatBRL(v)}` : '');
+  const elDownsellVendas = document.getElementById('pyramidDownsellVendas');
+  if (elDownsellVendas) {
+    elDownsellVendas.textContent = `🎁 ${vendaDownsellCount} ${vendaDownsellCount === 1 ? 'comprou' : 'compraram'} o Kit de Liderança${valorEntre(vendaDownsellValor)}`;
+    elDownsellVendas.hidden = vendaDownsellCount === 0;
+  }
+  const elOutrasCompras = document.getElementById('pyramidOutrasCompras');
+  if (elOutrasCompras) {
+    elOutrasCompras.textContent = `🛒 +${outraCompraCount} ${outraCompraCount === 1 ? 'comprou' : 'compraram'} outro produto (fora da contagem)${valorEntre(outraCompraValor)}`;
+    elOutrasCompras.hidden = outraCompraCount === 0;
+  }
   
   if (elWon) elWon.innerText = wonCount.toLocaleString('pt-BR');
   if (elWonRev) elWonRev.innerText = wonRevenue > 0 
     ? wonRevenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-    : `${wonRate}% conv. final`;
+    : `${wonRate}% das entradas`;
 
   // Funnel pyramid is ALWAYS visible for ALL tabs
   const graphicCard = document.querySelector('.graphic-funnel-card');
@@ -1081,7 +1221,7 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
   if (drop1) drop1.innerText = `${mqlRate}%`;
   if (drop2) drop2.innerText = `${agendadaRate}%`;
   if (drop3) drop3.innerText = `${realizadaRate}%`;
-  if (drop4) drop4.innerText = `${wonRate}%`;
+  if (drop4) drop4.innerText = `${fechamentoRate}%`;
 
   // Texto dos indicadores de queda também acompanha o tipo de funil
   const setDropLabel = (id, texto) => {
@@ -1117,6 +1257,102 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
       misto: 'Visão consolidada de funis com semânticas diferentes — etapas exibidas de forma genérica'
     };
     elSub.innerText = subs[FUNNEL.tipoAtual(state.pipelineId)] || subs.misto;
+  }
+}
+
+// Render Telemetria de Atendimento MLFP (Taxa de Resposta, Automação vs Atendimento Humano)
+function renderMlfpTelemetry(baseLeads = state.filteredLeads) {
+  const section = document.getElementById('mlfpTelemetrySection');
+  if (!section) return;
+
+  // Só no funil MLFP Inbound. Na visão "Todos os Funis" ela abria a página com
+  // números de um único funil (91 entradas) logo acima do funil consolidado
+  // (124), e os dois pareciam contradizer-se.
+  const isMlfpSelected = String(state.pipelineId) === String(PIPELINES.MLFP);
+
+  if (!isMlfpSelected) {
+    section.style.display = 'none';
+    return;
+  }
+
+  // Filtrar estritamente leads MLFP Inbound (desconsiderando repescagem e testes)
+  const mlfpLeads = (baseLeads || []).filter(l => l.pipeline_id === PIPELINES.MLFP && !isRepescagemLead(l) && !isTestLead(l));
+
+  section.style.display = 'block';
+
+  let countHumano = 0;
+  let countAutomacao = 0;
+  let countDownsell = 0;
+  let countSemResp = 0;
+
+  mlfpLeads.forEach(lead => {
+    const e = FUNNEL.evaluate(lead);
+    if (e.isChegouHumano) {
+      countHumano++;
+    } else if (e.isDownsellDireto || (e.isDownsell && !e.isParouAutomacao)) {
+      countDownsell++;
+    } else if (e.isParouAutomacao) {
+      countAutomacao++;
+    } else {
+      countSemResp++;
+    }
+  });
+
+  const total = mlfpLeads.length;
+  const responderam = countHumano + countAutomacao;
+  const abordados = total - countDownsell;
+  const txRespGeral = total > 0 ? ((responderam / total) * 100).toFixed(1) : '0.0';
+  const txRespAbordados = abordados > 0 ? ((responderam / abordados) * 100).toFixed(1) : '0.0';
+  const pctHumano = total > 0 ? ((countHumano / total) * 100).toFixed(1) : '0.0';
+  const pctAutomacao = total > 0 ? ((countAutomacao / total) * 100).toFixed(1) : '0.0';
+  const pctDownsell = total > 0 ? ((countDownsell / total) * 100).toFixed(1) : '0.0';
+  const pctSemResp = total > 0 ? ((countSemResp / total) * 100).toFixed(1) : '0.0';
+  const pctHumanoDasRespostas = responderam > 0 ? ((countHumano / responderam) * 100).toFixed(1) : '0.0';
+  const pctAutoDasRespostas = responderam > 0 ? ((countAutomacao / responderam) * 100).toFixed(1) : '0.0';
+
+  const setTxt = (id, txt) => {
+    const el = document.getElementById(id);
+    if (el) el.innerText = txt;
+  };
+
+  setTxt('telTaxaResp', `${txRespGeral}%`);
+  setTxt('telTaxaRespSub', `${responderam.toLocaleString('pt-BR')} responderam (${txRespAbordados}% dos MQLs abordados)`);
+
+  setTxt('telParouAutomacao', countAutomacao.toLocaleString('pt-BR'));
+  setTxt('telParouAutomacaoSub', `${pctAutomacao}% do total (${pctAutoDasRespostas}% das respostas)`);
+
+  setTxt('telHumano', countHumano.toLocaleString('pt-BR'));
+  setTxt('telHumanoSub', `${pctHumano}% do total (${pctHumanoDasRespostas}% das respostas)`);
+
+  setTxt('telDownsell', countDownsell.toLocaleString('pt-BR'));
+  setTxt('telDownsellSub', `${pctDownsell}% do total (auxiliares / quiz)`);
+
+  setTxt('telSemResposta', countSemResp.toLocaleString('pt-BR'));
+  setTxt('telSemRespostaSub', `${pctSemResp}% silenciosos`);
+
+  // Update progress bars
+  const setBarWidth = (id, pct) => {
+    const el = document.getElementById(id);
+    if (el) el.style.width = `${pct}%`;
+  };
+  setBarWidth('barTelHumano', pctHumano);
+  setBarWidth('barTelAutomacao', pctAutomacao);
+  setBarWidth('barTelSemResp', pctSemResp);
+  setBarWidth('barTelDownsell', pctDownsell);
+
+  setTxt('telConversionFlowSummary', `100% Entrada (${total.toLocaleString('pt-BR')}) ➔ ${txRespGeral}% Resposta (${responderam.toLocaleString('pt-BR')}) ➔ ${pctHumano}% Humano (${countHumano.toLocaleString('pt-BR')})`);
+
+  // Update period badge
+  const periodBadge = document.getElementById('telemetryPeriodBadge');
+  if (periodBadge) {
+    const activePill = document.querySelector('#datePills .pill-btn.active');
+    if (activePill && activePill.getAttribute('data-period') !== 'custom') {
+      periodBadge.innerText = `🗓️ Período: ${activePill.innerText.trim()}`;
+    } else if (state.dateFrom && state.dateTo) {
+      periodBadge.innerText = `🗓️ ${state.dateFrom.toLocaleDateString('pt-BR')} até ${state.dateTo.toLocaleDateString('pt-BR')}`;
+    } else {
+      periodBadge.innerText = '🗓️ Todo o Período';
+    }
   }
 }
 
@@ -1224,7 +1460,9 @@ function openLeadModal(stepKey, filterType = null, filterValue = null) {
 
   let baseLeads = [...state.leads];
 
-  if (state.pipelineId && state.pipelineId !== 'all') {
+  if (stepKey && stepKey.startsWith('tel_')) {
+    baseLeads = baseLeads.filter(lead => lead.pipeline_id === PIPELINES.MLFP && !isRepescagemLead(lead));
+  } else if (state.pipelineId && state.pipelineId !== 'all') {
     const pipeList = String(state.pipelineId).split(',').map(id => parseInt(id.trim())).filter(n => !isNaN(n));
     baseLeads = baseLeads.filter(lead => pipeList.includes(lead.pipeline_id));
   } else {
@@ -1290,7 +1528,11 @@ function openLeadModal(stepKey, filterType = null, filterValue = null) {
     agendada: { title: t.agendada, icon: '📅' },
     noshow: { title: 'No Show (Ausências na Reunião)', icon: '⚠️' },
     realizada: { title: t.realizada, icon: '🤝' },
-    won: { title: '5. Vendas Ganhas', icon: '🏆' }
+    won: { title: '5. Vendas Ganhas', icon: '🏆' },
+    tel_humano: { title: 'Atendimento Humano (SDR / Closer / Reunião)', icon: '👨‍💼' },
+    tel_automacao: { title: 'Pararam na Automação (Conversaram apenas com o Bot)', icon: '🤖' },
+    tel_downsell: { title: 'Downsell Direto (Quiz de Entrada / Desqualificados)', icon: '🔄' },
+    tel_sem_resposta: { title: 'Sem Resposta (Silenciosos após Disparo)', icon: '⏳' }
   };
 
   const info = stepTitles[stepKey] || { title: 'Leads na Etapa', icon: '🔍' };
@@ -1457,9 +1699,12 @@ function renderModalLeadList(leadsToRender) {
     const subtitleName = contactName && lead.name && contactName !== lead.name ? `Lead: ${lead.name} · ID: ${lead.id}` : `ID: ${lead.id}`;
 
     const saleStatus = getLeadSaleStatus(lead);
+    const outra = saleStatus.outraCompra;
     const saleBadgeHTML = saleStatus.isWon
       ? `<span class="badge" style="background:linear-gradient(135deg, #10b981, #059669); color:#ffffff; font-weight:800; padding:0.3rem 0.6rem; border-radius:6px; font-size:0.75rem; box-shadow:0 2px 6px rgba(16,185,129,0.35);">🏆 Venda Eduzz (${formatBRL(saleStatus.price)})</span>`
-      : `<span class="badge" style="background:rgba(59,130,246,0.12); color:#2563eb; font-weight:700; padding:0.25rem 0.55rem; border-radius:6px; font-size:0.75rem;">📥 Lead Capturado</span>`;
+      : outra
+        ? `<span class="badge badge-outra-compra ${outra.tipo === 'downsell' ? 'is-downsell' : 'is-outro'}" title="Comprou outro produto — não conta como venda do funil">${outra.tipo === 'downsell' ? '🎁 Downsell' : '🛒 Outro produto'}: ${escapeHTML(outra.produto)}${outra.valor > 0 ? ` (${formatBRL(outra.valor)})` : ''}</span>`
+        : `<span class="badge" style="background:rgba(59,130,246,0.12); color:#2563eb; font-weight:700; padding:0.25rem 0.55rem; border-radius:6px; font-size:0.75rem;">📥 Lead Capturado</span>`;
 
     const abBadgeHTML = abVariant
       ? `<div style="margin-top:3px;"><span class="badge" style="background:rgba(168,85,247,0.14); color:#9333ea; font-size:0.72rem; font-weight:800; border:1px solid rgba(168,85,247,0.3);">⚡ LP: ${escapeHTML(abVariant)}</span></div>`
@@ -1684,7 +1929,9 @@ async function exportLeadsToCSV(leadsArray, customFilename = null) {
       statusName || '',
       isMql ? 'Sim (MQL)' : 'Não',
       lead.price || 0,
-      saleStatus.isWon ? 'Sim' : 'Não',
+      saleStatus.isWon
+        ? 'Sim'
+        : (saleStatus.outraCompra ? `Não — comprou ${saleStatus.outraCompra.tipo === 'downsell' ? 'downsell' : 'outro produto'}: ${saleStatus.outraCompra.produto}` : 'Não'),
       saleStatus.price || 0,
       dateStr,
       sdrName || '',
@@ -2157,8 +2404,9 @@ function renderTeamPerformance() {
   if (elements.teamCardsContainer) {
     elements.teamCardsContainer.innerHTML = '';
     const teamList = Object.entries(teamStats).map(([id, stats]) => {
-      const closedCount = stats.won + stats.lost;
-      const winRate = closedCount > 0 ? (stats.won / closedCount) * 100 : 0;
+      // Sobre os leads atribuídos. Ganhos ÷ (ganhos + perdidos) virava 100%
+      // sempre que nenhum lead tinha sido marcado como perdido no período.
+      const winRate = stats.leads > 0 ? (stats.won / stats.leads) * 100 : 0;
       return { id, ...stats, winRate };
     }).sort((a, b) => b.revenue - a.revenue);
 
@@ -2182,7 +2430,7 @@ function renderTeamPerformance() {
             <span class="member-stat-val text-success">${member.won.toLocaleString('pt-BR')}</span>
           </div>
           <div class="member-stat-item">
-            <span class="member-stat-label">Taxa Win</span>
+            <span class="member-stat-label">Conversão</span>
             <span class="member-stat-val" style="color: var(--color-primary);">${member.winRate.toFixed(1)}%</span>
           </div>
           <div class="member-stat-item">
@@ -2231,7 +2479,7 @@ function renderTeamPerformance() {
             <td class="text-right">${st.agendadas.toLocaleString('pt-BR')}</td>
             <td class="text-right">${st.realizadas.toLocaleString('pt-BR')}</td>
             <td class="text-right text-success" style="font-weight:800;">${st.won.toLocaleString('pt-BR')}</td>
-            <td class="text-right text-primary" style="font-weight:700;">${convRate}%</td>
+            <td class="text-right text-primary" style="font-weight:700;">${convRate}% <small style="color:var(--text-muted);font-weight:500;">(${st.won}/${st.realizadas})</small></td>
             <td class="text-right text-success" style="font-weight:800;">${revFormatted}</td>
           </tr>
         `;
@@ -2590,8 +2838,14 @@ const PIPELINE_FUNNEL_MAP = {
   13304583: 'mlfp',        // Mentoria MLFP Inbound (Tráfego Pago Oficial)
   14008652: 'repescagem',  // [MLFP] Leads Antigos (Repescagem / Base Antiga - Isolado do Inbound)
   13537971: 'ebook',       // KO Ebooks
-  14104532: 'engajamento'  // Instagram (Social Selling)
+  // Social Selling é prospecção por DM: não é resultado das campanhas de
+  // conteúdo. Mapeado para 'engajamento', seus leads dividiam a verba de
+  // views/perfil e produziam um CPL de R$ 3,99.
+  14104532: 'social_selling'  // Instagram (Social Selling)
 };
+
+// Funis de mídia sem objetivo de lead nem venda
+const FUNIS_SEM_CONVERSAO_META = ['engajamento', 'outros'];
 
 const FUNNEL_DISPLAY = {
   mlfp: { label: 'MLFP Inbound', tagClass: 'tag-mlfp', icon: '🔵' },
@@ -2600,7 +2854,8 @@ const FUNNEL_DISPLAY = {
   kor: { label: 'KOR Inbound', tagClass: 'tag-kor', icon: '🔄' },
   recuperacao: { label: 'Recuperação', tagClass: 'tag-kor', icon: '♻️' },
   ebook: { label: 'Ebook', tagClass: 'tag-ebook', icon: '📚' },
-  engajamento: { label: 'Social Selling', tagClass: 'tag-engajamento', icon: '📲' },
+  engajamento: { label: 'Conteúdo (Views/Perfil)', tagClass: 'tag-engajamento', icon: '🎬' },
+  social_selling: { label: 'Social Selling', tagClass: 'tag-engajamento', icon: '📲' },
   repescagem: { label: 'MLFP Repescagem', tagClass: 'tag-outros', icon: '⏳' },
   outros: { label: 'Outros', tagClass: 'tag-outros', icon: '📦' }
 };
@@ -2723,11 +2978,22 @@ function renderMediaPaga(metaData) {
     }
   }
 
+  // KOR: compradores do Kit na Base Eduzz no período (sem valor no lead, preço do Kit)
+  if (!kommoFunnels.kor) kommoFunnels.kor = { leads: 0, mqls: 0, wonRevenue: 0, wonCount: 0 };
+  for (const lead of dateFiltered) {
+    if (lead.pipeline_id !== PIPELINES.BASE_CLIENTES) continue;
+    if (!(lead._embedded?.tags || []).some(t => PRODUTO_KOR.test(t.name || ''))) continue;
+    kommoFunnels.kor.wonCount++;
+    kommoFunnels.kor.wonRevenue += lead.price > 0 ? lead.price : PRECO_KOR;
+  }
+
   // Build metrics for each funnel
   const funnelOrder = ['mlfp', 'komando', 'kop', 'kor', 'recuperacao', 'ebook', 'engajamento', 'outros'];
   const funnelMetrics = {};
   let totalSpend = 0, totalImpressions = 0, totalClicks = 0;
   let totalKommoLeads = 0, totalMQLs = 0, totalWonRevenue = 0;
+  // Verba dos funis de lead/venda — base de CPL, CPMQL e ROAS consolidados
+  let spendAquisicao = 0;
 
   for (const fKey of funnelOrder) {
     const meta = metaData.funnels[fKey] || { spend: 0, impressions: 0, clicks: 0, ctr: 0, campaigns: [] };
@@ -2738,19 +3004,25 @@ function renderMediaPaga(metaData) {
     const impressions = meta.impressions || 0;
     const clicks = meta.clicks || 0;
     const ctr = meta.ctr || 0;
-    const leads = kommo.leads; // ALWAYS from Kommo
-    const mqls = kommo.mqls;   // ALWAYS from Kommo
+    // Conteúdo e "outros" não geram lead nem venda: sem CPL/ROAS próprios e
+    // fora dos consolidados
+    const semConversao = FUNIS_SEM_CONVERSAO_META.includes(fKey);
+    const leads = semConversao ? null : kommo.leads; // ALWAYS from Kommo
+    const mqls = semConversao ? null : kommo.mqls;   // ALWAYS from Kommo
     const cpl = leads > 0 ? spend / leads : null;
     const cpmql = mqls > 0 ? spend / mqls : null;
-    // ROAS para qualquer funil com investimento: receita confirmada ÷ spend
-    const roas = spend > 0 ? kommo.wonRevenue / spend : null;
+    // ROAS: receita confirmada ÷ spend, só em funil de lead/venda
+    const roas = !semConversao && spend > 0 ? kommo.wonRevenue / spend : null;
 
     totalSpend += spend;
     totalImpressions += impressions;
     totalClicks += clicks;
-    totalKommoLeads += leads;
-    totalMQLs += mqls;
-    totalWonRevenue += kommo.wonRevenue;
+    if (!semConversao) {
+      spendAquisicao += spend;
+      totalKommoLeads += leads;
+      totalMQLs += mqls;
+      totalWonRevenue += kommo.wonRevenue;
+    }
 
     funnelMetrics[fKey] = { fKey, display, spend, impressions, clicks, ctr, leads, mqls, cpl, cpmql, roas, wonRevenue: kommo.wonRevenue, campaigns: meta.campaigns || [] };
   }
@@ -2768,14 +3040,14 @@ function renderMediaPaga(metaData) {
     el('metaCTR').textContent = `CTR: ${totalCTR}% · ${formatNumber(totalImpressions)} imp.`;
 
     el('metaLeadsKommo').textContent = formatNumber(totalKommoLeads);
-    const totalCPL = totalKommoLeads > 0 ? totalSpend / totalKommoLeads : null;
+    const totalCPL = totalKommoLeads > 0 ? spendAquisicao / totalKommoLeads : null;
     el('metaCPL').textContent = totalCPL !== null ? formatBRL(totalCPL) : '—';
 
     el('metaMQLsKommo').textContent = formatNumber(totalMQLs);
-    const totalCPMQL = totalMQLs > 0 ? totalSpend / totalMQLs : null;
+    const totalCPMQL = totalMQLs > 0 ? spendAquisicao / totalMQLs : null;
     el('metaCPMQL').textContent = `CPMQL: ${totalCPMQL !== null ? formatBRL(totalCPMQL) : '—'}`;
 
-    const totalROAS = totalWonRevenue > 0 && totalSpend > 0 ? (totalWonRevenue / totalSpend).toFixed(2) + 'x' : '—';
+    const totalROAS = totalWonRevenue > 0 && spendAquisicao > 0 ? (totalWonRevenue / spendAquisicao).toFixed(2) + 'x' : '—';
     el('metaROAS').textContent = totalROAS;
     el('metaROASSub').textContent = `Receita Kommo: ${formatBRL(totalWonRevenue)}`;
   } else {
@@ -2812,11 +3084,12 @@ function renderMediaPaga(metaData) {
         let html = '';
         for (const fKey of funnelOrder) {
           const row = funnelMetrics[fKey];
-          if (!row || (row.spend === 0 && row.leads === 0)) continue;
+          if (!row || (row.spend === 0 && !row.leads)) continue;
 
+          const motivoSemRoas = FUNIS_SEM_CONVERSAO_META.includes(fKey) ? 'Campanha sem objetivo de lead ou venda' : 'Sem investimento no período';
           const roasCell = row.roas !== null
             ? `<span class="roas-badge ${row.roas >= 1 ? 'roas-positive' : 'roas-negative'}">${row.roas.toFixed(2)}x</span>`
-            : `<span style="color:var(--text-muted)" title="Sem investimento no período">—</span>`;
+            : `<span style="color:var(--text-muted)" title="${motivoSemRoas}">—</span>`;
 
           html += `<tr>
             <td><span class="funnel-tag ${row.display.tagClass}">${row.display.icon} ${row.display.label}</span></td>
@@ -2836,9 +3109,9 @@ function renderMediaPaga(metaData) {
 
       // Update Footer Totals
       const totalCTRFooter = totalImpressions > 0 ? ((totalClicks / totalImpressions) * 100).toFixed(2) + '%' : '—';
-      const totalCPLFooter = totalKommoLeads > 0 ? formatBRL(totalSpend / totalKommoLeads) : '—';
-      const totalCPMQL = totalMQLs > 0 ? formatBRL(totalSpend / totalMQLs) : '—';
-      const totalROAS = totalWonRevenue > 0 && totalSpend > 0 ? (totalWonRevenue / totalSpend).toFixed(2) + 'x' : '—';
+      const totalCPLFooter = totalKommoLeads > 0 ? formatBRL(spendAquisicao / totalKommoLeads) : '—';
+      const totalCPMQL = totalMQLs > 0 ? formatBRL(spendAquisicao / totalMQLs) : '—';
+      const totalROAS = totalWonRevenue > 0 && spendAquisicao > 0 ? (totalWonRevenue / spendAquisicao).toFixed(2) + 'x' : '—';
 
       if (el('metaTotalSpend')) el('metaTotalSpend').textContent = formatBRL(totalSpend);
       if (el('metaTotalImpressions')) el('metaTotalImpressions').textContent = formatNumber(totalImpressions);
@@ -2878,11 +3151,27 @@ function renderMediaPaga(metaData) {
 
     targetCampaigns.sort((a, b) => (b.spend || 0) - (a.spend || 0));
 
+    // Até 10 campanhas por padrão (as de maior investimento); o resto sob demanda
+    const LIMITE_CAMPANHAS = 10;
+    const toggle = document.getElementById('mediaCampaignsToggle');
+    const excede = targetCampaigns.length > LIMITE_CAMPANHAS;
+    const visiveis = excede && !state.mediaCampaignsExpanded ? targetCampaigns.slice(0, LIMITE_CAMPANHAS) : targetCampaigns;
+    if (toggle) {
+      toggle.hidden = !excede;
+      toggle.textContent = state.mediaCampaignsExpanded
+        ? 'Mostrar só as 10 maiores'
+        : `Ver todas as ${targetCampaigns.length} campanhas`;
+      toggle.onclick = () => {
+        state.mediaCampaignsExpanded = !state.mediaCampaignsExpanded;
+        renderMediaPaga(state.metaAdsData);
+      };
+    }
+
     if (targetCampaigns.length === 0) {
       campTbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center py-3">Nenhuma campanha com investimento no período selecionado.</td></tr>';
     } else {
       let cHtml = '';
-      for (const c of targetCampaigns) {
+      for (const c of visiveis) {
         const display = FUNNEL_DISPLAY[c.funnelKey] || FUNNEL_DISPLAY.outros;
         const cpcVal = c.clicks > 0 ? (c.spend / c.clicks) : 0;
 
@@ -3731,9 +4020,46 @@ function saveTrafficGoalsToStorage(monthKey, funnelKey, goals) {
 
 let currentTrafficSalesData = null;
 
+// Destaca no menu de atalhos a seção que está na tela
+function iniciarNavSecoes() {
+  const nav = document.getElementById('sectionJumpNav');
+  if (!nav || !('IntersectionObserver' in window)) return;
+  const links = [...nav.querySelectorAll('.jump-link')];
+  const alvos = links.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+
+  const observer = new IntersectionObserver(entradas => {
+    entradas.forEach(e => {
+      if (!e.isIntersecting) return;
+      links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === `#${e.target.id}`));
+    });
+  }, { rootMargin: '-35% 0px -55% 0px' });
+
+  alvos.forEach(el => observer.observe(el));
+}
+document.addEventListener('DOMContentLoaded', iniciarNavSecoes);
+
+function mesAtualTrafego() {
+  const agora = new Date();
+  return `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// Meses do painel semanal, do corrente até o início da operação (mar/2026).
+// A lista era fixa no HTML e parou em agosto.
+function popularMesesTrafego(select) {
+  const nomes = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+  const agora = new Date();
+  const inicio = new Date(2026, 2, 1);
+  const opcoes = [];
+  for (let d = new Date(agora.getFullYear(), agora.getMonth(), 1); d >= inicio; d.setMonth(d.getMonth() - 1)) {
+    const valor = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    opcoes.push(`<option value="${valor}">${nomes[d.getMonth()]} / ${d.getFullYear()}</option>`);
+  }
+  select.innerHTML = opcoes.join('');
+}
+
 async function loadTrafficSalesDashboard() {
   const monthSelect = document.getElementById('trafficSalesMonthSelect');
-  const month = monthSelect ? monthSelect.value : '2026-08';
+  const month = monthSelect && monthSelect.value ? monthSelect.value : mesAtualTrafego();
   const funnel = activeTrafficFunnel || 'all';
 
   const tbodyWeekly = document.getElementById('trafficWeeklyTableBody');
@@ -3769,21 +4095,35 @@ function renderTrafficWeeklyTable(data) {
   const tbody = document.getElementById('trafficWeeklyTableBody');
   if (!tbody) return;
 
-  const monthKey = data.month || '2026-08';
+  const monthKey = data.month || mesAtualTrafego();
   const funnelKey = data.funnel || activeTrafficFunnel || 'all';
   const goals = getSavedTrafficGoals(monthKey, funnelKey);
   const weeks = data.weeks || [];
   const totals = data.totals || {};
 
+  // Cabeçalho vem da API: a 5ª semana termina em 28, 29, 30 ou 31
+  weeks.forEach((w, i) => {
+    const th = document.getElementById(`weekHead${i + 1}`);
+    if (th && w.name) th.textContent = w.name.replace(/\s*-\s*/g, '-');
+  });
+
+  // Semana futura e custo sem base (sem lead, reunião ou venda) mostram "—":
+  // "R$ 0,00" de CPL numa semana sem leads parece um custo zero real
+  const hoje = formatDateLocal(new Date());
+  const METRICAS_DE_CUSTO = ['cpl', 'cpmql', 'cpa', 'cpr', 'cac', 'ticketMedio', 'roas', 'noShowPct'];
+
   const metricsConfig = [
-    { key: 'investimento', label: 'Investimento', isMoney: true },
+    { key: 'investimento', label: 'Investimento (funis de lead e venda)', isMoney: true },
+    { key: 'investimentoConteudo', label: 'Investimento em Conteúdo (fora de CPL/ROAS)', isMoney: true, soConsolidado: true },
     { key: 'leads', label: 'Leads', isMoney: false },
+    { key: 'mql', label: 'MQL (Leads Qualificados)', isMoney: false },
+    { key: 'cpl', label: 'Custo por Lead (CPL)', isMoney: true },
+    { key: 'cpmql', label: 'Custo por MQL (CPMQL)', isMoney: true },
     { key: 'agendadas', label: 'Reuniões Agendadas', isMoney: false },
     { key: 'comparecidas', label: 'Reuniões Comparecidas', isMoney: false },
     { key: 'vendas', label: 'Número de Novos Clientes / Vendas', isMoney: false, highlight: true },
     { key: 'faturamento', label: 'Valor Total Faturado / Vendas', isMoney: true, highlight: true },
     { key: 'noShow', label: 'No Show Reunião (Qtd)', isMoney: false },
-    { key: 'cpl', label: 'Custo por Lead (CPL)', isMoney: true },
     { key: 'cpa', label: 'Custo por Reunião Agendada (CPA)', isMoney: true },
     { key: 'cpr', label: 'Custo por Reunião Comparecida (CPR)', isMoney: true },
     { key: 'cac', label: 'Custo de Aquisição (CAC)', isMoney: true },
@@ -3792,17 +4132,24 @@ function renderTrafficWeeklyTable(data) {
     { key: 'roas', label: 'Retorno Sobre Investimento (ROAS)', isRatio: true, highlight: true }
   ];
 
-  tbody.innerHTML = metricsConfig.map(m => {
+  tbody.innerHTML = metricsConfig.filter(m => !m.soConsolidado || funnelKey === 'all').map(m => {
     const goalArr = goals[m.key] || [0, 0, 0, 0, 0];
-    const totalGoal = goalArr.reduce((a, b) => a + (parseFloat(b) || 0), 0);
+    const totalGoalSum = goalArr.reduce((a, b) => a + (parseFloat(b) || 0), 0);
+    const nonZeroGoals = goalArr.filter(b => (parseFloat(b) || 0) > 0);
+    // Para métricas unitárias de custo, percentuais e razões (CPL, CAC, Ticket, ROAS), a meta do mês é a média das semanas
+    const isUnitOrRatioMetric = m.isPct || m.isRatio || METRICAS_DE_CUSTO.includes(m.key);
+    const effectiveMonthlyGoal = isUnitOrRatioMetric
+      ? (nonZeroGoals.length > 0 ? (totalGoalSum / nonZeroGoals.length) : (totalGoalSum / 5))
+      : totalGoalSum;
     const totalReal = totals[m.key] || 0;
 
     let pctRealStr = '—';
     let pctClass = '';
-    if (totalGoal > 0) {
-      const pctVal = (totalReal / totalGoal) * 100;
+    const custoSemBase = METRICAS_DE_CUSTO.includes(m.key) && !totalReal;
+    if (effectiveMonthlyGoal > 0 && !custoSemBase) {
+      const pctVal = (totalReal / effectiveMonthlyGoal) * 100;
       pctRealStr = pctVal.toFixed(1) + '%';
-      if (m.key === 'noShow' || m.key === 'noShowPct' || m.key === 'cpl' || m.key === 'cac') {
+      if (m.key === 'noShow' || m.key === 'noShowPct' || m.key === 'cpl' || m.key === 'cpmql' || m.key === 'cpa' || m.key === 'cpr' || m.key === 'cac') {
         pctClass = pctVal <= 100 ? 'pct-good' : 'pct-bad';
       } else {
         pctClass = pctVal >= 90 ? 'pct-good' : (pctVal >= 60 ? 'pct-warn' : 'pct-bad');
@@ -3818,8 +4165,11 @@ function renderTrafficWeeklyTable(data) {
       const wReal = weeks[i] ? weeks[i][m.key] : 0;
       const gVal = goalArr[i] !== undefined ? goalArr[i] : 0;
 
+      const futura = Boolean(weeks[i] && weeks[i].since > hoje);
+      const semBase = METRICAS_DE_CUSTO.includes(m.key) && !wReal;
       let realFormatted = '—';
-      if (m.isMoney) realFormatted = formatMoney(wReal);
+      if (futura || semBase) realFormatted = '—';
+      else if (m.isMoney) realFormatted = formatMoney(wReal);
       else if (m.isPct) realFormatted = (wReal || 0) + '%';
       else if (m.isRatio) realFormatted = (wReal || 0).toFixed(2);
       else realFormatted = (wReal || 0).toLocaleString('pt-BR');
@@ -3828,18 +4178,21 @@ function renderTrafficWeeklyTable(data) {
         <td class="text-center col-meta" style="border-left: 2px solid rgba(203,213,225,0.4);">
           <input type="text" class="editable-meta-input" data-metric="${m.key}" data-week="${i}" value="${gVal}" />
         </td>
-        <td class="text-center col-real">${realFormatted}</td>
+        <td class="text-center col-real${futura ? ' col-futura' : ''}">${realFormatted}</td>
       `;
     }
 
     // Total Month Cells (Meta, Real, % Real)
-    let totalGoalFormatted = m.isMoney ? formatMoney(totalGoal) : totalGoal.toLocaleString('pt-BR');
-    if (m.isPct) totalGoalFormatted = (totalGoal / 5).toFixed(1) + '%';
-    if (m.isRatio) totalGoalFormatted = (totalGoal / 5).toFixed(2);
+    let totalGoalFormatted;
+    if (m.isMoney) totalGoalFormatted = formatMoney(effectiveMonthlyGoal);
+    else if (m.isPct) totalGoalFormatted = effectiveMonthlyGoal.toFixed(1) + '%';
+    else if (m.isRatio) totalGoalFormatted = effectiveMonthlyGoal.toFixed(2);
+    else totalGoalFormatted = totalGoalSum.toLocaleString('pt-BR');
 
     let totalRealFormatted = m.isMoney ? formatMoney(totalReal) : totalReal.toLocaleString('pt-BR');
     if (m.isPct) totalRealFormatted = (totalReal || 0) + '%';
     if (m.isRatio) totalRealFormatted = (totalReal || 0).toFixed(2);
+    if (METRICAS_DE_CUSTO.includes(m.key) && !totalReal) totalRealFormatted = '—';
 
     cellsHtml += `
       <td class="text-center col-meta" style="border-left: 2px solid rgba(15,23,42,0.3); font-weight:700;">${totalGoalFormatted}</td>
@@ -3933,7 +4286,7 @@ function renderAnnualTrafficSalesTable(annual) {
       <td class="text-center" style="font-weight:800; font-size:0.9rem;">${formatMoney(totalInvestido)}</td>
       <td class="text-center" style="font-weight:800; font-size:0.9rem; color:#059669;">${formatMoney(totalFaturado)}</td>
       <td class="text-center" style="font-weight:800; font-size:0.95rem; color:#059669;">${totalRoas.toFixed(2)}x</td>
-      <td class="text-center"><span class="badge" style="background:rgba(16,185,129,0.2); color:#059669; font-weight:800;">${totalRoas >= 1 ? 'Lucro Total' : 'Em Execução'}</span></td>
+      <td class="text-center"><span class="badge" style="background:rgba(16,185,129,0.2); color:#059669; font-weight:800;">${totalRoas >= 1 ? 'ROAS Positivo' : 'Em Execução'}</span></td>
     </tr>
   `;
 
@@ -3955,10 +4308,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Traffic Product Filter Pills
     const trafficProductNav = document.getElementById('trafficProductNav');
     if (trafficProductNav) {
-      trafficProductNav.querySelectorAll('.pipeline-tab-btn').forEach(btn => {
+      trafficProductNav.querySelectorAll('.traffic-funnel-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const funnel = btn.getAttribute('data-traffic-funnel') || 'all';
-          trafficProductNav.querySelectorAll('.pipeline-tab-btn').forEach(b => b.classList.remove('active'));
+          trafficProductNav.querySelectorAll('.traffic-funnel-btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           activeTrafficFunnel = funnel;
           loadTrafficSalesDashboard();
@@ -3968,6 +4321,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const trafficMonthSelect = document.getElementById('trafficSalesMonthSelect');
     if (trafficMonthSelect) {
+      popularMesesTrafego(trafficMonthSelect);
       trafficMonthSelect.addEventListener('change', () => {
         loadTrafficSalesDashboard();
       });
@@ -3977,7 +4331,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnSaveGoals) {
       btnSaveGoals.addEventListener('click', () => {
         const monthSelect = document.getElementById('trafficSalesMonthSelect');
-        const monthKey = monthSelect ? monthSelect.value : '2026-08';
+        const monthKey = monthSelect && monthSelect.value ? monthSelect.value : mesAtualTrafego();
         const funnelKey = activeTrafficFunnel || 'all';
         const goals = getSavedTrafficGoals(monthKey, funnelKey);
 

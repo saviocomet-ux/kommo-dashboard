@@ -1,0 +1,19 @@
+# Lista permitida: tudo na raiz do deploy vira arquivo público no CDN.
+# Sem este arquivo, all_leads.json (dados pessoais dos leads), CLAUDE.md,
+# perform_full_sync.js (JWT do Kommo) e os PDFs de docs/ eram baixáveis
+# por qualquer pessoa com o link.
+/*
+!/api
+!/index.html
+!/app.js
+!/style.css
+!/simulador.html
+!/simulador-sdr.html
+!/package.json
+!/package-lock.json
+!/vercel.json
+
+# Dentro de api/: caches gerados localmente e amostras que a função não usa
+/api/meta_mensal_*.json
+/api/pageviews.json
+/api/leads_sample.json
