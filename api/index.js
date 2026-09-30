@@ -8089,7 +8089,7 @@ app.post('/api/calculadora-lead', async (req, res) => {
       targetPipelineId = 13304583; // [MLFP] Inbound
       targetStatusId = 102598991;  // Opt-In
       newTags.push('LIDER');
-    } else if (tag === 'KMD-QUENTE' || String(faturamento).includes('100') || String(faturamento).includes('200') || String(faturamento).includes('500') || String(faturamento).includes('milhão') || String(faturamento).includes('milhao')) {
+    } else if (tag === 'KMD-QUENTE' || isKomandoQualified(cargo, faturamento) || String(faturamento).includes('100') || String(faturamento).includes('200') || String(faturamento).includes('500') || String(faturamento).includes('milhão') || String(faturamento).includes('milhao')) {
       targetPipelineId = 13304659; // [KO] Inbound
       targetStatusId = 102599759;
       newTags.push('MQL', 'KMD-QUENTE');
@@ -8183,51 +8183,54 @@ ${drenadores_top || 'N/A'}
       }
     }
 
-    // Notificação WhatsApp (Z-API) para Chef Kaká e Telegram para TODO diagnóstico da Calculadora
-    try {
-      const isHighTicket = newTags.includes('KMD-QUENTE') || newTags.includes('MQL');
-      const cleanPhone = phone ? String(phone).replace(/\D/g, '') : '';
-      const fullPhone = cleanPhone ? (cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone) : '';
-      const waLink = fullPhone ? `https://wa.me/${fullPhone}` : 'Sem telefone';
-      const domain = process.env.KOMMO_DOMAIN || 'chefkakagomes.kommo.com';
-      const kommoLeadUrl = updatedLeadId ? `https://${domain}/leads/detail/${updatedLeadId}` : 'Não gerado';
+    // Notificação WhatsApp (Z-API) para Chef Kaká e Telegram SOMENTE se lead for MQL
+    const isMql = newTags.includes('MQL') || newTags.includes('KMD-QUENTE') || isKomandoQualified(cargo, faturamento);
 
-      const header = isHighTicket
-        ? '🔥 *NOVO DIAGNÓSTICO CALCULADORA — POTENCIAL CONSULTORIA!*'
-        : '📊 *NOVO DIAGNÓSTICO CALCULADORA — KØMANDO*';
+    if (isMql) {
+      try {
+        const cleanPhone = phone ? String(phone).replace(/\D/g, '') : '';
+        const fullPhone = cleanPhone ? (cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone) : '';
+        const waLink = fullPhone ? `https://wa.me/${fullPhone}` : 'Sem telefone';
+        const domain = process.env.KOMMO_DOMAIN || 'chefkakagomes.kommo.com';
+        const kommoLeadUrl = updatedLeadId ? `https://${domain}/leads/detail/${updatedLeadId}` : 'Não gerado';
 
-      let msg = `${header}
-      
+        const header = '🔥 *NOVO DIAGNÓSTICO CALCULADORA — MQL QUALIFICADO!*';
+
+        let msg = `${header}
+        
 👤 *Nome:* ${name}
 🏢 *Restaurante:* ${restaurante || 'Não informado'}
 📞 *WhatsApp:* ${phone || 'Não informado'}
 📊 *Faturamento:* ${faturamento || 'Não informado'}
 💼 *Cargo:* ${cargo || 'Não informado'}`;
 
-      if (resultado_pct || resultado_mes) {
-        msg += `\n\n💸 *Lucro Perdido:* ${resultado_pct || 'N/A'}${resultado_mes ? ` (${resultado_mes}/mês)` : ''}`;
-      }
-      if (drenadores_top) {
-        msg += `\n🔍 *Top Drenadores:* ${drenadores_top}`;
-      }
-      if (trava) {
-        msg += `\n⚠️ *Maior Gargalo:* ${trava}`;
-      }
+        if (resultado_pct || resultado_mes) {
+          msg += `\n\n💸 *Lucro Perdido:* ${resultado_pct || 'N/A'}${resultado_mes ? ` (${resultado_mes}/mês)` : ''}`;
+        }
+        if (drenadores_top) {
+          msg += `\n🔍 *Top Drenadores:* ${drenadores_top}`;
+        }
+        if (trava) {
+          msg += `\n⚠️ *Maior Gargalo:* ${trava}`;
+        }
 
-      msg += `\n\n💬 *Chamar no WhatsApp:*\n${waLink}`;
+        msg += `\n\n💬 *Chamar no WhatsApp:*\n${waLink}`;
 
-      if (updatedLeadId) {
-        msg += `\n\n🔗 *Ver no Kommo CRM:*\n${kommoLeadUrl}`;
+        if (updatedLeadId) {
+          msg += `\n\n🔗 *Ver no Kommo CRM:*\n${kommoLeadUrl}`;
+        }
+
+        const kakaPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
+        await sendZapi(kakaPhone, msg);
+        
+        const threadId = process.env.TELEGRAM_THREAD_KO || 2;
+        await sendTelegram(process.env.TELEGRAM_CHAT_ID, msg, undefined, threadId);
+        console.log(`[Calculadora Lead] Notificação MQL enviada para o WhatsApp do Kaká (${kakaPhone}) e Telegram (Thread ${threadId})`);
+      } catch (notifErr) {
+        console.error('[Calculadora Lead] Erro ao enviar notificação:', notifErr.message);
       }
-
-      const kakaPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
-      await sendZapi(kakaPhone, msg);
-      
-      const threadId = process.env.TELEGRAM_THREAD_KO || 2;
-      await sendTelegram(process.env.TELEGRAM_CHAT_ID, msg, undefined, threadId);
-      console.log(`[Calculadora Lead] Notificação enviada para o WhatsApp do Kaká (${kakaPhone}) e Telegram (Thread ${threadId})`);
-    } catch (notifErr) {
-      console.error('[Calculadora Lead] Erro ao enviar notificação:', notifErr.message);
+    } else {
+      console.log(`[Calculadora Lead] Lead ${name} (Cargo: "${cargo}", Faturamento: "${faturamento}") não é MQL. Disparo WhatsApp para Chef Kaká silenciado.`);
     }
 
     res.status(200).json({
