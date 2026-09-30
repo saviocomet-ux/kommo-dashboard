@@ -2325,32 +2325,58 @@ app.post('/api/eduzz-webhook', async (req, res) => {
         console.log('[Webhook] New lead + contact created successfully in Clients Pipeline');
       }
 
-      // Notify new approved sale on Telegram (KOR buyers are silenced per user directive; duplicate deliveries skipped)
+      // Notify new approved sale on WhatsApp (Chef Kaká) and Telegram
       try {
         const pUpper = (productName || '').toUpperCase();
         const isKorSale = pUpper.includes('KOR') || PRODUTO_KOR.test(productName || '') || pUpper.includes('RECUPERAÇÃO') || pUpper.includes('RECUPERACAO');
         const isDuplicateSale = eduzzProcessedSalesCache.has(String(eduzzId));
         eduzzProcessedSalesCache.add(String(eduzzId));
 
-        if (isKorSale) {
-          console.log(`[Eduzz Webhook] Sale is KOR (${productName}). Silencing notification for Chef Kaká per user directive.`);
-        } else if (isDuplicateSale) {
-          console.log(`[Eduzz Webhook] Sale ${eduzzId} already notified on Telegram. Skipping duplicate alert.`);
+        if (isDuplicateSale) {
+          console.log(`[Eduzz Webhook] Sale ${eduzzId} already notified. Skipping duplicate alert.`);
         } else {
-          const saleMessage = `🎉 *Nova Venda Aprovada!*
+          const cleanPhone = phone ? String(phone).replace(/\D/g, '') : '';
+          const fullPhone = cleanPhone ? (cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone) : '';
+          const waLink = fullPhone ? `https://wa.me/${fullPhone}` : 'Não informado';
+          const kakaPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
+
+          if (isKorSale) {
+            const korSaleMsg = `📦 *NOVA VENDA K.O.R APROVADA!*
+            
+👤 *Cliente:* ${name}
+📞 *WhatsApp:* ${phone || 'Não informado'}
+✉️ *E-mail:* ${email || 'Não informado'}
+📦 *Produto:* ${productName}
+💰 *Valor:* R$ ${value.toFixed(2)}
+🔢 *ID Fatura:* ${eduzzId}
+
+💬 *Chamar no WhatsApp:*
+${waLink}`;
+
+            // Envia para o WhatsApp do Chef Kaká via Z-API
+            await sendZapi(kakaPhone, korSaleMsg);
+            // Também envia para o Telegram
+            await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, korSaleMsg);
+            console.log(`[Eduzz Webhook] Notificação de venda KOR enviada para o WhatsApp do Kaká (${kakaPhone}) e Telegram (Fatura ${eduzzId})`);
+          } else {
+            const saleMessage = `🎉 *Nova Venda Aprovada!*
           
 👤 *Cliente:* ${name}
 ✉️ *E-mail:* ${email || 'Não informado'}
 📞 *Telefone:* ${phone || 'Não informado'}
 📦 *Produto:* ${productName}
 💰 *Valor:* R$ ${value.toFixed(2)}
-🔢 *ID Fatura:* ${eduzzId}`;
-          
-          // Send to Telegram (private chat)
-          await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, saleMessage);
+🔢 *ID Fatura:* ${eduzzId}
+
+💬 *Chamar no WhatsApp:*
+${waLink}`;
+            
+            // Send to Telegram (private chat)
+            await sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, saleMessage);
+          }
         }
       } catch (telErr) {
-        console.error('[Eduzz Webhook] Error sending sale notification to Telegram:', telErr);
+        console.error('[Eduzz Webhook] Error sending sale notification:', telErr);
       }
     } else if (isRecoveryEvent) {
       // --- RECOVERY PIPELINE (ABANDONMENTS / ERRORS / PENDING) ---
@@ -3392,6 +3418,8 @@ app.post('/api/lp-webhook', async (req, res) => {
   const utm_medium = getFlexibleValue(payload, ['utm_medium']);
   const utm_campaign = getFlexibleValue(payload, ['utm_campaign']);
   const utm_content = getFlexibleValue(payload, ['utm_content']);
+  const target_status_id = getFlexibleValue(payload, ['target_status_id', 'status_id']);
+  const target_stage = getFlexibleValue(payload, ['target_stage', 'stage']);
   
   if (!email && !phone) {
     console.warn('[LP Webhook] Warning: Form submission without email and phone, ignoring.');
@@ -3404,6 +3432,7 @@ app.post('/api/lp-webhook', async (req, res) => {
     Phone: ${phone}
     Instagram: ${instagram}
     Cargo: ${cargo}
+    Target Status ID: ${target_status_id} (${target_stage || 'n/a'})
   `);
 
   // Sempre ignora leads com nome ou dados de teste
@@ -3427,6 +3456,7 @@ app.post('/api/lp-webhook', async (req, res) => {
     MLFP: {
       ID: 13304583, // [MLFP] Inbound
       STATUS_OPTIN: 102598991, // Opt-In
+      STATUS_AGENDAMENTO: 112074848, // Funil de Agendamento Automatico
       STATUS_DOWNSELL: 108619300 // Downsell
     }
   };
@@ -3460,12 +3490,18 @@ app.post('/api/lp-webhook', async (req, res) => {
 
     let leadId = null;
 
-    // MLFP Qualification Logic: Revenue >= 3k AND Cargo is Chef, Gerente, Dono, Sócio, Líder, etc.
-    // CRITICAL RULE: Auxiliares NÃO entram como MQL mesmo com faturamento acima do recomendado
+    // MLFP Qualification Logic:
+    // Na nova LP da Mentoria (mentoria.chefkakagomes.com / diagnostico-vsl), a regra é:
+    // Renda/Faturamento acima de 3 mil = MQL e avança até a agenda (Funil de Agendamento Automático).
+    // Renda/Faturamento até 3 mil = Downsell.
     const fVal = parseFaturamentoNumber(finalFaturamento);
     const rVal = parseFaturamentoNumber(renda);
     const hasMinRevenue3k = (fVal >= 3000 || rVal >= 3000);
     
+    const isMentoriaVslPage = String(payload.pagina_origem || payload.source_domain || payload.url || payload.event || '').includes('mentoria') ||
+                             String(payload.pagina_origem || payload.source_domain || payload.url || payload.event || '').includes('diagnostico') ||
+                             Boolean(target_status_id);
+
     const cUpper = String(finalCargo || '').toUpperCase();
     const isAuxiliar = cUpper.includes('AUXILIAR') || cUpper.includes('AJUDANTE') || cUpper.includes('BUSCO EVOLUÇÃO') || cUpper.includes('BUSCO EVOLUCAO');
 
@@ -3483,12 +3519,27 @@ app.post('/api/lp-webhook', async (req, res) => {
                              cUpper.includes('LIDER') ||
                              cUpper.includes('PROMOVIDO'));
 
-    const isMql = hasMinRevenue3k && isQualifiedCargo;
+    // Na LP Mentoria: renda > 3k = MQL (diretriz explícita do usuário: leads acima de 3 mil avançam para a agenda)
+    // Para formulários legados sem target_status_id: exige renda > 3k e cargo qualificado
+    const isMql = isMentoriaVslPage ? hasMinRevenue3k : (hasMinRevenue3k && isQualifiedCargo);
     const shouldGoToDownsell = !isMql;
+
+    // Determina o status de destino no pipeline MLFP:
+    let targetStatusId = shouldGoToDownsell ? PIPELINES.MLFP.STATUS_DOWNSELL : PIPELINES.MLFP.STATUS_OPTIN;
+    if (isMql) {
+      if (target_status_id && Number(target_status_id) === PIPELINES.MLFP.STATUS_AGENDAMENTO) {
+        targetStatusId = PIPELINES.MLFP.STATUS_AGENDAMENTO;
+      } else if (isMentoriaVslPage) {
+        targetStatusId = PIPELINES.MLFP.STATUS_AGENDAMENTO;
+      }
+    }
 
     const baseTags = ['LP_MLFP'];
     if (isMql) {
       baseTags.push('OptIn', 'MQL');
+      if (targetStatusId === PIPELINES.MLFP.STATUS_AGENDAMENTO) {
+        baseTags.push('Agendamento_Automatico');
+      }
     } else {
       baseTags.push('Downsell');
     }
@@ -3554,6 +3605,8 @@ app.post('/api/lp-webhook', async (req, res) => {
         };
         if (shouldGoToDownsell) {
           updatePayload.status_id = PIPELINES.MLFP.STATUS_DOWNSELL;
+        } else if (isMql && targetStatusId === PIPELINES.MLFP.STATUS_AGENDAMENTO) {
+          updatePayload.status_id = PIPELINES.MLFP.STATUS_AGENDAMENTO;
         }
         
         await kommoRequest('PATCH', `/api/v4/leads/${leadId}`, updatePayload);
@@ -3564,7 +3617,7 @@ app.post('/api/lp-webhook', async (req, res) => {
         const newLeadPayload = {
           name: `[LP] ${primaryContact.name || name}`,
           pipeline_id: PIPELINES.MLFP.ID,
-          status_id: shouldGoToDownsell ? PIPELINES.MLFP.STATUS_DOWNSELL : PIPELINES.MLFP.STATUS_OPTIN,
+          status_id: targetStatusId,
           custom_fields_values: leadCustomFields.length > 0 ? leadCustomFields : undefined,
           _embedded: {
             tags: baseTags.map(name => ({ name }))
@@ -3589,7 +3642,7 @@ app.post('/api/lp-webhook', async (req, res) => {
       const complexLead = {
         name: `[LP] ${name}`,
         pipeline_id: PIPELINES.MLFP.ID,
-        status_id: shouldGoToDownsell ? PIPELINES.MLFP.STATUS_DOWNSELL : PIPELINES.MLFP.STATUS_OPTIN,
+        status_id: targetStatusId,
         custom_fields_values: leadCustomFields.length > 0 ? leadCustomFields : undefined,
         _embedded: {
           tags: baseTags.map(name => ({ name })),
@@ -3724,17 +3777,13 @@ app.post('/api/kommo-lead-created', async (req, res) => {
       const isKopPipeline = pipelineId === PIPELINES.KOP;
       const isKorPipeline = pipelineId === PIPELINES.KOR;
       
-      // Strict check: Silence any KOR lead, buyer, or recovery lead per user directive
+      // Se for pipeline Komando Inbound ou Ebooks, NUNCA silencia por filtros de KOR
       const currentTagsUpper = (leadDetails._embedded?.tags || []).map(t => (t.name || '').toUpperCase());
       const leadNameUpper = (leadDetails.name || '').toUpperCase();
-      const isKorLeadOrBuyer = isKorPipeline || 
-                               currentTagsUpper.includes('KOR') || 
-                               currentTagsUpper.some(t => t.includes('RESTAURANTE') || t.includes('KIT DE OPERACAO') || t.includes('KIT DE OPERAÇÃO')) ||
-                               leadNameUpper.includes('[KOR]') || 
-                               leadNameUpper.includes('RESTAURANTE');
+      const isKorLead = !isKoPipeline && (isKorPipeline || currentTagsUpper.includes('KOR') || leadNameUpper.startsWith('[KOR]'));
 
-      if (isKorLeadOrBuyer) {
-        console.log(`[Z-API Webhook] Skipping lead ${leadId}: KOR lead/buyer notifications are silenced for Chef Kaká per user directive.`);
+      if (isKorLead) {
+        console.log(`[Z-API Webhook] Skipping lead ${leadId}: Lead da página KOR (notificações de vendas KOR ocorrem via webhook Eduzz).`);
         continue;
       }
       
@@ -3936,33 +3985,44 @@ app.post('/api/kommo-lead-created', async (req, res) => {
       } else if (isMlfpPipeline) {
         const currentTags = leadDetails._embedded?.tags || [];
         const hasDownsellTag = currentTags.some(t => t.name.toLowerCase() === 'downsell');
+        const hasAgendamentoTag = currentTags.some(t => t.name.toLowerCase().includes('agendamento'));
+        const isAgendamentoStage = leadDetails.status_id === 112074848;
 
         const cUpper = String(displayCargo || '').toUpperCase();
         const isAuxiliar = cUpper.includes('AUXILIAR') || cUpper.includes('AJUDANTE') || cUpper.includes('BUSCO EVOLUÇÃO') || cUpper.includes('BUSCO EVOLUCAO');
 
-        if (hasDownsellTag || isAuxiliar) {
-          isQualified = false; // Auxiliares NÃO são MQL mesmo com faturamento alto (vão para Downsell)
-          headerTitle = '📉 *Novo Lead Downsell (Auxiliar) - Mentoria MLFP!*';
+        const revenueAbove3k = isFaturamentoAbove3k(displayFaturamento, '');
+
+        if (isAgendamentoStage || hasAgendamentoTag) {
+          isQualified = true;
+          headerTitle = '📅 *Novo Lead Qualificado (Agendamento Automático) - Mentoria MLFP!*';
+        } else if (hasDownsellTag) {
+          isQualified = false;
+          headerTitle = '📉 *Novo Lead Downsell - Mentoria MLFP!*';
+        } else if (revenueAbove3k) {
+          isQualified = true;
+          headerTitle = '🔥 *Novo Lead Qualificado Recebido - Mentoria MLFP!*';
         } else {
-          isQualified = isFaturamentoAbove3k(displayFaturamento, '');
-          headerTitle = isQualified ? '🔥 *Novo Lead Qualificado Recebido - Mentoria MLFP!*' : '🚀 *Novo Lead - Mentoria MLFP!*';
+          isQualified = false;
+          headerTitle = '🚀 *Novo Lead - Mentoria MLFP!*';
         }
         
         targetPhone = process.env.MLFP_NOTIFICATION_NUMBER || '556194319690'; // Mentoria
         pipelineName = '[MLFP] Inbound';
         
         console.log(`[Z-API Webhook] MLFP Lead ${leadId} qualification check:
-          Billing Check (>= 3k): ${isFaturamentoAbove3k(displayFaturamento, '')} (Faturamento/Renda: "${displayFaturamento}")
+          Billing Check (>= 3k): ${revenueAbove3k} (Faturamento/Renda: "${displayFaturamento}")
           Is Auxiliar: ${isAuxiliar} (Cargo: "${displayCargo}")
           Has Downsell Tag: ${hasDownsellTag}
+          Is Agendamento (Stage/Tag): ${isAgendamentoStage || hasAgendamentoTag}
           Overall Qualified (Send WhatsApp): ${isQualified}
         `);
 
         const isInitialStage = [102598987, 102598991].includes(leadDetails.status_id);
-        const shouldMoveToDownsell = hasDownsellTag || isAuxiliar || (isInitialStage && !isQualified);
+        const shouldMoveToDownsell = !isAgendamentoStage && !hasAgendamentoTag && (hasDownsellTag || (isInitialStage && !isQualified));
 
         if (shouldMoveToDownsell && leadDetails.status_id !== 108619300) {
-          console.log(`[Z-API Webhook] MLFP Lead ${leadId} should go to Downsell (Auxiliar / Não MQL). Moving to Downsell stage (108619300) and updating tags...`);
+          console.log(`[Z-API Webhook] MLFP Lead ${leadId} should go to Downsell (Não MQL). Moving to Downsell stage (108619300) and updating tags...`);
           // Remove MQL tag if present and add Downsell tag
           const updatedTags = currentTags.filter(t => t.name.toUpperCase() !== 'MQL').map(t => ({ name: t.name }));
           if (!updatedTags.some(t => t.name.toLowerCase() === 'downsell')) {
@@ -7935,6 +7995,252 @@ ${kommoLeadUrl}`;
   }
 });
 
+// ============================================================================
+// POST /api/calculadora-lead (Calculadora de Lucro Perdido v2 — Kømando)
+// ============================================================================
+app.options('/api/calculadora-lead', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+
+app.post('/api/calculadora-lead', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  try {
+    const data = req.body || {};
+    console.log('[Calculadora Lead] Payload recebido:', JSON.stringify(data));
+
+    const name = getFlexibleValue(data, ['nome', 'name', 'Nome']) || 'Visitante Calculadora';
+    const rawPhone = getFlexibleValue(data, ['telefone', 'phone', 'whatsapp', 'WhatsApp', 'celular']);
+    const phone = String(rawPhone || '').replace(/[^0-9+]/g, '');
+    const restaurante = getFlexibleValue(data, ['restaurante', 'Restaurante', 'nome_restaurante', 'empresa']) || '';
+    const cargo = getFlexibleValue(data, ['cargo', 'Cargo', 'papel']) || '';
+    const faturamento = getFlexibleValue(data, ['faturamento', 'faixa', 'Faturamento']) || '';
+    const instagram = getFlexibleValue(data, ['instagram', 'Instagram', 'insta']) || '';
+    const trava = getFlexibleValue(data, ['trava', 'Trava', 'gargalo']) || '';
+    const resultado_pct = getFlexibleValue(data, ['resultado_pct', 'pct']) || '';
+    const resultado_mes = getFlexibleValue(data, ['resultado_mes', 'mes']) || '';
+    const resultado_ano = getFlexibleValue(data, ['resultado_ano', 'ano']) || '';
+    const resultado_nivel = getFlexibleValue(data, ['resultado_nivel', 'nivel']) || '';
+    const drenadores_top = getFlexibleValue(data, ['drenadores_top', 'top3']) || '';
+    const tag = getFlexibleValue(data, ['tag', 'Tag']) || 'CALCULADORA-LUCRO';
+
+    const utm_source = getFlexibleValue(data, ['utm_source', 'Source']);
+    const utm_medium = getFlexibleValue(data, ['utm_medium', 'Medium']);
+    const utm_campaign = getFlexibleValue(data, ['utm_campaign', 'Campaign']);
+    const utm_content = getFlexibleValue(data, ['utm_content', 'Content']);
+    const utm_term = getFlexibleValue(data, ['utm_term', 'Term']);
+
+    // 1. Salvar no Google Sheets
+    await saveToGoogleSheets('Calculadora', {
+      nome: name,
+      telefone: phone,
+      restaurante: restaurante,
+      cargo: cargo,
+      faturamento: faturamento,
+      lucro_perdido_pct: resultado_pct,
+      lucro_perdido_mes: resultado_mes,
+      lucro_perdido_ano: resultado_ano,
+      nivel: resultado_nivel,
+      drenadores_top: drenadores_top,
+      instagram: instagram,
+      trava: trava,
+      tag: tag,
+      utm_source: utm_source,
+      utm_medium: utm_medium,
+      utm_campaign: utm_campaign,
+      data_envio: new Date().toISOString()
+    });
+
+    // 2. Busca Contato / Lead existente por telefone
+    let existingContacts = [];
+    if (phone) {
+      const cleanSearchPhone = phone.startsWith('55') && phone.length > 10 ? phone.substring(2) : phone;
+      const contactSearch = await kommoRequest('GET', `/api/v4/contacts?query=${encodeURIComponent(cleanSearchPhone)}&with=leads`);
+      existingContacts = contactSearch?._embedded?.contacts || [];
+    }
+
+    const leadCustomFields = [];
+    if (faturamento) leadCustomFields.push({ field_id: 128886, values: [{ value: String(faturamento) }] });
+    if (cargo) leadCustomFields.push({ field_id: 128884, values: [{ value: String(cargo) }] });
+    if (instagram) leadCustomFields.push({ field_id: 311994, values: [{ value: String(instagram) }] });
+    if (trava) leadCustomFields.push({ field_id: 492037, values: [{ value: String(trava) }] }); // Maior gargalo
+    if (utm_source) leadCustomFields.push({ field_code: 'UTM_SOURCE', values: [{ value: utm_source }] });
+    if (utm_campaign) leadCustomFields.push({ field_code: 'UTM_CAMPAIGN', values: [{ value: utm_campaign }] });
+    if (utm_medium) leadCustomFields.push({ field_code: 'UTM_MEDIUM', values: [{ value: utm_medium }] });
+
+    const newTags = ['CALCULADORA-LUCRO', 'LP_Calculadora'];
+    if (tag) newTags.push(tag);
+
+    // Roteamento de Pipeline:
+    // Dono >= 100k (KMD-QUENTE) -> [KO] Inbound (13304659)
+    // Líder -> [MLFP] Inbound (13304583)
+    // Outros / < 100k -> [KO] Inbound ou [KOR] Inbound
+    let targetPipelineId = 13304659; // Default [KO] Inbound
+    let targetStatusId = 102599759;  // Etapa de leads de entrada
+    const isLider = String(cargo).toLowerCase().includes('líder') || String(cargo).toLowerCase().includes('lider') || String(cargo).toLowerCase().includes('chef') || String(cargo).toLowerCase().includes('gerente');
+    const isDono = String(cargo).toLowerCase().includes('dono') || String(cargo).toLowerCase().includes('sócio') || String(cargo).toLowerCase().includes('socio');
+
+    if (isLider && !isDono) {
+      targetPipelineId = 13304583; // [MLFP] Inbound
+      targetStatusId = 102598991;  // Opt-In
+      newTags.push('LIDER');
+    } else if (tag === 'KMD-QUENTE' || String(faturamento).includes('100') || String(faturamento).includes('200') || String(faturamento).includes('500') || String(faturamento).includes('milhão') || String(faturamento).includes('milhao')) {
+      targetPipelineId = 13304659; // [KO] Inbound
+      targetStatusId = 102599759;
+      newTags.push('MQL', 'KMD-QUENTE');
+    }
+
+    let updatedLeadId = null;
+
+    if (existingContacts.length > 0) {
+      const contact = existingContacts[0];
+      const contactId = contact.id;
+      console.log(`[Calculadora Lead] Contato encontrado no CRM: ID ${contactId}`);
+
+      const linkedLeads = contact._embedded?.leads || [];
+      if (linkedLeads.length > 0) {
+        const targetLeadRef = linkedLeads[linkedLeads.length - 1];
+        const targetLead = await kommoRequest('GET', `/api/v4/leads/${targetLeadRef.id}`);
+
+        if (targetLead) {
+          updatedLeadId = targetLead.id;
+          console.log(`[Calculadora Lead] Atualizando Lead ID ${updatedLeadId} no CRM...`);
+
+          const existingTags = targetLead._embedded?.tags?.map(t => t.name) || [];
+          const combinedTags = Array.from(new Set([...existingTags, ...newTags]));
+
+          await kommoRequest('PATCH', `/api/v4/leads/${updatedLeadId}`, {
+            custom_fields_values: leadCustomFields.length > 0 ? leadCustomFields : undefined,
+            _embedded: {
+              tags: combinedTags.map(tagName => ({ name: tagName }))
+            }
+          });
+        }
+      }
+    }
+
+    if (!updatedLeadId) {
+      console.log('[Calculadora Lead] Criando novo Lead + Contato no Kommo...');
+      const leadTitle = restaurante ? `[CALCULADORA] ${name} — ${restaurante}` : `[CALCULADORA] ${name}`;
+      const newLeadPayload = [
+        {
+          name: leadTitle,
+          pipeline_id: targetPipelineId,
+          status_id: targetStatusId,
+          custom_fields_values: leadCustomFields.length > 0 ? leadCustomFields : undefined,
+          _embedded: {
+            tags: newTags.map(tagName => ({ name: tagName })),
+            contacts: [
+              {
+                name: name,
+                custom_fields_values: [
+                  ...(phone ? [{ field_code: 'PHONE', values: [{ value: String(phone), enum_code: 'MOB' }] }] : [])
+                ]
+              }
+            ]
+          }
+        }
+      ];
+
+      const createRes = await kommoRequest('POST', '/api/v4/leads/complex', newLeadPayload);
+      updatedLeadId = createRes?.[0]?.id || createRes?._embedded?.leads?.[0]?.id;
+    }
+
+    // Adiciona Nota detalhada com o diagnóstico no Lead
+    if (updatedLeadId) {
+      const notaDiag = `📊 DIAGNÓSTICO — CALCULADORA DE LUCRO PERDIDO
+      
+👤 Responsável: ${name}
+🏢 Restaurante: ${restaurante || 'Não informado'}
+💼 Cargo/Papel: ${cargo || 'Não informado'}
+💰 Faturamento: ${faturamento || 'Não informado'}
+
+📉 Lucro Perdido Estimado: até ${resultado_pct || '0%'} (${resultado_nivel || 'N/A'})
+💸 Impacto: ≈ ${resultado_mes || 'R$ 0'}/mês | ${resultado_ano || 'R$ 0'}/ano
+
+🔍 Onde mais vaza:
+${drenadores_top || 'N/A'}
+
+⚠️ O que mais trava a operação: ${trava || 'Não informado'}
+📱 Instagram: @${(instagram || '').replace(/^@+/, '')}
+🏷️ Tag do Diagnóstico: ${tag || 'N/A'}`;
+
+      try {
+        await kommoRequest('POST', `/api/v4/leads/${updatedLeadId}/notes`, [
+          {
+            note_type: 'common',
+            params: { text: notaDiag }
+          }
+        ]);
+        console.log(`[Calculadora Lead] Nota de diagnóstico inserida no lead ${updatedLeadId}`);
+      } catch (noteErr) {
+        console.error('[Calculadora Lead] Erro ao adicionar nota:', noteErr.message);
+      }
+    }
+
+    // Notificação WhatsApp (Z-API) para Chef Kaká e Telegram para TODO diagnóstico da Calculadora
+    try {
+      const isHighTicket = newTags.includes('KMD-QUENTE') || newTags.includes('MQL');
+      const cleanPhone = phone ? String(phone).replace(/\D/g, '') : '';
+      const fullPhone = cleanPhone ? (cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone) : '';
+      const waLink = fullPhone ? `https://wa.me/${fullPhone}` : 'Sem telefone';
+      const domain = process.env.KOMMO_DOMAIN || 'chefkakagomes.kommo.com';
+      const kommoLeadUrl = updatedLeadId ? `https://${domain}/leads/detail/${updatedLeadId}` : 'Não gerado';
+
+      const header = isHighTicket
+        ? '🔥 *NOVO DIAGNÓSTICO CALCULADORA — POTENCIAL CONSULTORIA!*'
+        : '📊 *NOVO DIAGNÓSTICO CALCULADORA — KØMANDO*';
+
+      let msg = `${header}
+      
+👤 *Nome:* ${name}
+🏢 *Restaurante:* ${restaurante || 'Não informado'}
+📞 *WhatsApp:* ${phone || 'Não informado'}
+📊 *Faturamento:* ${faturamento || 'Não informado'}
+💼 *Cargo:* ${cargo || 'Não informado'}`;
+
+      if (resultado_pct || resultado_mes) {
+        msg += `\n\n💸 *Lucro Perdido:* ${resultado_pct || 'N/A'}${resultado_mes ? ` (${resultado_mes}/mês)` : ''}`;
+      }
+      if (drenadores_top) {
+        msg += `\n🔍 *Top Drenadores:* ${drenadores_top}`;
+      }
+      if (trava) {
+        msg += `\n⚠️ *Maior Gargalo:* ${trava}`;
+      }
+
+      msg += `\n\n💬 *Chamar no WhatsApp:*\n${waLink}`;
+
+      if (updatedLeadId) {
+        msg += `\n\n🔗 *Ver no Kommo CRM:*\n${kommoLeadUrl}`;
+      }
+
+      const kakaPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
+      await sendZapi(kakaPhone, msg);
+      
+      const threadId = process.env.TELEGRAM_THREAD_KO || 2;
+      await sendTelegram(process.env.TELEGRAM_CHAT_ID, msg, undefined, threadId);
+      console.log(`[Calculadora Lead] Notificação enviada para o WhatsApp do Kaká (${kakaPhone}) e Telegram (Thread ${threadId})`);
+    } catch (notifErr) {
+      console.error('[Calculadora Lead] Erro ao enviar notificação:', notifErr.message);
+    }
+
+    res.status(200).json({
+      success: true,
+      lead_id: updatedLeadId,
+      message: 'Calculadora lead gravado com sucesso!'
+    });
+  } catch (err) {
+    console.error('[Calculadora Lead Error]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // --- Page Analytics API ---
 
 const PAGEVIEWS_FILE_NAME = 'pageviews.json';
@@ -8068,8 +8374,9 @@ app.post('/api/vagas-candidatura', async (req, res) => {
                   (cand.cidade ? `*Cidade:* ${cand.cidade}\n` : '') +
                   (cand.pontos_obtidos !== undefined ? `*Pontos:* ${cand.pontos_obtidos} / ${cand.pontos_maximos || 0}\n` : '');
       
-      const kakaPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
-      sendZapi(kakaPhone, msg).catch(() => {});
+      // Notificação de candidaturas no WhatsApp do Kaká desativada (mantida apenas no Telegram de erros/logs)
+      // const kakaPhone = process.env.NOTIFICATION_WHATSAPP_NUMBER || '5511995235763';
+      // sendZapi(kakaPhone, msg).catch(() => {});
       sendTelegram(process.env.TELEGRAM_CHAT_ID_ERROR || process.env.TELEGRAM_CHAT_ID, msg).catch(() => {});
     } catch(e) {}
 
