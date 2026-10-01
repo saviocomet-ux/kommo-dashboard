@@ -4886,13 +4886,13 @@ async function getExecutiveMetrics(funnel = 'all', timeframe = 'this_month') {
 
   // Pipelines definition
   const PIPELINES_MAP = {
-    mlfp: [13304583],
+    mlfp: [13304583, 14290224],
     komando: [13304659],
     kop: [14173256],
     kor: [14268556, 13956952],
     ebook: [13537971],
     repescagem: [14008652],
-    all: [13304583, 13304659, 13537971, 14173256, 14268556, 13956952, 13956856]
+    all: [13304583, 13304659, 13537971, 14173256, 14268556, 13956952, 13956856, 14290224]
   };
 
   const fKey = (funnel || 'all').toLowerCase();
@@ -6802,13 +6802,13 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
 
     // Mapeamento de funis e pipelines do Kommo CRM
     const PIPELINE_MAP = {
-      mlfp: [13304583],
+      mlfp: [13304583, 14290224],
       komando: [13304659],
       kop: [14173256],
       kor: [14268556, 13956952],
       ebook: [13537971],
       repescagem: [14008652],
-      all: [13304583, 13304659, 13537971, 14173256, 14268556, 13956952]
+      all: [13304583, 13304659, 13537971, 14173256, 14268556, 13956952, 14290224]
     };
     const activePipelines = PIPELINE_MAP[funnelFilter] || PIPELINE_MAP.all;
 
@@ -8076,22 +8076,16 @@ app.post('/api/calculadora-lead', async (req, res) => {
     const newTags = ['CALCULADORA-LUCRO', 'LP_Calculadora'];
     if (tag) newTags.push(tag);
 
-    // Roteamento de Pipeline:
-    // Dono >= 100k (KMD-QUENTE) -> [KO] Inbound (13304659)
-    // Líder -> [MLFP] Inbound (13304583)
-    // Outros / < 100k -> [KO] Inbound ou [KOR] Inbound
-    let targetPipelineId = 13304659; // Default [KO] Inbound
-    let targetStatusId = 102599759;  // Etapa de leads de entrada
+    // Roteamento de Pipeline: Funil [MLFP] Score de Liderança (14290224)
+    const targetPipelineId = 14290224; // [MLFP] Score de Liderança
+    const targetStatusId = 110358992;  // Etapa de leads de entrada em [MLFP] Score de Liderança
+
     const isLider = String(cargo).toLowerCase().includes('líder') || String(cargo).toLowerCase().includes('lider') || String(cargo).toLowerCase().includes('chef') || String(cargo).toLowerCase().includes('gerente');
     const isDono = String(cargo).toLowerCase().includes('dono') || String(cargo).toLowerCase().includes('sócio') || String(cargo).toLowerCase().includes('socio');
 
     if (isLider && !isDono) {
-      targetPipelineId = 13304583; // [MLFP] Inbound
-      targetStatusId = 102598991;  // Opt-In
       newTags.push('LIDER');
     } else if (tag === 'KMD-QUENTE' || isKomandoQualified(cargo, faturamento) || String(faturamento).includes('100') || String(faturamento).includes('200') || String(faturamento).includes('500') || String(faturamento).includes('milhão') || String(faturamento).includes('milhao')) {
-      targetPipelineId = 13304659; // [KO] Inbound
-      targetStatusId = 102599759;
       newTags.push('MQL', 'KMD-QUENTE');
     }
 
@@ -8104,14 +8098,24 @@ app.post('/api/calculadora-lead', async (req, res) => {
 
       const linkedLeads = contact._embedded?.leads || [];
       if (linkedLeads.length > 0) {
-        const targetLeadRef = linkedLeads[linkedLeads.length - 1];
-        const targetLead = await kommoRequest('GET', `/api/v4/leads/${targetLeadRef.id}`);
+        // Procura se o contato já possui um lead ativo no funil [MLFP] Score de Liderança (14290224)
+        for (const lRef of linkedLeads) {
+          try {
+            const lObj = await kommoRequest('GET', `/api/v4/leads/${lRef.id}`);
+            if (lObj && lObj.pipeline_id === targetPipelineId && lObj.status_id !== 142 && lObj.status_id !== 143) {
+              updatedLeadId = lObj.id;
+              break;
+            }
+          } catch (e) {
+            console.warn(`[Calculadora Lead] Erro ao buscar lead ${lRef.id}:`, e.message);
+          }
+        }
 
-        if (targetLead) {
-          updatedLeadId = targetLead.id;
-          console.log(`[Calculadora Lead] Atualizando Lead ID ${updatedLeadId} no CRM...`);
+        if (updatedLeadId) {
+          console.log(`[Calculadora Lead] Atualizando Lead ID ${updatedLeadId} no funil Score de Liderança...`);
 
-          const existingTags = targetLead._embedded?.tags?.map(t => t.name) || [];
+          const targetLead = await kommoRequest('GET', `/api/v4/leads/${updatedLeadId}`);
+          const existingTags = targetLead?._embedded?.tags?.map(t => t.name) || [];
           const combinedTags = Array.from(new Set([...existingTags, ...newTags]));
 
           await kommoRequest('PATCH', `/api/v4/leads/${updatedLeadId}`, {
@@ -8125,7 +8129,7 @@ app.post('/api/calculadora-lead', async (req, res) => {
     }
 
     if (!updatedLeadId) {
-      console.log('[Calculadora Lead] Criando novo Lead + Contato no Kommo...');
+      console.log('[Calculadora Lead] Criando novo Lead no funil [MLFP] Score de Liderança (14290224)...');
       const leadTitle = restaurante ? `[CALCULADORA] ${name} — ${restaurante}` : `[CALCULADORA] ${name}`;
       const newLeadPayload = [
         {
@@ -8137,10 +8141,12 @@ app.post('/api/calculadora-lead', async (req, res) => {
             tags: newTags.map(tagName => ({ name: tagName })),
             contacts: [
               {
-                name: name,
-                custom_fields_values: [
-                  ...(phone ? [{ field_code: 'PHONE', values: [{ value: String(phone), enum_code: 'MOB' }] }] : [])
-                ]
+                ...(existingContacts[0]?.id ? { id: existingContacts[0].id } : {
+                  name: name,
+                  custom_fields_values: [
+                    ...(phone ? [{ field_code: 'PHONE', values: [{ value: String(phone), enum_code: 'MOB' }] }] : [])
+                  ]
+                })
               }
             ]
           }
