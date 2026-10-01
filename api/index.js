@@ -8078,7 +8078,7 @@ app.post('/api/calculadora-lead', async (req, res) => {
 
     // Roteamento de Pipeline: Funil [MLFP] Score de Liderança (14290224)
     const targetPipelineId = 14290224; // [MLFP] Score de Liderança
-    const targetStatusId = 110358992;  // Etapa de leads de entrada em [MLFP] Score de Liderança
+    const targetStatusId = 110358996;  // Contato inicial em [MLFP] Score de Liderança
 
     const isLider = String(cargo).toLowerCase().includes('líder') || String(cargo).toLowerCase().includes('lider') || String(cargo).toLowerCase().includes('chef') || String(cargo).toLowerCase().includes('gerente');
     const isDono = String(cargo).toLowerCase().includes('dono') || String(cargo).toLowerCase().includes('sócio') || String(cargo).toLowerCase().includes('socio');
@@ -8090,46 +8090,70 @@ app.post('/api/calculadora-lead', async (req, res) => {
     }
 
     let updatedLeadId = null;
+    let contactId = existingContacts[0]?.id || null;
 
     if (existingContacts.length > 0) {
-      const contact = existingContacts[0];
-      const contactId = contact.id;
       console.log(`[Calculadora Lead] Contato encontrado no CRM: ID ${contactId}`);
+      const linkedLeads = existingContacts[0]._embedded?.leads || [];
 
-      const linkedLeads = contact._embedded?.leads || [];
-      if (linkedLeads.length > 0) {
-        // Procura se o contato já possui um lead ativo no funil [MLFP] Score de Liderança (14290224)
-        for (const lRef of linkedLeads) {
-          try {
-            const lObj = await kommoRequest('GET', `/api/v4/leads/${lRef.id}`);
-            if (lObj && lObj.pipeline_id === targetPipelineId && lObj.status_id !== 142 && lObj.status_id !== 143) {
-              updatedLeadId = lObj.id;
-              break;
-            }
-          } catch (e) {
-            console.warn(`[Calculadora Lead] Erro ao buscar lead ${lRef.id}:`, e.message);
+      // Procura se o contato já possui um lead ativo no funil [MLFP] Score de Liderança ou lead da Calculadora
+      for (const lRef of linkedLeads) {
+        try {
+          const lObj = await kommoRequest('GET', `/api/v4/leads/${lRef.id}`);
+          if (!lObj || lObj.status_id === 142 || lObj.status_id === 143) continue;
+
+          const isCalcLead = lObj.pipeline_id === targetPipelineId ||
+                             (lObj.name || '').includes('[CALCULADORA]') ||
+                             (lObj._embedded?.tags || []).some(t => (t.name || '').toUpperCase().includes('CALCULADORA'));
+
+          if (isCalcLead) {
+            updatedLeadId = lObj.id;
+            break;
           }
+        } catch (e) {
+          console.warn(`[Calculadora Lead] Erro ao buscar lead ${lRef.id}:`, e.message);
         }
+      }
 
-        if (updatedLeadId) {
-          console.log(`[Calculadora Lead] Atualizando Lead ID ${updatedLeadId} no funil Score de Liderança...`);
+      if (updatedLeadId) {
+        console.log(`[Calculadora Lead] Atualizando Lead ID ${updatedLeadId} no funil Score de Liderança...`);
 
-          const targetLead = await kommoRequest('GET', `/api/v4/leads/${updatedLeadId}`);
-          const existingTags = targetLead?._embedded?.tags?.map(t => t.name) || [];
-          const combinedTags = Array.from(new Set([...existingTags, ...newTags]));
+        const targetLead = await kommoRequest('GET', `/api/v4/leads/${updatedLeadId}`);
+        const existingTags = targetLead?._embedded?.tags?.map(t => t.name) || [];
+        const combinedTags = Array.from(new Set([...existingTags, ...newTags]));
 
-          await kommoRequest('PATCH', `/api/v4/leads/${updatedLeadId}`, {
-            custom_fields_values: leadCustomFields.length > 0 ? leadCustomFields : undefined,
-            _embedded: {
-              tags: combinedTags.map(tagName => ({ name: tagName }))
-            }
-          });
-        }
+        await kommoRequest('PATCH', `/api/v4/leads/${updatedLeadId}`, {
+          pipeline_id: targetPipelineId,
+          status_id: targetStatusId,
+          custom_fields_values: leadCustomFields.length > 0 ? leadCustomFields : undefined,
+          _embedded: {
+            tags: combinedTags.map(tagName => ({ name: tagName }))
+          }
+        });
       }
     }
 
     if (!updatedLeadId) {
       console.log('[Calculadora Lead] Criando novo Lead no funil [MLFP] Score de Liderança (14290224)...');
+
+      // Se contato ainda não existe, cria o contato primeiro
+      if (!contactId && phone) {
+        try {
+          const newContactRes = await kommoRequest('POST', '/api/v4/contacts', [
+            {
+              name: name,
+              custom_fields_values: [
+                { field_code: 'PHONE', values: [{ value: String(phone), enum_code: 'MOB' }] }
+              ]
+            }
+          ]);
+          contactId = newContactRes?.[0]?.id || newContactRes?._embedded?.contacts?.[0]?.id;
+          console.log(`[Calculadora Lead] Novo contato criado: ID ${contactId}`);
+        } catch (cErr) {
+          console.warn('[Calculadora Lead] Erro ao criar contato:', cErr.message);
+        }
+      }
+
       const leadTitle = restaurante ? `[CALCULADORA] ${name} — ${restaurante}` : `[CALCULADORA] ${name}`;
       const newLeadPayload = [
         {
@@ -8138,23 +8162,41 @@ app.post('/api/calculadora-lead', async (req, res) => {
           status_id: targetStatusId,
           custom_fields_values: leadCustomFields.length > 0 ? leadCustomFields : undefined,
           _embedded: {
-            tags: newTags.map(tagName => ({ name: tagName })),
-            contacts: [
-              {
-                ...(existingContacts[0]?.id ? { id: existingContacts[0].id } : {
-                  name: name,
-                  custom_fields_values: [
-                    ...(phone ? [{ field_code: 'PHONE', values: [{ value: String(phone), enum_code: 'MOB' }] }] : [])
-                  ]
-                })
-              }
-            ]
+            tags: newTags.map(tagName => ({ name: tagName }))
           }
         }
       ];
 
-      const createRes = await kommoRequest('POST', '/api/v4/leads/complex', newLeadPayload);
+      // Usar POST /api/v4/leads direto (pois /leads/complex reseta para o funil principal da conta)
+      const createRes = await kommoRequest('POST', '/api/v4/leads', newLeadPayload);
       updatedLeadId = createRes?.[0]?.id || createRes?._embedded?.leads?.[0]?.id;
+
+      // Vincula contato ao lead recém-criado
+      if (updatedLeadId && contactId) {
+        try {
+          await kommoRequest('POST', `/api/v4/leads/${updatedLeadId}/link`, [
+            {
+              to_entity_id: contactId,
+              to_entity_type: 'contacts'
+            }
+          ]);
+          console.log(`[Calculadora Lead] Contato ${contactId} vinculado ao Lead ${updatedLeadId}`);
+        } catch (linkErr) {
+          console.warn('[Calculadora Lead] Erro ao vincular contato ao lead:', linkErr.message);
+        }
+      }
+
+      // Verificação de segurança: garante que pipeline_id está fixado em Score de Liderança
+      if (updatedLeadId) {
+        try {
+          await kommoRequest('PATCH', `/api/v4/leads/${updatedLeadId}`, {
+            pipeline_id: targetPipelineId,
+            status_id: targetStatusId
+          });
+        } catch (secErr) {
+          console.warn('[Calculadora Lead] Aviso no patch de segurança de pipeline:', secErr.message);
+        }
+      }
     }
 
     // Adiciona Nota detalhada com o diagnóstico no Lead
