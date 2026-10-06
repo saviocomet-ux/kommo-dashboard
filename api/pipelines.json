@@ -1,5 +1,5 @@
 {
-  "_total_items": 8,
+  "_total_items": 11,
   "_links": {
     "self": {
       "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines"
@@ -24,7 +24,7 @@
           "statuses": [
             {
               "id": 102598987,
-              "name": "Incoming leads",
+              "name": "Etapa de leads de entrada",
               "sort": 10,
               "is_editable": false,
               "pipeline_id": 13304583,
@@ -53,9 +53,24 @@
               }
             },
             {
+              "id": 112074848,
+              "name": "Funil de Agendamento Automatico",
+              "sort": 30,
+              "is_editable": true,
+              "pipeline_id": 13304583,
+              "color": "#ff8f92",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/13304583/statuses/112074848"
+                }
+              }
+            },
+            {
               "id": 102598995,
               "name": "Tentando Contato",
-              "sort": 30,
+              "sort": 40,
               "is_editable": true,
               "pipeline_id": 13304583,
               "color": "#87f2c0",
@@ -70,7 +85,7 @@
             {
               "id": 102598999,
               "name": "Contato Feito",
-              "sort": 40,
+              "sort": 50,
               "is_editable": true,
               "pipeline_id": 13304583,
               "color": "#ffcc66",
@@ -85,7 +100,7 @@
             {
               "id": 109107608,
               "name": "Closer Direto",
-              "sort": 50,
+              "sort": 60,
               "is_editable": true,
               "pipeline_id": 13304583,
               "color": "#fff000",
@@ -100,7 +115,7 @@
             {
               "id": 102599003,
               "name": "Reunião Agendada",
-              "sort": 60,
+              "sort": 70,
               "is_editable": true,
               "pipeline_id": 13304583,
               "color": "#ffcccc",
@@ -115,7 +130,7 @@
             {
               "id": 102599203,
               "name": "Reunião Realizada",
-              "sort": 70,
+              "sort": 80,
               "is_editable": true,
               "pipeline_id": 13304583,
               "color": "#f9deff",
@@ -130,7 +145,7 @@
             {
               "id": 108066768,
               "name": "Follow Up 1",
-              "sort": 80,
+              "sort": 90,
               "is_editable": true,
               "pipeline_id": 13304583,
               "color": "#ff8f92",
@@ -145,7 +160,7 @@
             {
               "id": 109108180,
               "name": "Follow UP 2",
-              "sort": 90,
+              "sort": 100,
               "is_editable": true,
               "pipeline_id": 13304583,
               "color": "#ff8f92",
@@ -160,7 +175,7 @@
             {
               "id": 108291644,
               "name": "No Show",
-              "sort": 100,
+              "sort": 110,
               "is_editable": true,
               "pipeline_id": 13304583,
               "color": "#fffeb2",
@@ -175,7 +190,7 @@
             {
               "id": 108619300,
               "name": "Downsell",
-              "sort": 110,
+              "sort": 120,
               "is_editable": true,
               "pipeline_id": 13304583,
               "color": "#fffeb2",
@@ -237,7 +252,7 @@
           "statuses": [
             {
               "id": 102599759,
-              "name": "Incoming leads",
+              "name": "Etapa de leads de entrada",
               "sort": 10,
               "is_editable": false,
               "pipeline_id": 13304659,
@@ -375,7 +390,7 @@
           "statuses": [
             {
               "id": 104452411,
-              "name": "Incoming leads",
+              "name": "Etapa de leads de entrada",
               "sort": 10,
               "is_editable": false,
               "pipeline_id": 13537971,
@@ -528,7 +543,7 @@
           "statuses": [
             {
               "id": 108121856,
-              "name": "Incoming leads",
+              "name": "Etapa de leads de entrada",
               "sort": 10,
               "is_editable": false,
               "pipeline_id": 14008652,
@@ -544,7 +559,7 @@
             {
               "id": 108123248,
               "name": "Tentando Contato",
-              "sort": 10,
+              "sort": 20,
               "is_editable": true,
               "pipeline_id": 14008652,
               "color": "#f9deff",
@@ -558,8 +573,8 @@
             },
             {
               "id": 108121868,
-              "name": "Contato Feito",
-              "sort": 20,
+              "name": "Contatos Dia - Jac",
+              "sort": 30,
               "is_editable": true,
               "pipeline_id": 14008652,
               "color": "#ffcc66",
@@ -572,9 +587,24 @@
               }
             },
             {
+              "id": 110155540,
+              "name": "Respondidos",
+              "sort": 40,
+              "is_editable": true,
+              "pipeline_id": 14008652,
+              "color": "#f9deff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14008652/statuses/110155540"
+                }
+              }
+            },
+            {
               "id": 108123252,
               "name": "Reunião Agendada",
-              "sort": 30,
+              "sort": 50,
               "is_editable": true,
               "pipeline_id": 14008652,
               "color": "#deff81",
@@ -589,7 +619,7 @@
             {
               "id": 108123256,
               "name": "Reunião Realizada",
-              "sort": 40,
+              "sort": 60,
               "is_editable": true,
               "pipeline_id": 14008652,
               "color": "#87f2c0",
@@ -604,7 +634,7 @@
             {
               "id": 108123260,
               "name": "Negociação",
-              "sort": 50,
+              "sort": 70,
               "is_editable": true,
               "pipeline_id": 14008652,
               "color": "#ff8f92",
@@ -613,6 +643,21 @@
               "_links": {
                 "self": {
                   "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14008652/statuses/108123260"
+                }
+              }
+            },
+            {
+              "id": 110341428,
+              "name": "No show",
+              "sort": 80,
+              "is_editable": true,
+              "pipeline_id": 14008652,
+              "color": "#f9deff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14008652/statuses/110341428"
                 }
               }
             },
@@ -666,7 +711,7 @@
           "statuses": [
             {
               "id": 107711716,
-              "name": "Incoming leads",
+              "name": "Etapa de leads de entrada",
               "sort": 10,
               "is_editable": false,
               "pipeline_id": 13956856,
@@ -774,7 +819,7 @@
           "statuses": [
             {
               "id": 107712460,
-              "name": "Incoming leads",
+              "name": "Etapa de leads de entrada",
               "sort": 10,
               "is_editable": false,
               "pipeline_id": 13956952,
@@ -912,7 +957,7 @@
           "statuses": [
             {
               "id": 108876920,
-              "name": "Incoming leads",
+              "name": "Etapa de leads de entrada",
               "sort": 10,
               "is_editable": false,
               "pipeline_id": 14104532,
@@ -928,7 +973,7 @@
             {
               "id": 108876924,
               "name": "Comentários",
-              "sort": 20,
+              "sort": 10,
               "is_editable": true,
               "pipeline_id": 14104532,
               "color": "#99ccff",
@@ -943,7 +988,7 @@
             {
               "id": 108876928,
               "name": "Direct",
-              "sort": 30,
+              "sort": 20,
               "is_editable": true,
               "pipeline_id": 14104532,
               "color": "#ffff99",
@@ -956,9 +1001,129 @@
               }
             },
             {
+              "id": 110934096,
+              "name": "Empresário",
+              "sort": 30,
+              "is_editable": true,
+              "pipeline_id": 14104532,
+              "color": "#87f2c0",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14104532/statuses/110934096"
+                }
+              }
+            },
+            {
+              "id": 110934100,
+              "name": "Chef de cozinha",
+              "sort": 40,
+              "is_editable": true,
+              "pipeline_id": 14104532,
+              "color": "#99ccff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14104532/statuses/110934100"
+                }
+              }
+            },
+            {
+              "id": 110934412,
+              "name": "cozinheiro",
+              "sort": 50,
+              "is_editable": true,
+              "pipeline_id": 14104532,
+              "color": "#99ccff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14104532/statuses/110934412"
+                }
+              }
+            },
+            {
+              "id": 111424816,
+              "name": "Primeiro Contato",
+              "sort": 60,
+              "is_editable": true,
+              "pipeline_id": 14104532,
+              "color": "#99ccff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14104532/statuses/111424816"
+                }
+              }
+            },
+            {
+              "id": 111424820,
+              "name": "Segundo Contato",
+              "sort": 70,
+              "is_editable": true,
+              "pipeline_id": 14104532,
+              "color": "#99ccff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14104532/statuses/111424820"
+                }
+              }
+            },
+            {
+              "id": 111424824,
+              "name": "Terceiro Contato",
+              "sort": 80,
+              "is_editable": true,
+              "pipeline_id": 14104532,
+              "color": "#99ccff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14104532/statuses/111424824"
+                }
+              }
+            },
+            {
+              "id": 111424828,
+              "name": "Reunião Agendada",
+              "sort": 90,
+              "is_editable": true,
+              "pipeline_id": 14104532,
+              "color": "#99ccff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14104532/statuses/111424828"
+                }
+              }
+            },
+            {
+              "id": 111424832,
+              "name": "Reunião Realizada",
+              "sort": 100,
+              "is_editable": true,
+              "pipeline_id": 14104532,
+              "color": "#99ccff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14104532/statuses/111424832"
+                }
+              }
+            },
+            {
               "id": 108876932,
               "name": "Negociação",
-              "sort": 40,
+              "sort": 110,
               "is_editable": true,
               "pipeline_id": 14104532,
               "color": "#ffcc66",
@@ -1020,7 +1185,7 @@
           "statuses": [
             {
               "id": 109421444,
-              "name": "Incoming leads",
+              "name": "Etapa de leads de entrada",
               "sort": 10,
               "is_editable": false,
               "pipeline_id": 14173256,
@@ -1105,6 +1270,345 @@
               "_links": {
                 "self": {
                   "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14173256/statuses/143"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 14268556,
+        "name": "[KOR] Inbound",
+        "sort": 9,
+        "is_main": false,
+        "is_unsorted_on": true,
+        "is_archive": false,
+        "account_id": 36183063,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14268556"
+          }
+        },
+        "_embedded": {
+          "statuses": [
+            {
+              "id": 110184128,
+              "name": "Etapa de leads de entrada",
+              "sort": 10,
+              "is_editable": false,
+              "pipeline_id": 14268556,
+              "color": "#c1c1c1",
+              "type": 1,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14268556/statuses/110184128"
+                }
+              }
+            },
+            {
+              "id": 110184132,
+              "name": "Contato inicial",
+              "sort": 20,
+              "is_editable": true,
+              "pipeline_id": 14268556,
+              "color": "#99ccff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14268556/statuses/110184132"
+                }
+              }
+            },
+            {
+              "id": 110184136,
+              "name": "Oferta feita",
+              "sort": 30,
+              "is_editable": true,
+              "pipeline_id": 14268556,
+              "color": "#ffff99",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14268556/statuses/110184136"
+                }
+              }
+            },
+            {
+              "id": 110184140,
+              "name": "Negociação",
+              "sort": 40,
+              "is_editable": true,
+              "pipeline_id": 14268556,
+              "color": "#ffcc66",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14268556/statuses/110184140"
+                }
+              }
+            },
+            {
+              "id": 142,
+              "name": "Venda ganha",
+              "sort": 10000,
+              "is_editable": false,
+              "pipeline_id": 14268556,
+              "color": "#CCFF66",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14268556/statuses/142"
+                }
+              }
+            },
+            {
+              "id": 143,
+              "name": "Venda perdida",
+              "sort": 11000,
+              "is_editable": false,
+              "pipeline_id": 14268556,
+              "color": "#D5D8DB",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14268556/statuses/143"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 14290224,
+        "name": "[MLFP] Score de Liderança",
+        "sort": 10,
+        "is_main": false,
+        "is_unsorted_on": true,
+        "is_archive": false,
+        "account_id": 36183063,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14290224"
+          }
+        },
+        "_embedded": {
+          "statuses": [
+            {
+              "id": 110358992,
+              "name": "Etapa de leads de entrada",
+              "sort": 10,
+              "is_editable": false,
+              "pipeline_id": 14290224,
+              "color": "#c1c1c1",
+              "type": 1,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14290224/statuses/110358992"
+                }
+              }
+            },
+            {
+              "id": 110358996,
+              "name": "Contato inicial",
+              "sort": 20,
+              "is_editable": true,
+              "pipeline_id": 14290224,
+              "color": "#99ccff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14290224/statuses/110358996"
+                }
+              }
+            },
+            {
+              "id": 110359000,
+              "name": "Oferta feita",
+              "sort": 30,
+              "is_editable": true,
+              "pipeline_id": 14290224,
+              "color": "#ffff99",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14290224/statuses/110359000"
+                }
+              }
+            },
+            {
+              "id": 110359004,
+              "name": "Negociação",
+              "sort": 40,
+              "is_editable": true,
+              "pipeline_id": 14290224,
+              "color": "#ffcc66",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14290224/statuses/110359004"
+                }
+              }
+            },
+            {
+              "id": 142,
+              "name": "Venda ganha",
+              "sort": 10000,
+              "is_editable": false,
+              "pipeline_id": 14290224,
+              "color": "#CCFF66",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14290224/statuses/142"
+                }
+              }
+            },
+            {
+              "id": 143,
+              "name": "Venda perdida",
+              "sort": 11000,
+              "is_editable": false,
+              "pipeline_id": 14290224,
+              "color": "#D5D8DB",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14290224/statuses/143"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": 14474620,
+        "name": "CS- Suporte",
+        "sort": 11,
+        "is_main": false,
+        "is_unsorted_on": true,
+        "is_archive": false,
+        "account_id": 36183063,
+        "_links": {
+          "self": {
+            "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14474620"
+          }
+        },
+        "_embedded": {
+          "statuses": [
+            {
+              "id": 111801888,
+              "name": "Etapa de leads de entrada",
+              "sort": 10,
+              "is_editable": false,
+              "pipeline_id": 14474620,
+              "color": "#c1c1c1",
+              "type": 1,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14474620/statuses/111801888"
+                }
+              }
+            },
+            {
+              "id": 111801988,
+              "name": "Cliente",
+              "sort": 20,
+              "is_editable": true,
+              "pipeline_id": 14474620,
+              "color": "#f9deff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14474620/statuses/111801988"
+                }
+              }
+            },
+            {
+              "id": 111801892,
+              "name": "Onboarding",
+              "sort": 30,
+              "is_editable": true,
+              "pipeline_id": 14474620,
+              "color": "#99ccff",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14474620/statuses/111801892"
+                }
+              }
+            },
+            {
+              "id": 111801896,
+              "name": "Dúvidas",
+              "sort": 40,
+              "is_editable": true,
+              "pipeline_id": 14474620,
+              "color": "#ffff99",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14474620/statuses/111801896"
+                }
+              }
+            },
+            {
+              "id": 111801900,
+              "name": "Upsell",
+              "sort": 50,
+              "is_editable": true,
+              "pipeline_id": 14474620,
+              "color": "#ffcc66",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14474620/statuses/111801900"
+                }
+              }
+            },
+            {
+              "id": 142,
+              "name": "Venda ganha",
+              "sort": 10000,
+              "is_editable": false,
+              "pipeline_id": 14474620,
+              "color": "#CCFF66",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14474620/statuses/142"
+                }
+              }
+            },
+            {
+              "id": 143,
+              "name": "Venda perdida",
+              "sort": 11000,
+              "is_editable": false,
+              "pipeline_id": 14474620,
+              "color": "#D5D8DB",
+              "type": 0,
+              "account_id": 36183063,
+              "_links": {
+                "self": {
+                  "href": "https://chefkakagomes.kommo.com/api/v4/leads/pipelines/14474620/statuses/143"
                 }
               }
             }

@@ -1,0 +1,230 @@
+[
+  {
+    "campaign_name": "01 - [VENDA] [AUTO] [EBOOK PAGO] [COLD] [PPTO] - LP1 - Teste de Criativos",
+    "spend": 0,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "02 - [LEAD] [AUTO] [MLFP] [ADV] [PPTO] - LP3 - Teste de Criativos",
+    "spend": 838.48,
+    "compras": 1,
+    "valor": 97
+  },
+  {
+    "campaign_name": "13 - [LEAD] [AUTO] [KOMANDO] [HOT] [PPTO] - Type - Criativos novos",
+    "spend": 427.15,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "01 - [VENDA] [AUTO] [KOP] [ADV] [PPTO] - LP1 - Teste de Criativos",
+    "spend": 1152.52,
+    "compras": 4,
+    "valor": 350.5
+  },
+  {
+    "campaign_name": "01 - [A] Post do Instagram: Existe um ponto que todo chef,...",
+    "spend": 284.97,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "02 - [A] Post do Instagram: Vida na gastronomia no Brasil…...",
+    "spend": 107.19,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "03 - [A] Post do Instagram: Todo dia, todo dia…...",
+    "spend": 105.56,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "04 - [A] Post do Instagram: As vezes a semana fica meio...",
+    "spend": 106.45,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "05 - [A] Post do Instagram: A saúde mental de vcs está em...",
+    "spend": 105.12,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "01 - [VIEWS] [IG] [CP] - Vídeo 01 - TOPO",
+    "spend": 510.49,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "02 - [VIEWS] [IG] [CP] - Vídeo 02 - TOPO",
+    "spend": 510.94,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "03 - [VIEWS] [IG] [CP] - Vídeo 03 - TOPO",
+    "spend": 510.59,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "04 - [VIEWS] [IG] [CP] - Vídeo 04 - TOPO",
+    "spend": 512.97,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "05 - [VIEWS] [IG] [CP] - Vídeo 05 - MEIO",
+    "spend": 499.12,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "06 - [VIEWS] [IG] [CP] - Vídeo 06 - MEIO",
+    "spend": 496.59,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "07 - [VIEWS] [IG] [CP] - Vídeo 07 - MEIO",
+    "spend": 495.74,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "08 - [VIEWS] [IG] [CP] - Vídeo 08 - MEIO",
+    "spend": 500.32,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "01 - [VENDA] [AUTO] [KOR] [ADV] [PPTO] - LP1 - Teste de Criativos",
+    "spend": 2522.92,
+    "compras": 20,
+    "valor": 1940
+  },
+  {
+    "campaign_name": "09 - [VIEWS] [IG] [CP] - Vídeo 09 - FUNDO",
+    "spend": 129.5,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "10 - [VIEWS] [IG] [CP] - Vídeo 10 - FUNDO",
+    "spend": 482.04,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "11 - [VIEWS] [IG] [CP] - Vídeo 11 - FUNDO",
+    "spend": 467.5,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "12 - [VIEWS] [IG] [CP] - Vídeo 12 - FUNDO",
+    "spend": 479.28,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "03 - [LEAD] [AUTO] [MLFP] [ADV] [PPTO] - LP3 - Teste de Criativos",
+    "spend": 339.91,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "13 - [VIEWS] [IG] [CP] - Vídeo 13 - FUNDO",
+    "spend": 352.33,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "06 - [A] - Post do Instagram: Eles sentem TUDO.",
+    "spend": 70.79,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "07 - [A] - Post do Instagram: No fim das contas, pouco...",
+    "spend": 181.55,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "08 - [A] - Post do Instagram: A saber: o compromisso da...",
+    "spend": 70.44,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "09 - [A] - Post do Instagram: Não tem como ser triste e...",
+    "spend": 70.09,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "02 - [VENDA] [AUTO] [KOR] [ADV] [PPTO] - LP2 - Teste de Criativos",
+    "spend": 1121.97,
+    "compras": 8,
+    "valor": 776
+  },
+  {
+    "campaign_name": "15 - [LEAD] [AUTO] [KOMANDO] [COLD] [PPTO] - Vturb - Teste de Criativos",
+    "spend": 2277.93,
+    "compras": 1,
+    "valor": 97
+  },
+  {
+    "campaign_name": "16 - [LEAD] [AUTO] [KOMANDO] [ADV] [PPTO] - Vturb - Teste de Criativos",
+    "spend": 614.57,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "10 - [A] - Post do Instagram: “Quero viver, quero finais de...",
+    "spend": 74.86,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "11 - [A] - Post do Instagram: Welcome to the jungle,...",
+    "spend": 2.61,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "12 - [A] - Post do Instagram: Cada erro, cada atraso, cada...",
+    "spend": 76.22,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "17 - [LEAD] [AUTO] [KOMANDO] [HOT] [PPTO] - Vturb - Teste de Criativos",
+    "spend": 304.88,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "18 - [LEAD] [AUTO] [KOMANDO] [HOT] [PPTO] - [LP4] - Teste de Criativos",
+    "spend": 740.92,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "19 - [LEAD] [AUTO] [KOMANDO] [COLD] [PPTO] - [LP4] - Teste de Criativos",
+    "spend": 708.76,
+    "compras": 0,
+    "valor": 0
+  },
+  {
+    "campaign_name": "14 - [VIEWS] [IG] [CP] - Vídeo 14 - FUNDO",
+    "spend": 7.63,
+    "compras": 0,
+    "valor": 0
+  }
+]

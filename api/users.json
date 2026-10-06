@@ -1,5 +1,5 @@
 {
-  "_total_items": 3,
+  "_total_items": 2,
   "_page": 1,
   "_page_count": 1,
   "_links": {
@@ -123,72 +123,11 @@
                 "edit": "A",
                 "delete": "A"
               }
-            }
-          ],
-          "catalog_rights": [
-            {
-              "catalog_id": 4344,
-              "rights": {
-                "add": "A",
-                "edit": "A",
-                "view": "A",
-                "delete": "A",
-                "export": "A"
-              }
-            }
-          ],
-          "custom_fields_rights": null,
-          "is_admin": true,
-          "is_free": false,
-          "is_active": true,
-          "group_id": 0,
-          "role_id": null
-        },
-        "_links": {
-          "self": {
-            "href": "https://chefkakagomes.kommo.com/api/v4/users/14927391/?page=1&limit=250"
-          }
-        }
-      },
-      {
-        "id": 15291188,
-        "name": "Simone",
-        "email": "assessora.simone@gmail.com",
-        "lang": "pt",
-        "rights": {
-          "leads": {
-            "view": "A",
-            "edit": "A",
-            "add": "A",
-            "delete": "A",
-            "export": "A"
-          },
-          "contacts": {
-            "view": "A",
-            "edit": "A",
-            "add": "A",
-            "delete": "A",
-            "export": "A"
-          },
-          "companies": {
-            "view": "A",
-            "edit": "A",
-            "add": "A",
-            "delete": "A",
-            "export": "A"
-          },
-          "tasks": {
-            "edit": "A",
-            "delete": "A"
-          },
-          "mail_access": true,
-          "catalog_access": true,
-          "files_access": true,
-          "status_rights": [
+            },
             {
               "entity_type": "leads",
-              "pipeline_id": 13304583,
-              "status_id": 102598987,
+              "pipeline_id": 14268556,
+              "status_id": 110184128,
               "rights": {
                 "view": "A",
                 "edit": "A",
@@ -197,8 +136,8 @@
             },
             {
               "entity_type": "leads",
-              "pipeline_id": 13304659,
-              "status_id": 102599759,
+              "pipeline_id": 14290224,
+              "status_id": 110358992,
               "rights": {
                 "view": "A",
                 "edit": "A",
@@ -207,58 +146,8 @@
             },
             {
               "entity_type": "leads",
-              "pipeline_id": 13537971,
-              "status_id": 104452411,
-              "rights": {
-                "view": "A",
-                "edit": "A",
-                "delete": "A"
-              }
-            },
-            {
-              "entity_type": "leads",
-              "pipeline_id": 13956856,
-              "status_id": 107711716,
-              "rights": {
-                "view": "A",
-                "edit": "A",
-                "delete": "A"
-              }
-            },
-            {
-              "entity_type": "leads",
-              "pipeline_id": 13956952,
-              "status_id": 107712460,
-              "rights": {
-                "view": "A",
-                "edit": "A",
-                "delete": "A"
-              }
-            },
-            {
-              "entity_type": "leads",
-              "pipeline_id": 14008652,
-              "status_id": 108121856,
-              "rights": {
-                "view": "A",
-                "edit": "A",
-                "delete": "A"
-              }
-            },
-            {
-              "entity_type": "leads",
-              "pipeline_id": 14104532,
-              "status_id": 108876920,
-              "rights": {
-                "view": "A",
-                "edit": "A",
-                "delete": "A"
-              }
-            },
-            {
-              "entity_type": "leads",
-              "pipeline_id": 14173256,
-              "status_id": 109421444,
+              "pipeline_id": 14474620,
+              "status_id": 111801888,
               "rights": {
                 "view": "A",
                 "edit": "A",
@@ -287,7 +176,7 @@
         },
         "_links": {
           "self": {
-            "href": "https://chefkakagomes.kommo.com/api/v4/users/15291188/?page=1&limit=250"
+            "href": "https://chefkakagomes.kommo.com/api/v4/users/14927391/?page=1&limit=250"
           }
         }
       },
@@ -338,12 +227,42 @@
             },
             {
               "entity_type": "leads",
-              "pipeline_id": 13304659,
-              "status_id": 102599759,
+              "pipeline_id": 14173256,
+              "status_id": 109421444,
               "rights": {
                 "view": "A",
                 "edit": "A",
                 "delete": "A"
+              }
+            },
+            {
+              "entity_type": "leads",
+              "pipeline_id": 14268556,
+              "status_id": 110184128,
+              "rights": {
+                "view": "A",
+                "edit": "A",
+                "delete": "A"
+              }
+            },
+            {
+              "entity_type": "leads",
+              "pipeline_id": 14290224,
+              "status_id": 110358992,
+              "rights": {
+                "view": "A",
+                "edit": "A",
+                "delete": "A"
+              }
+            },
+            {
+              "entity_type": "leads",
+              "pipeline_id": 13304659,
+              "status_id": 102599759,
+              "rights": {
+                "view": "D",
+                "edit": "D",
+                "delete": "D"
               }
             },
             {
@@ -398,8 +317,8 @@
             },
             {
               "entity_type": "leads",
-              "pipeline_id": 14173256,
-              "status_id": 109421444,
+              "pipeline_id": 14474620,
+              "status_id": 111801888,
               "rights": {
                 "view": "D",
                 "edit": "D",
@@ -422,7 +341,7 @@
           "custom_fields_rights": null,
           "is_admin": false,
           "is_free": false,
-          "is_active": false,
+          "is_active": true,
           "group_id": 0,
           "role_id": null
         },

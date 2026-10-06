@@ -1,0 +1,24 @@
+[
+  {
+    "id": "usr_admin_komando",
+    "email": "admin@consultoriakomando.com.br",
+    "password_hash": "9487407a5b10196b672b6258ac0cdf90f172e9f84f6884d5414987e870d5425b",
+    "role": "admin",
+    "nome": "Admin KØMANDO",
+    "restaurante": "KØMANDO Central",
+    "status": "active",
+    "created_at": "2026-09-10T12:00:00.000Z"
+  },
+  {
+    "id": "usr_rest_bistro",
+    "email": "lebistro@restaurante.com",
+    "password_hash": "770f8be37e63dfa207d7ae01218b745ba424a4a741b9d7cdf9433529ce86c263",
+    "role": "restaurante",
+    "nome": "Le Bistrô Gastronomia",
+    "restaurante": "Le Bistrô",
+    "cidade": "Jardins, São Paulo - SP",
+    "telefone": "(11) 99999-8888",
+    "status": "active",
+    "created_at": "2026-09-10T12:00:00.000Z"
+  }
+]

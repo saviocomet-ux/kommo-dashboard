@@ -1,0 +1,106 @@
+{
+  "_leia_me": "Specs de segmentacao validados contra a API do Meta em ago/2026, conta act_322391662838622. O endpoint POST /saved_audiences esta bloqueado para o app 1569672838149143 (erro #3), entao estes publicos precisam ser montados a mao no Gerenciador de Anuncios ou via um app com a capability liberada. Os alcances abaixo foram estimados pelo proprio Meta, ja com as exclusoes aplicadas.",
+
+  "publicos": [
+    {
+      "name": "[KO] Decisor Food Service",
+      "descricao": "Admin de pagina de Comida OU cargo de dono, cruzado com interesse em food service. Publico principal de captacao Komando.",
+      "alcance_estimado": "309.100 a 363.600",
+      "montagem_manual": "Segmentacao detalhada: adicionar o comportamento 'Administradores de paginas da categoria Comida e restauracao' e os cargos Owner, Owner and Founder e Socio Proprietario. Clicar em 'Limitar publico' e adicionar os interesses Food Service e Restaurantes. Em 'Excluir pessoas', adicionar os cargos Bartender, Recepcionista e ATENDENTE{CAIXA}.",
+      "targeting": {
+        "geo_locations": { "countries": ["BR"] },
+        "age_min": 25,
+        "age_max": 65,
+        "flexible_spec": [
+          {
+            "behaviors": [
+              { "id": "6020530269183", "name": "Administradores de páginas da categoria Comida e restauração" }
+            ],
+            "work_positions": [
+              { "id": "110722838955052", "name": "Owner" },
+              { "id": "138050029568986", "name": "Owner and Founder" },
+              { "id": "144066855611031", "name": "Sócio Proprietário" }
+            ]
+          },
+          {
+            "interests": [
+              { "id": "6003779936052", "name": "Food Service" },
+              { "id": "6003436950375", "name": "Restaurantes" }
+            ]
+          }
+        ],
+        "exclusions": {
+          "work_positions": [
+            { "id": "104109846291117", "name": "Bartender" },
+            { "id": "113034578833678", "name": "Recepcionista" },
+            { "id": "274474899268919", "name": "ATENDENTE{CAIXA}" }
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "[KO] Dono de Restaurante — Núcleo",
+      "descricao": "Admin de pagina da categoria Comida e restauracao cruzado com food service. O recorte mais puro, referencia de qualidade.",
+      "alcance_estimado": "166.300 a 195.700",
+      "montagem_manual": "Segmentacao detalhada: apenas o comportamento 'Administradores de paginas da categoria Comida e restauracao'. Clicar em 'Limitar publico' e adicionar os interesses Food Service e Restaurantes. Mesmas exclusoes de cargo.",
+      "targeting": {
+        "geo_locations": { "countries": ["BR"] },
+        "age_min": 25,
+        "age_max": 65,
+        "flexible_spec": [
+          {
+            "behaviors": [
+              { "id": "6020530269183", "name": "Administradores de páginas da categoria Comida e restauração" }
+            ]
+          },
+          {
+            "interests": [
+              { "id": "6003779936052", "name": "Food Service" },
+              { "id": "6003436950375", "name": "Restaurantes" }
+            ]
+          }
+        ],
+        "exclusions": {
+          "work_positions": [
+            { "id": "104109846291117", "name": "Bartender" },
+            { "id": "113034578833678", "name": "Recepcionista" },
+            { "id": "274474899268919", "name": "ATENDENTE{CAIXA}" }
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "[KO] Negócio Novo — Food Service",
+      "descricao": "Negocio aberto ha menos de 12 meses cruzado com food service. Angulo de consultoria para operacao recem-aberta.",
+      "alcance_estimado": "454.200 a 534.400",
+      "montagem_manual": "Segmentacao detalhada: apenas o comportamento 'Novo negocio ativo (< 12 meses)'. Clicar em 'Limitar publico' e adicionar os interesses Food Service e Restaurantes. Mesmas exclusoes de cargo.",
+      "targeting": {
+        "geo_locations": { "countries": ["BR"] },
+        "age_min": 25,
+        "age_max": 65,
+        "flexible_spec": [
+          {
+            "behaviors": [
+              { "id": "6273196847983", "name": "Novo negócio ativo (< 12 meses)" }
+            ]
+          },
+          {
+            "interests": [
+              { "id": "6003779936052", "name": "Food Service" },
+              { "id": "6003436950375", "name": "Restaurantes" }
+            ]
+          }
+        ],
+        "exclusions": {
+          "work_positions": [
+            { "id": "104109846291117", "name": "Bartender" },
+            { "id": "113034578833678", "name": "Recepcionista" },
+            { "id": "274474899268919", "name": "ATENDENTE{CAIXA}" }
+          ]
+        }
+      }
+    }
+  ]
+}
