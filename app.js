@@ -193,41 +193,41 @@ const ETAPAS_VAZIAS = { tipo: 'negociacao', espera: [], engajado: [], noshow: []
 // Rótulos da pirâmide por tipo de funil — o mesmo número com o nome certo
 const ROTULOS_FUNIL = {
   reuniao: {
-    espera: '⏳ Follow Up (Sem Resposta 1ºs Contatos)',
-    engajado: '📅 3. Reuniões Agendadas (Total SDR)',
-    avancado: '🤝 4. Reuniões Realizadas (Show-Up)',
-    dropEngajado: '🔻 SDR ➔ Agendamento:',
-    dropAvancado: '🔻 Presença / Show-Up Closer:',
+    espera: 'Follow Up (Sem Resposta 1ºs Contatos)',
+    engajado: '3. Reuniões Agendadas (Total SDR)',
+    avancado: '4. Reuniões Realizadas (Show-Up)',
+    dropEngajado: 'SDR → Agendamento:',
+    dropAvancado: 'Presença / Show-Up Closer:',
     subEngajado: 'dos MQLs',
     subAvancado: 'show-up',
     mostrarNoShow: true
   },
   negociacao: {
-    espera: '⏳ Aguardando Retorno',
-    engajado: '💬 3. Contato Iniciado',
-    avancado: '🤝 4. Em Negociação / Oferta Feita',
-    dropEngajado: '🔻 Qualificado ➔ Contato:',
-    dropAvancado: '🔻 Contato ➔ Negociação:',
+    espera: 'Aguardando Retorno',
+    engajado: '3. Contato Iniciado',
+    avancado: '4. Em Negociação / Oferta Feita',
+    dropEngajado: 'Qualificado → Contato:',
+    dropAvancado: 'Contato → Negociação:',
     subEngajado: 'dos MQLs',
     subAvancado: 'avançaram',
     mostrarNoShow: false
   },
   recuperacao: {
-    espera: '🧾 Pagamento Pendente (Boleto / Pix / Carrinho)',
-    engajado: '💬 3. Contato Iniciado',
-    avancado: '🤝 4. Em Negociação',
-    dropEngajado: '🔻 Pendente ➔ Contato:',
-    dropAvancado: '🔻 Contato ➔ Negociação:',
+    espera: 'Pagamento Pendente (Boleto / Pix / Carrinho)',
+    engajado: '3. Contato Iniciado',
+    avancado: '4. Em Negociação',
+    dropEngajado: 'Pendente → Contato:',
+    dropAvancado: 'Contato → Negociação:',
     subEngajado: 'dos leads',
     subAvancado: 'avançaram',
     mostrarNoShow: false
   },
   misto: {
-    espera: '⏳ Aguardando Retorno / Follow Up',
-    engajado: '💬 3. Contato Ativo (Reunião ou Negociação Iniciada)',
-    avancado: '🤝 4. Estágio Avançado (Reunião Feita ou Negociação)',
-    dropEngajado: '🔻 MQL ➔ Contato Ativo:',
-    dropAvancado: '🔻 Contato ➔ Estágio Avançado:',
+    espera: 'Aguardando Retorno / Follow Up',
+    engajado: '3. Contato Ativo (Reunião ou Negociação Iniciada)',
+    avancado: '4. Estágio Avançado (Reunião Feita ou Negociação)',
+    dropEngajado: 'MQL → Contato Ativo:',
+    dropAvancado: 'Contato → Estágio Avançado:',
     subEngajado: 'dos MQLs',
     subAvancado: 'avançaram',
     mostrarNoShow: true
@@ -420,7 +420,7 @@ function buildContactSalesIndex(allLeads = state.leads) {
 // Ganha = fechada no próprio funil (status 142) OU pagamento confirmado
 // na Base de Clientes Eduzz pelo mesmo contato.
 function getLeadSaleStatus(lead) {
-  if (!lead) return { isWon: false, price: 0, badgeLabel: '📥 Lead Capturado', badgeClass: 'badge-optin' };
+  if (!lead) return { isWon: false, price: 0, badgeLabel: 'Lead Capturado', badgeClass: 'badge-optin' };
 
   // O próprio registro de pagamento não é um lead de funil comercial:
   // ele é a validação, e é contabilizado através do lead de origem.
@@ -428,7 +428,7 @@ function getLeadSaleStatus(lead) {
     return {
       isWon: true,
       price: lead.price || 0,
-      badgeLabel: `🏆 Pagamento Confirmado (${formatBRL(lead.price || 0)})`,
+      badgeLabel: `Pagamento Confirmado (${formatBRL(lead.price || 0)})`,
       badgeClass: 'badge-won-eduzz',
       matchedLeadId: lead.id,
       source: 'base_clientes'
@@ -439,7 +439,7 @@ function getLeadSaleStatus(lead) {
     return {
       isWon: true,
       price: lead.price || 0,
-      badgeLabel: `🏆 Venda Ganha (${formatBRL(lead.price || 0)})`,
+      badgeLabel: `Venda Ganha (${formatBRL(lead.price || 0)})`,
       badgeClass: 'badge-won-eduzz',
       matchedLeadId: lead.id,
       source: 'crm'
@@ -461,7 +461,7 @@ function getLeadSaleStatus(lead) {
       return {
         isWon: true,
         price,
-        badgeLabel: `🏆 Venda Eduzz (${formatBRL(price)})`,
+        badgeLabel: `Venda Eduzz (${formatBRL(price)})`,
         badgeClass: 'badge-won-eduzz',
         matchedLeadId: match.saleLeadId,
         productName: match.productName,
@@ -482,7 +482,7 @@ function getLeadSaleStatus(lead) {
       isWon: false,
       price: 0,
       outraCompra: { tipo, produto: compra.productName, valor: compra.price || 0, saleLeadId: compra.saleLeadId },
-      badgeLabel: tipo === 'downsell' ? `🎁 Downsell: ${compra.productName}` : `🛒 Outro produto: ${compra.productName}`,
+      badgeLabel: tipo === 'downsell' ? `Downsell: ${compra.productName}` : `Outro produto: ${compra.productName}`,
       badgeClass: 'badge-outra-compra',
       matchedLeadId: compra.saleLeadId,
       source: 'eduzz_outro_produto'
@@ -492,7 +492,7 @@ function getLeadSaleStatus(lead) {
   return {
     isWon: false,
     price: 0,
-    badgeLabel: '📥 Lead Capturado (Página)',
+    badgeLabel: 'Lead Capturado (Página)',
     badgeClass: 'badge-captured-lead',
     matchedLeadId: null
   };
@@ -834,7 +834,7 @@ async function loadData() {
     applyFilters();
   } catch (error) {
     console.error('Error loading dashboard data:', error);
-    showToast('❌ Erro ao carregar dados do servidor local.', 'danger');
+    showToast('Erro ao carregar dados do servidor local.', 'danger');
   }
 }
 
@@ -1181,12 +1181,12 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
   const valorEntre = v => (v > 0 ? ` · ${formatBRL(v)}` : '');
   const elDownsellVendas = document.getElementById('pyramidDownsellVendas');
   if (elDownsellVendas) {
-    elDownsellVendas.textContent = `🎁 ${vendaDownsellCount} ${vendaDownsellCount === 1 ? 'comprou' : 'compraram'} o Kit de Liderança${valorEntre(vendaDownsellValor)}`;
+    elDownsellVendas.textContent = `${vendaDownsellCount} ${vendaDownsellCount === 1 ? 'comprou' : 'compraram'} o Kit de Liderança${valorEntre(vendaDownsellValor)}`;
     elDownsellVendas.hidden = vendaDownsellCount === 0;
   }
   const elOutrasCompras = document.getElementById('pyramidOutrasCompras');
   if (elOutrasCompras) {
-    elOutrasCompras.textContent = `🛒 +${outraCompraCount} ${outraCompraCount === 1 ? 'comprou' : 'compraram'} outro produto (fora da contagem)${valorEntre(outraCompraValor)}`;
+    elOutrasCompras.textContent = `+${outraCompraCount} ${outraCompraCount === 1 ? 'comprou' : 'compraram'} outro produto (fora da contagem)${valorEntre(outraCompraValor)}`;
     elOutrasCompras.hidden = outraCompraCount === 0;
   }
   
@@ -1239,9 +1239,9 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
   const elSub = document.getElementById('currentFunnelSub');
   if (elSub) {
     const subs = {
-      reuniao: 'Fluxo: Captura ➔ Follow Up ➔ MQL / Downsell ➔ Agendamento ➔ (No Show) ➔ Reunião ➔ Fechamento',
-      negociacao: 'Fluxo: Captura ➔ MQL ➔ Contato Iniciado ➔ Negociação / Oferta ➔ Fechamento (funil sem reunião)',
-      recuperacao: 'Fluxo: Pagamento Pendente (Boleto / Pix / Carrinho) ➔ Contato ➔ Negociação ➔ Venda Recuperada',
+      reuniao: 'Fluxo: Captura → Follow Up → MQL / Downsell → Agendamento → (No Show) → Reunião → Fechamento',
+      negociacao: 'Fluxo: Captura → MQL → Contato Iniciado → Negociação / Oferta → Fechamento (funil sem reunião)',
+      recuperacao: 'Fluxo: Pagamento Pendente (Boleto / Pix / Carrinho) → Contato → Negociação → Venda Recuperada',
       misto: 'Visão consolidada de funis com semânticas diferentes — etapas exibidas de forma genérica'
     };
     elSub.innerText = subs[FUNNEL.tipoAtual(state.pipelineId)] || subs.misto;
@@ -1414,21 +1414,21 @@ function openLeadModal(stepKey, filterType = null, filterValue = null) {
   const t = porTipo[tipo] || porTipo.misto;
 
   const stepTitles = {
-    all: { title: '1. Entradas na Base (Todos os Leads)', icon: '📥' },
-    followup: { title: t.followup, icon: '⏳' },
-    mql: { title: '2. Qualificados (MQL)', icon: '🔥' },
-    downsell: { title: 'Downsell (Leads Desqualificados)', icon: '🔄' },
-    agendada: { title: t.agendada, icon: '📅' },
-    noshow: { title: 'No Show (Ausências na Reunião)', icon: '⚠️' },
-    realizada: { title: t.realizada, icon: '🤝' },
-    won: { title: '5. Vendas Ganhas', icon: '🏆' },
-    tel_humano: { title: 'Atendimento Humano (SDR / Closer / Reunião)', icon: '👨‍💼' },
-    tel_automacao: { title: 'Pararam na Automação (Conversaram apenas com o Bot)', icon: '🤖' },
-    tel_downsell: { title: 'Downsell Direto (Quiz de Entrada / Desqualificados)', icon: '🔄' },
-    tel_sem_resposta: { title: 'Sem Resposta (Silenciosos após Disparo)', icon: '⏳' }
+    all: { title: '1. Entradas na Base (Todos os Leads)', icon: '' },
+    followup: { title: t.followup, icon: '' },
+    mql: { title: '2. Qualificados (MQL)', icon: '' },
+    downsell: { title: 'Downsell (Leads Desqualificados)', icon: '' },
+    agendada: { title: t.agendada, icon: '' },
+    noshow: { title: 'No Show (Ausências na Reunião)', icon: '' },
+    realizada: { title: t.realizada, icon: '' },
+    won: { title: '5. Vendas Ganhas', icon: '' },
+    tel_humano: { title: 'Atendimento Humano (SDR / Closer / Reunião)', icon: '' },
+    tel_automacao: { title: 'Pararam na Automação (Conversaram apenas com o Bot)', icon: '' },
+    tel_downsell: { title: 'Downsell Direto (Quiz de Entrada / Desqualificados)', icon: '' },
+    tel_sem_resposta: { title: 'Sem Resposta (Silenciosos após Disparo)', icon: '' }
   };
 
-  const info = stepTitles[stepKey] || { title: 'Leads na Etapa', icon: '🔍' };
+  const info = stepTitles[stepKey] || { title: 'Leads na Etapa', icon: '' };
   let fullTitle = info.title;
   let fullSub = 'Exibindo leads individuais correspondentes a esta etapa do funil';
 
@@ -1440,7 +1440,7 @@ function openLeadModal(stepKey, filterType = null, filterValue = null) {
   }
 
   document.getElementById('modalStepTitle').innerText = fullTitle;
-  document.getElementById('modalStepIcon').innerText = filterType ? (filterType === 'creative' ? '🎨' : '📢') : info.icon;
+  document.getElementById('modalStepIcon').innerText = filterType ? (filterType === 'creative' ? '' : '') : info.icon;
   document.getElementById('modalStepSubtitle').innerText = fullSub;
   document.getElementById('modalLeadCount').innerText = `${stepLeads.length} leads`;
   document.getElementById('modalSearchInput').value = '';
@@ -1594,13 +1594,13 @@ function renderModalLeadList(leadsToRender) {
     const saleStatus = getLeadSaleStatus(lead);
     const outra = saleStatus.outraCompra;
     const saleBadgeHTML = saleStatus.isWon
-      ? `<span class="badge" style="background:linear-gradient(135deg, #10b981, #059669); color:#ffffff; font-weight:800; padding:0.3rem 0.6rem; border-radius:6px; font-size:0.75rem; box-shadow:0 2px 6px rgba(16,185,129,0.35);">🏆 Venda Eduzz (${formatBRL(saleStatus.price)})</span>`
+      ? `<span class="badge" style="background:linear-gradient(135deg, #10b981, #059669); color:#ffffff; font-weight:800; padding:0.3rem 0.6rem; border-radius:6px; font-size:0.75rem; box-shadow:0 2px 6px rgba(16,185,129,0.35);">Venda Eduzz (${formatBRL(saleStatus.price)})</span>`
       : outra
-        ? `<span class="badge badge-outra-compra ${outra.tipo === 'downsell' ? 'is-downsell' : 'is-outro'}" title="Comprou outro produto — não conta como venda do funil">${outra.tipo === 'downsell' ? '🎁 Downsell' : '🛒 Outro produto'}: ${escapeHTML(outra.produto)}${outra.valor > 0 ? ` (${formatBRL(outra.valor)})` : ''}</span>`
-        : `<span class="badge" style="background:rgba(59,130,246,0.12); color:#2563eb; font-weight:700; padding:0.25rem 0.55rem; border-radius:6px; font-size:0.75rem;">📥 Lead Capturado</span>`;
+        ? `<span class="badge badge-outra-compra ${outra.tipo === 'downsell' ? 'is-downsell' : 'is-outro'}" title="Comprou outro produto — não conta como venda do funil">${outra.tipo === 'downsell' ? 'Downsell' : 'Outro produto'}: ${escapeHTML(outra.produto)}${outra.valor > 0 ? ` (${formatBRL(outra.valor)})` : ''}</span>`
+        : `<span class="badge" style="background:rgba(59,130,246,0.12); color:#2563eb; font-weight:700; padding:0.25rem 0.55rem; border-radius:6px; font-size:0.75rem;">Lead Capturado</span>`;
 
     const abBadgeHTML = abVariant
-      ? `<div style="margin-top:3px;"><span class="badge" style="background:rgba(168,85,247,0.14); color:#9333ea; font-size:0.72rem; font-weight:800; border:1px solid rgba(168,85,247,0.3);">⚡ LP: ${escapeHTML(abVariant)}</span></div>`
+      ? `<div style="margin-top:3px;"><span class="badge" style="background:rgba(168,85,247,0.14); color:#9333ea; font-size:0.72rem; font-weight:800; border:1px solid rgba(168,85,247,0.3);">LP: ${escapeHTML(abVariant)}</span></div>`
       : '';
 
     // Todo texto vindo do CRM passa por escapeHTML: nome de contato, campanha
@@ -1613,13 +1613,13 @@ function renderModalLeadList(leadsToRender) {
         </td>
         <td>
           ${phone !== 'Sem Telefone'
-            ? `<a href="${escapeHTML(waLink)}" target="_blank" rel="noopener" style="color:#10b981; font-weight:700; text-decoration:none;">📱 ${escapeHTML(phone)}</a>`
+            ? `<a href="${escapeHTML(waLink)}" target="_blank" rel="noopener" style="color:#10b981; font-weight:700; text-decoration:none;">${escapeHTML(phone)}</a>`
             : '<span class="text-muted">Sem telefone</span>'
           }
         </td>
-        <td style="font-size:0.8rem;">${email !== 'Sem E-mail' ? `<a href="mailto:${encodeURIComponent(email)}" style="color:var(--color-primary); text-decoration:none;">📧 ${escapeHTML(email)}</a>` : '<span class="text-muted">Sem e-mail</span>'}</td>
-        <td><span class="badge" style="background:rgba(59,130,246,0.12); color:#2563eb; font-size:0.75rem; font-weight:700;">📞 ${escapeHTML(sdrName)}</span></td>
-        <td><span class="badge" style="background:rgba(139,92,246,0.12); color:#7c3aed; font-size:0.75rem; font-weight:700;">🤝 ${escapeHTML(closerName)}</span></td>
+        <td style="font-size:0.8rem;">${email !== 'Sem E-mail' ? `<a href="mailto:${encodeURIComponent(email)}" style="color:var(--color-primary); text-decoration:none;">${escapeHTML(email)}</a>` : '<span class="text-muted">Sem e-mail</span>'}</td>
+        <td><span class="badge" style="background:rgba(59,130,246,0.12); color:#2563eb; font-size:0.75rem; font-weight:700;">${escapeHTML(sdrName)}</span></td>
+        <td><span class="badge" style="background:rgba(139,92,246,0.12); color:#7c3aed; font-size:0.75rem; font-weight:700;">${escapeHTML(closerName)}</span></td>
         <td>${saleBadgeHTML}</td>
         <td>${dateStr}</td>
         <td>
@@ -1630,7 +1630,7 @@ function renderModalLeadList(leadsToRender) {
         <td>${escapeHTML(ownerName)}</td>
         <td><span class="badge" style="background:rgba(226,232,240,0.8); font-size:0.75rem;">${escapeHTML(statusName)}</span></td>
         <td class="text-center">
-          <a href="${kommoLink}" target="_blank" rel="noopener" class="btn btn-sm btn-outline" style="padding:0.25rem 0.6rem; font-size:0.75rem;">🔗 CRM</a>
+          <a href="${kommoLink}" target="_blank" rel="noopener" class="btn btn-sm btn-outline" style="padding:0.25rem 0.6rem; font-size:0.75rem;">CRM</a>
         </td>
       </tr>
     `;
@@ -1703,7 +1703,7 @@ async function exportLeadsToCSV(leadsArray, customFilename = null) {
 
   if (missingContactIds.length > 0) {
     if (activeBtn) {
-      activeBtn.innerHTML = `<span>⏳ Carregando telefones (${missingContactIds.length})...</span>`;
+      activeBtn.innerHTML = `<span>Carregando telefones (${missingContactIds.length})...</span>`;
       activeBtn.disabled = true;
     }
 
@@ -1712,7 +1712,7 @@ async function exportLeadsToCSV(leadsArray, customFilename = null) {
       for (let i = 0; i < missingContactIds.length; i += batchSize) {
         const chunk = missingContactIds.slice(i, i + batchSize);
         if (activeBtn) {
-          activeBtn.innerHTML = `<span>⏳ Carregando telefones (${Math.min(i + batchSize, missingContactIds.length)}/${missingContactIds.length})...</span>`;
+          activeBtn.innerHTML = `<span>Carregando telefones (${Math.min(i + batchSize, missingContactIds.length)}/${missingContactIds.length})...</span>`;
         }
         const res = await fetch('/api/contacts/batch', {
           method: 'POST',
@@ -2345,7 +2345,7 @@ function renderTeamPerformance() {
     } else {
       sdrBody.innerHTML = sdrEntries.map(([sdrName, st]) => `
         <tr>
-          <td><strong style="color: var(--color-slate-900);">📞 ${escapeHTML(sdrName)}</strong></td>
+          <td><strong style="color: var(--color-slate-900);">${escapeHTML(sdrName)}</strong></td>
           <td class="text-right">${st.total.toLocaleString('pt-BR')}</td>
           <td class="text-right text-warning" style="font-weight:700;">${st.mql.toLocaleString('pt-BR')}</td>
           <td class="text-right text-primary" style="font-weight:700;">${st.agendadas.toLocaleString('pt-BR')}</td>
@@ -2368,7 +2368,7 @@ function renderTeamPerformance() {
         const revFormatted = st.revenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
         return `
           <tr>
-            <td><strong style="color: var(--color-slate-900);">🤝 ${escapeHTML(closerName)}</strong></td>
+            <td><strong style="color: var(--color-slate-900);">${escapeHTML(closerName)}</strong></td>
             <td class="text-right">${st.agendadas.toLocaleString('pt-BR')}</td>
             <td class="text-right">${st.realizadas.toLocaleString('pt-BR')}</td>
             <td class="text-right text-success" style="font-weight:800;">${st.won.toLocaleString('pt-BR')}</td>
@@ -2393,14 +2393,14 @@ async function handleSync() {
     const data = await res.json();
     
     if (data.success) {
-      showToast(`🔄 Sincronização concluída! ${data.leadsCount} leads sincronizados.`, 'success');
+      showToast(`Sincronização concluída! ${data.leadsCount} leads sincronizados.`, 'success');
       await loadData();
     } else {
-      showToast(`❌ Erro: ${data.error || 'Erro na sincronização'}`, 'danger');
+      showToast(`Erro: ${data.error || 'Erro na sincronização'}`, 'danger');
     }
   } catch (err) {
     console.error('Sync request failed:', err);
-    showToast('❌ Falha na conexão com o servidor local.', 'danger');
+    showToast('Falha na conexão com o servidor local.', 'danger');
   } finally {
     icon.classList.remove('spinning');
     elements.syncBtn.disabled = false;
@@ -2430,7 +2430,7 @@ function escapeHTML(str) {
 
 function showToast(msg, type = 'info') {
   elements.toastMsg.innerText = msg;
-  elements.toastIcon.innerText = type === 'success' ? '✅' : type === 'danger' ? '❌' : 'ℹ️';
+  elements.toastIcon.innerText = '';
   
   elements.toastNotification.className = 'toast glass-card show';
   if (type === 'danger') elements.toastNotification.style.borderLeft = '4px solid var(--color-danger)';
@@ -2495,17 +2495,17 @@ function renderVTurbSection(data) {
     return `
       <tr style="border-bottom: 1px solid #f1f5f9;">
         <td style="padding: 0.75rem;">
-          <div style="font-weight:700; color:var(--color-slate-900);">🎥 ${escapeHTML(p.name || 'VSL Player')}</div>
+          <div style="font-weight:700; color:var(--color-slate-900);">${escapeHTML(p.name || 'VSL Player')}</div>
           <div style="font-size:0.75rem; color:var(--color-slate-500);">ID: ${p.id}</div>
         </td>
-        <td style="padding: 0.75rem; font-size:0.85rem;">⏱️ ${durMins}</td>
+        <td style="padding: 0.75rem; font-size:0.85rem;">${durMins}</td>
         <td style="padding: 0.75rem;" class="text-center"><strong>${views.toLocaleString('pt-BR')}</strong></td>
         <td style="padding: 0.75rem;" class="text-center">${uniqSessions.toLocaleString('pt-BR')}</td>
         <td style="padding: 0.75rem;" class="text-center text-primary" style="font-weight:700;">${plays.toLocaleString('pt-BR')}</td>
         <td style="padding: 0.75rem;" class="text-center text-success" style="font-weight:800;">${playRate}%</td>
         <td style="padding: 0.75rem;" class="text-center" style="font-weight:700; color:#7c3aed;">${pitchViews.toLocaleString('pt-BR')} (${pitchRate}%)</td>
         <td style="padding: 0.75rem;" class="text-center">
-          <span class="badge" style="background:rgba(239,68,68,0.12); color:#dc2626; font-weight:800; font-size:0.75rem; padding:0.25rem 0.5rem; border-radius:6px;">🔴 ${p.live_users} ao vivo</span>
+          <span class="badge" style="background:rgba(239,68,68,0.12); color:#dc2626; font-weight:800; font-size:0.75rem; padding:0.25rem 0.5rem; border-radius:6px;">${p.live_users} ao vivo</span>
         </td>
       </tr>
     `;
@@ -2602,8 +2602,8 @@ function renderEduzzDashboard() {
       <td style="font-weight: 600; color: var(--text-main);">${escapeHTML(c.name)}</td>
       <td>
         <div style="font-size: 0.8rem; color: var(--text-muted);">
-          <div>✉️ ${escapeHTML(c.email)}</div>
-          ${c.phone ? `<div>📞 ${escapeHTML(c.phone)}</div>` : ''}
+          <div>${escapeHTML(c.email)}</div>
+          ${c.phone ? `<div>${escapeHTML(c.phone)}</div>` : ''}
         </div>
       </td>
       <td class="text-center" style="font-weight: 700;">${c.salesCount}</td>
@@ -2741,16 +2741,16 @@ const PIPELINE_FUNNEL_MAP = {
 const FUNIS_SEM_CONVERSAO_META = ['engajamento', 'outros'];
 
 const FUNNEL_DISPLAY = {
-  mlfp: { label: 'MLFP Inbound', tagClass: 'tag-mlfp', icon: '🔵' },
-  komando: { label: 'Komando', tagClass: 'tag-komando', icon: '🔴' },
-  kop: { label: 'KOP', tagClass: 'tag-kop', icon: '📦' },
-  kor: { label: 'KOR Inbound', tagClass: 'tag-kor', icon: '🔄' },
-  recuperacao: { label: 'Recuperação', tagClass: 'tag-kor', icon: '♻️' },
-  ebook: { label: 'Ebook', tagClass: 'tag-ebook', icon: '📚' },
-  engajamento: { label: 'Conteúdo (Views/Perfil)', tagClass: 'tag-engajamento', icon: '🎬' },
-  social_selling: { label: 'Social Selling', tagClass: 'tag-engajamento', icon: '📲' },
-  repescagem: { label: 'MLFP Repescagem', tagClass: 'tag-outros', icon: '⏳' },
-  outros: { label: 'Outros', tagClass: 'tag-outros', icon: '📦' }
+  mlfp: { label: 'MLFP Inbound', tagClass: 'tag-mlfp', icon: '' },
+  komando: { label: 'Komando', tagClass: 'tag-komando', icon: '' },
+  kop: { label: 'KOP', tagClass: 'tag-kop', icon: '' },
+  kor: { label: 'KOR Inbound', tagClass: 'tag-kor', icon: '' },
+  recuperacao: { label: 'Recuperação', tagClass: 'tag-kor', icon: '' },
+  ebook: { label: 'Ebook', tagClass: 'tag-ebook', icon: '' },
+  engajamento: { label: 'Conteúdo (Views/Perfil)', tagClass: 'tag-engajamento', icon: '' },
+  social_selling: { label: 'Social Selling', tagClass: 'tag-engajamento', icon: '' },
+  repescagem: { label: 'MLFP Repescagem', tagClass: 'tag-outros', icon: '' },
+  outros: { label: 'Outros', tagClass: 'tag-outros', icon: '' }
 };
 
 function formatBRL(value) {
@@ -3360,7 +3360,7 @@ function renderEcosystemTable() {
   const products = [
     {
       id: 'mlfp',
-      name: '🎓 Mentoria Líder Faixa Preta',
+      name: 'Mentoria Líder Faixa Preta',
       url: 'chefkaka.com',
       pipelineId: 13304583,
       pipelineName: '[MLFP] Inbound',
@@ -3368,7 +3368,7 @@ function renderEcosystemTable() {
     },
     {
       id: 'kor',
-      name: '🔄 KOR Inbound / Downsell',
+      name: 'KOR Inbound / Downsell',
       url: 'chefkakagomes.com/kor',
       pipelineId: 14268556,
       pipelineName: '[KOR] Inbound',
@@ -3395,7 +3395,7 @@ function renderEcosystemTable() {
     return `
       <tr>
         <td style="font-weight:700; color:#0f172a;">${prod.name}</td>
-        <td style="font-size:0.85rem; color:#2563eb; font-weight:600;"><a href="https://${prod.url}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;">🔗 ${prod.url}</a></td>
+        <td style="font-size:0.85rem; color:#2563eb; font-weight:600;"><a href="https://${prod.url}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;">${prod.url}</a></td>
         <td><span class="badge" style="background:rgba(59,130,246,0.1); color:#2563eb; font-weight:600; padding:0.25rem 0.55rem; border-radius:6px; font-size:0.75rem;">${prod.pipelineName}</span></td>
         <td class="text-center" style="font-weight:800; color:#ff6b00; font-size:0.95rem;">${periodLeads.length.toLocaleString('pt-BR')}</td>
         <td class="text-center" style="font-weight:700; color:#0f172a;">${totalLeads.length.toLocaleString('pt-BR')}</td>
@@ -3425,7 +3425,7 @@ function renderVTurbPlayersTable(players) {
 
   tbody.innerHTML = players.map(p => {
     const livePill = p.live_users > 0 
-      ? `<span class="badge" style="background:rgba(239,68,68,0.12); color:#dc2626; font-weight:800; font-size:0.75rem; padding:0.25rem 0.5rem; border-radius:6px;">🔴 ${p.live_users} ao vivo</span>`
+      ? `<span class="badge" style="background:rgba(239,68,68,0.12); color:#dc2626; font-weight:800; font-size:0.75rem; padding:0.25rem 0.5rem; border-radius:6px;">${p.live_users} ao vivo</span>`
       : `<span style="color:#94a3b8; font-size:0.8rem;">0 ao vivo</span>`;
 
     return `
@@ -3492,7 +3492,7 @@ function renderPagesKPIs(data) {
             aviso.style.display = 'none';
         } else {
             aviso.style.display = '';
-            aviso.innerHTML = 'ℹ️ Tracker de pageviews direto das LPs. Views, conversão e teste A/B mostram dados consolidados medidos no período.';
+            aviso.innerHTML = 'Tracker de pageviews direto das LPs. Views, conversão e teste A/B mostram dados consolidados medidos no período.';
         }
     }
 }
@@ -3675,7 +3675,7 @@ function renderPagesVariantTable(data) {
         const meta = variantMeta[i.toString()];
         const tr = document.createElement('tr');
         const isBest = bestConv > 0 && views >= MIN_VIEWS_PARA_VENCEDOR && conv === bestConv;
-        const badge = isBest ? ' <span style="background:linear-gradient(135deg,#ff6b00,#ea580c);color:#fff;padding:2px 8px;border-radius:6px;font-size:0.7rem;font-weight:800;box-shadow:0 2px 6px rgba(255,107,0,0.3);">🏆 MELHOR</span>' : '';
+        const badge = isBest ? ' <span style="background:linear-gradient(135deg,#ff6b00,#ea580c);color:#fff;padding:2px 8px;border-radius:6px;font-size:0.7rem;font-weight:800;box-shadow:0 2px 6px rgba(255,107,0,0.3);">MELHOR</span>' : '';
         tr.innerHTML = `
             <td style="font-weight:700; color:#0f172a;">Variação ${i}${badge}</td>
             <td class="text-center" style="color:#475569; font-weight:500;">${meta.vsl}</td>
@@ -3693,7 +3693,7 @@ function renderPagesVariantTable(data) {
     summaryTr.style.borderTop = '2px solid rgba(226, 232, 240, 0.9)';
     summaryTr.innerHTML = `
         <td colspan="3" style="font-size:0.8rem; font-weight:700; color:#475569; padding:0.75rem 1rem;">
-            📌 <strong>Resumo Komando:</strong> ${totalAbLeadsCount} leads no Teste A/B | ${untaggedKo} leads anteriores ao Teste A/B
+            <strong>Resumo Komando:</strong> ${totalAbLeadsCount} leads no Teste A/B | ${untaggedKo} leads anteriores ao Teste A/B
         </td>
         <td class="text-center" style="font-weight:700; font-size:0.85rem; color:#64748b;">—</td>
         <td class="text-center" style="font-weight:800; color:#ff6b00; font-size:0.95rem;">${koLeads.length} leads</td>
@@ -4050,7 +4050,7 @@ function cabecalhoMeta(titulo, subtitulo, modo, comBotoes) {
   return `
     <div class="meta-cabecalho">
       <div>
-        <h2>🎯 ${titulo}</h2>
+        <h2>${titulo}</h2>
         <p>${subtitulo}</p>
       </div>${botoes}
     </div>`;
@@ -4494,14 +4494,14 @@ function renderChampionCreatives(creatives) {
   }
 
   tbody.innerHTML = creatives.map((c, idx) => {
-    const medal = idx === 0 ? '🥇' : (idx === 1 ? '🥈' : (idx === 2 ? '🥉' : `#${idx + 1}`));
+    const medal = `${idx + 1}º`;
     const isDirectSales = c.funnel === 'kop' || c.funnel === 'kor' || c.funnel === 'ebook' || (c.vendas && c.vendas > 0);
 
     let resultCol = '';
     let costCol = '';
 
     if (c.vendas && c.vendas > 0) {
-      resultCol = `<span style="font-weight:800; color:#059669; font-size:0.95rem;">🛍️ ${c.vendas} venda${c.vendas > 1 ? 's' : ''}</span>${c.leads > 0 ? `<br><small style="color:#64748b;">${c.leads} leads</small>` : ''}`;
+      resultCol = `<span style="font-weight:800; color:#059669; font-size:0.95rem;">${c.vendas} venda${c.vendas > 1 ? 's' : ''}</span>${c.leads > 0 ? `<br><small style="color:#64748b;">${c.leads} leads</small>` : ''}`;
       costCol = `<span style="font-weight:800; color:#059669;">CAC: ${formatMoney(c.cac)}</span>${c.cpl > 0 ? `<br><small style="color:#64748b;">CPL: ${formatMoney(c.cpl)}</small>` : ''}`;
     } else {
       resultCol = `<span style="font-weight:800; color:#ff6b00; font-size:0.95rem;">${c.leads.toLocaleString('pt-BR')} leads</span>`;
@@ -4520,7 +4520,7 @@ function renderChampionCreatives(creatives) {
         <td><span class="insight-badge">${escapeHTML(c.melhorias)}</span></td>
         <td class="text-center">
           <a href="${c.link}" target="_blank" rel="noopener noreferrer" class="ad-link-btn" title="Ver Anúncio na Biblioteca da Meta">
-            🔗 Ver Anúncio
+            Ver Anúncio
           </a>
         </td>
       </tr>
@@ -4628,8 +4628,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentTrafficSalesData) {
           renderTrafficWeeklyTable(currentTrafficSalesData);
         }
-        btnSaveGoals.innerText = '✅ Salvo!';
-        setTimeout(() => { btnSaveGoals.innerText = '💾 Salvar Metas'; }, 2000);
+        btnSaveGoals.innerText = 'Salvo!';
+        setTimeout(() => { btnSaveGoals.innerText = 'Salvar Metas'; }, 2000);
       });
     }
 
@@ -4715,11 +4715,11 @@ function initAIAssistant() {
             if (messagesContainer) {
                 messagesContainer.innerHTML = `
                     <div class="ai-message ai-message-system">
-                        <div class="ai-msg-avatar">✨</div>
+                        <div class="ai-msg-avatar"></div>
                         <div class="ai-msg-bubble">
-                            <p>Conversa reiniciada! 🚀</p>
+                            <p>Conversa reiniciada! </p>
                             <p>Posso analisar métricas em tempo real, localizar leads no Kommo CRM, consultar respostas de formulários, vendas da Eduzz e dados de tráfego.</p>
-                            <p class="ai-tip">💡 <em>Como posso te ajudar agora?</em></p>
+                            <p class="ai-tip"><em>Como posso te ajudar agora?</em></p>
                         </div>
                     </div>
                 `;
@@ -4798,7 +4798,7 @@ function initAIAssistant() {
         const msgDiv = document.createElement('div');
         msgDiv.className = `ai-message ai-message-${role}`;
         
-        const avatar = role === 'user' ? '👤' : '🧠';
+        const avatar = role === 'user' ? 'Você' : 'Cérebro';
         msgDiv.innerHTML = `
             <div class="ai-msg-avatar">${avatar}</div>
             <div class="ai-msg-bubble">${htmlContent}</div>
@@ -4944,7 +4944,7 @@ function initAIAssistant() {
         } catch (err) {
             if (typingDiv) {
                 const bubble = typingDiv.querySelector('.ai-msg-bubble');
-                if (bubble) bubble.innerHTML = `<p style="color:#ef4444;">⚠️ Erro ao consultar assistente: ${err.message}</p>`;
+                if (bubble) bubble.innerHTML = `<p style="color:#ef4444;">Erro ao consultar assistente: ${err.message}</p>`;
             }
         } finally {
             if (sendBtn) sendBtn.disabled = false;

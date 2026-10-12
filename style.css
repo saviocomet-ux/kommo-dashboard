@@ -3470,3 +3470,110 @@ tr:hover td {
 .social-barra { display: flex; height: 12px; border-radius: 999px; overflow: hidden; margin-top: 1rem; background: #eef2f6; }
 .social-barra > div { height: 100%; }
 @media (max-width: 768px) { .social-resumo { grid-template-columns: 1fr; } }
+
+/* ============================================================
+   TEMA SÓBRIO
+   Sobrescreve os efeitos decorativos do tema original (manchas de luz,
+   brilhos, gradientes, ícones e animações) para um visual de relatório:
+   fundo neutro, cartões brancos com borda fina, laranja só nas ações.
+   ============================================================ */
+:root {
+  --bg-primary: #f5f6f8;
+  --bg-secondary: #f2f4f7;
+  --glass-bg: #ffffff;
+  --glass-border: #e4e7ec;
+  --glass-border-hover: #d0d5dd;
+  --color-primary: #d9480f;
+  --color-primary-hover: #b93e0d;
+  --color-primary-glow: rgba(217, 72, 15, 0.08);
+  --text-main: #101828;
+  --text-body: #344054;
+  --text-muted: #667085;
+  --shadow-soft: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-hover: 0 1px 3px rgba(16, 24, 40, 0.08);
+  --shadow-neon-orange: none;
+  --cor-escura: #101828;
+}
+body { background: var(--bg-primary); }
+.bg-glow { display: none !important; }
+
+/* Cartões */
+.glass-card {
+  background: #fff;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-soft);
+}
+.kpi-card.hover-lift:hover, .funnel-step-card:hover, .meta-kpi-card:hover,
+.pages-kpi-card:hover, .funnel-layer:hover, .ai-fab-btn:hover,
+.btn-primary:hover, .btn-export-csv:hover { transform: none; }
+.meta-kpi-card::before, .pages-kpi-card::before { background: var(--glass-border); }
+
+/* Cabeçalho e navegação */
+.logo-circle { background: var(--cor-escura); box-shadow: none; }
+.main-nav-btn:hover, .pipeline-tab-btn:hover, .traffic-funnel-btn:hover,
+.media-tab-btn:hover, .tab-btn:hover { background: var(--bg-secondary); color: var(--text-main); }
+.main-nav-btn.active, .pipeline-tab-btn.active, .traffic-funnel-btn.active, .tab-btn.active {
+  background: var(--cor-escura);
+  color: #fff;
+  box-shadow: none;
+  border-color: var(--cor-escura);
+}
+.nav-icon:empty, .cerebro-icone, .ai-avatar-badge, #toastIcon { display: none; }
+.tab-dot, .dot-mlfp, .dot-mlfp-antigos, .dot-ko, .dot-kop, .dot-ebooks, .dot-eduzz { box-shadow: none !important; }
+
+/* Botões: cor sólida, sem brilho nem elevação */
+.btn-primary { background: var(--color-primary); border: 1px solid var(--color-primary); }
+.btn-primary:hover { background: var(--color-primary-hover); box-shadow: none; }
+.btn-glow { box-shadow: none; }
+.btn-export-csv { background: #fff; color: var(--text-body); border: 1px solid #d0d5dd; box-shadow: none; }
+.btn-export-csv:hover { background: var(--bg-secondary); box-shadow: none; }
+.btn-meta-ad-library { background: #fff; color: var(--text-body); border: 1px solid #d0d5dd; box-shadow: none; }
+
+/* Selos "ao vivo": sem pulsação nem gradiente */
+.funnel-badge-live, .badge-live-ads {
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  border: 1px solid var(--glass-border);
+  box-shadow: none;
+  letter-spacing: 0.04em;
+}
+.funnel-badge-live::before, .badge-live-ads::before { animation: none; box-shadow: none; }
+.badge-rank-1, .badge-rank-2 { background: var(--cor-escura); color: #fff; box-shadow: none; }
+
+/* Funil: uma escala de azul-marinho em vez de sete cores; venda em verde */
+.graphic-funnel-card { background: #fff; }
+.funnel-layer { box-shadow: none; border: none !important; }
+.funnel-layer.layer-1 { background: #1d2939; }
+.funnel-layer.layer-2 { background: #24385b; }
+.funnel-layer.layer-3 { background: #2c4a7c; }
+.funnel-layer.layer-4 { background: #355d9c; }
+.funnel-layer.layer-5 { background: #067647; }
+.funnel-layer.layer-followup, .funnel-layer.layer-downsell, .funnel-layer.layer-noshow { background: #667085; }
+.funnel-step-card.active { background: var(--cor-escura); box-shadow: none; }
+.modal-header { background: #fff; color: var(--text-main); border-bottom: 1px solid var(--glass-border); }
+
+/* Cérebro da Operação e chat */
+.cerebro-bar { background: #fff; border: 1px solid var(--glass-border); border-left: 3px solid var(--color-primary); }
+.cerebro-sugestao { border-color: var(--glass-border); }
+.btn-ai-sparkle, .ai-fab-btn { background: var(--cor-escura); color: #fff; box-shadow: 0 2px 8px rgba(16, 24, 40, 0.15); border: none; }
+.ai-fab-pulse, .ai-sparkle-icon, .ai-fab-icon { display: none; }
+.status-dot-pulse { animation: none; }
+.ai-msg-avatar { display: none; }
+.ai-message-user .ai-msg-bubble { background: var(--cor-escura); color: #fff; box-shadow: none; }
+.ai-send-btn { background: var(--color-primary); box-shadow: none; }
+
+/* Ajustes do tema sóbrio após revisão visual */
+.ranking-icon:empty { display: none; }
+.funnel-badge-live::before, .badge-live-ads::before { display: none; }
+.media-tab-btn.active { background: var(--cor-escura); color: #fff; border-color: var(--cor-escura); box-shadow: none; }
+.layer-extra-downsell, .layer-extra-outro { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.section-jump-nav .jump-link.active { background: var(--bg-secondary); color: var(--text-main); }
+#trafficWeeklyTable thead th { background: var(--bg-secondary) !important; border-left-color: var(--glass-border) !important; }
+.kpi-card::before, .kpi-card:nth-child(n)::before { display: none; }
+.ai-tip { background: var(--bg-secondary) !important; color: var(--text-muted) !important; border-color: var(--glass-border) !important; }
+.ai-input-form, .ai-input-form:focus-within { border-color: #d0d5dd !important; box-shadow: none !important; }
+.ai-drawer-overlay { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; background: rgba(16, 24, 40, 0.35) !important; }
+.ai-chip-btn { background: #fff; border-color: var(--glass-border); color: var(--text-body); }

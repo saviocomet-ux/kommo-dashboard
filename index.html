@@ -49,7 +49,7 @@
     <!-- Cérebro da Operação: chat com a IA, primeira barra do painel -->
     <section class="cerebro-bar glass-card" id="cerebroBar">
       <div class="cerebro-identidade">
-        <span class="cerebro-icone" aria-hidden="true">🧠</span>
+        <span class="cerebro-icone" aria-hidden="true"></span>
         <div>
           <h2>Cérebro da Operação</h2>
           <p>Pergunte sobre tráfego, leads, metas e vendas. As respostas vêm dos dados reais do Meta Ads, Kommo e Eduzz.</p>
@@ -61,29 +61,29 @@
         <button type="submit" class="cerebro-enviar">Perguntar</button>
       </form>
       <div class="cerebro-sugestoes" id="cerebroSugestoes">
-        <button type="button" class="cerebro-sugestao" data-query="O MLFP está no ritmo da meta desta semana? O que está abaixo?">🎯 Meta do MLFP</button>
-        <button type="button" class="cerebro-sugestao" data-query="Compare o KOR dos últimos 7 dias com os 7 dias anteriores">🔄 KOR na semana</button>
-        <button type="button" class="cerebro-sugestao" data-query="Qual produto teve o melhor retorno este mês e por quê?">💰 Melhor retorno</button>
-        <button type="button" class="cerebro-sugestao" data-query="Quais criativos gastaram mais nos últimos 7 dias e quantos leads trouxeram?">🎬 Criativos</button>
+        <button type="button" class="cerebro-sugestao" data-query="O MLFP está no ritmo da meta desta semana? O que está abaixo?">Meta do MLFP</button>
+        <button type="button" class="cerebro-sugestao" data-query="Compare o KOR dos últimos 7 dias com os 7 dias anteriores">KOR na semana</button>
+        <button type="button" class="cerebro-sugestao" data-query="Qual produto teve o melhor retorno este mês e por quê?">Melhor retorno</button>
+        <button type="button" class="cerebro-sugestao" data-query="Quais criativos gastaram mais nos últimos 7 dias e quantos leads trouxeram?">Criativos</button>
       </div>
     </section>
 
     <!-- Main Executive Top Navigation Bar -->
     <nav class="main-executive-nav glass-card" id="mainExecutiveNav">
       <button id="navTabCRM" class="main-nav-btn active" data-main-tab="crm">
-        <span class="nav-icon">📊</span>
+        <span class="nav-icon"></span>
         <span class="nav-label">Visão Geral Comercial & CRM</span>
       </button>
       <button id="navTabTrafficSales" class="main-nav-btn" data-main-tab="trafficSales">
-        <span class="nav-icon">🎯</span>
+        <span class="nav-icon"></span>
         <span class="nav-label">Tráfego × Comercial (Semanal)</span>
       </button>
       <button id="navTabPages" class="main-nav-btn" data-main-tab="pages">
-        <span class="nav-icon">🎬</span>
+        <span class="nav-icon"></span>
         <span class="nav-label">Páginas, VSL & Teste A/B</span>
       </button>
       <button id="navTabEduzz" class="main-nav-btn" data-main-tab="eduzz">
-        <span class="nav-icon">💳</span>
+        <span class="nav-icon"></span>
         <span class="nav-label">Vendas & Faturamento (Eduzz)</span>
       </button>
     </nav>
@@ -95,27 +95,27 @@
       <div class="pipeline-navigation-tabs glass-card" style="margin-bottom: 1rem;">
         <button id="tabMlfp" class="pipeline-tab-btn active" data-pipeline="13304583">
           <span class="tab-dot dot-mlfp"></span>
-          🔵 Mentoria [MLFP]
+          Mentoria [MLFP]
         </button>
         <button id="tabMlfpAntigos" class="pipeline-tab-btn" data-pipeline="14008652">
           <span class="tab-dot dot-mlfp-antigos"></span>
-          ⏳ MLFP Leads Antigos (Repescagem)
+          MLFP Leads Antigos (Repescagem)
         </button>
         <button id="tabKoInbound" class="pipeline-tab-btn" data-pipeline="13304659">
           <span class="tab-dot dot-ko"></span>
-          🔴 Komando [KO]
+          Komando [KO]
         </button>
         <button id="tabKorInbound" class="pipeline-tab-btn" data-pipeline="14268556">
           <span class="tab-dot" style="background:#a855f7;"></span>
-          🔄 KOR Inbound
+          KOR Inbound
         </button>
         <button id="tabRecuperacao" class="pipeline-tab-btn" data-pipeline="13956952">
           <span class="tab-dot" style="background:#14b8a6;"></span>
-          ♻️ Recuperação
+          Recuperação
         </button>
         <button id="tabSocialSelling" class="pipeline-tab-btn" data-pipeline="14104532">
           <span class="tab-dot" style="background:#ec4899;"></span>
-          📲 Social Selling
+          Social Selling
         </button>
       </div>
 
@@ -124,7 +124,7 @@
       <!-- Integrated Top Filters Bar -->
       <section class="filters-bar-integrated glass-card">
         <div class="date-filter-container">
-          <label>📅 Período de Data</label>
+          <label>Período de Data</label>
           <div class="date-pills" id="datePills">
             <button class="pill-btn" data-period="today">Hoje</button>
             <button class="pill-btn" data-period="7">7D</button>
@@ -132,7 +132,7 @@
             <button class="pill-btn active" data-period="this_month">Este Mês</button>
             <button class="pill-btn" data-period="last_month">Mês Passado</button>
             <button class="pill-btn" data-period="all">Todo</button>
-            <button class="pill-btn" data-period="custom">📆 Personalizado</button>
+            <button class="pill-btn" data-period="custom">Personalizado</button>
           </div>
           <div class="custom-date-range" id="customDateRange">
             <input type="date" id="dateFrom" />
@@ -143,21 +143,21 @@
         </div>
 
         <div class="filter-group" style="display: none;">
-          <label for="pipelineFilter">🎯 Funil / Pipeline</label>
+          <label for="pipelineFilter">Funil / Pipeline</label>
           <select id="pipelineFilter">
             <option value="13304583">[MLFP] Inbound</option>
           </select>
         </div>
 
         <div class="filter-group">
-          <label for="ownerFilter">👥 Responsável (Time)</label>
+          <label for="ownerFilter">Responsável (Time)</label>
           <select id="ownerFilter">
             <option value="all">Todo o Time</option>
           </select>
         </div>
 
         <div class="filter-group">
-          <label for="utmGroupSelect">📊 Agrupar Mkt. por</label>
+          <label for="utmGroupSelect">Agrupar Mkt. por</label>
           <select id="utmGroupSelect">
             <option value="campaign" selected>Campanha (utm_campaign)</option>
             <option value="source">Origem (utm_source)</option>
@@ -183,11 +183,11 @@
 
       <!-- Atalhos das seções: a Visão Geral é uma rolagem longa -->
       <nav class="section-jump-nav" id="sectionJumpNav" aria-label="Seções da Visão Geral">
-        <a href="#secFunil" class="jump-link">🧭 Funil</a>
-        <a href="#mediaPagaSection" class="jump-link">📊 Mídia Paga</a>
-        <a href="#secRankings" class="jump-link">🏆 Rankings</a>
-        <a href="#secPerfil" class="jump-link">🧑‍🍳 Perfil dos Leads</a>
-        <a href="#secTime" class="jump-link">🎯 Campanhas & Time</a>
+        <a href="#secFunil" class="jump-link">Funil</a>
+        <a href="#mediaPagaSection" class="jump-link">Mídia Paga</a>
+        <a href="#secRankings" class="jump-link">Rankings</a>
+        <a href="#secPerfil" class="jump-link">Perfil dos Leads</a>
+        <a href="#secTime" class="jump-link">Campanhas & Time</a>
       </nav>
 
       <!-- Progresso da meta do funil selecionado (semana ou mês, conforme o filtro) -->
@@ -199,7 +199,7 @@
           <div class="funnel-header-left">
             <div class="funnel-badge-live">VISUAL FUNNEL FLOW</div>
             <h2 id="currentFunnelTitle">Funil de Conversão Comercial — Mentoria MLFP</h2>
-            <p id="currentFunnelSub">Fluxo Comercial: Captura ➔ (Follow Up 1º Contatos) ➔ MQL / (Downsell Desqualificados) ➔ Agendamento ➔ (No Show) ➔ Reunião ➔ Fechamento</p>
+            <p id="currentFunnelSub">Fluxo Comercial: Captura → (Follow Up 1º Contatos) → MQL / (Downsell Desqualificados) → Agendamento → (No Show) → Reunião → Fechamento</p>
           </div>
           <div class="funnel-header-actions">
             <button id="btnExportFunnelHeaderCsv" class="btn btn-export-csv-alt" title="Exportar leads deste funil em CSV">
@@ -213,7 +213,7 @@
           <!-- Level 1: Leads Entrada -->
           <div class="funnel-layer layer-1" data-step="all">
             <div class="layer-content">
-              <div class="layer-title"><span class="layer-icon">📥</span> 1. Entradas na Base (Leads Capturados)</div>
+              <div class="layer-title"><span class="layer-icon"></span> 1. Entradas na Base (Leads Capturados)</div>
               <div class="layer-stats">
                 <strong id="pyramidLeadsCount">-</strong>
                 <span class="layer-pct">100% da Entrada</span>
@@ -225,7 +225,7 @@
           <div class="funnel-branch-row">
             <div class="funnel-layer layer-followup" data-step="followup">
               <div class="layer-content">
-                <div class="layer-title"><span class="layer-icon">⏳</span> Follow Up (Sem Resposta 1ºs Contatos)</div>
+                <div class="layer-title"><span class="layer-icon"></span> Follow Up (Sem Resposta 1ºs Contatos)</div>
                 <div class="layer-stats">
                   <strong id="pyramidFollowUpCount">-</strong>
                   <span class="layer-pct" id="pyramidFollowUpPct">aguardando retorno</span>
@@ -236,7 +236,7 @@
           
           <!-- Drop indicator 1 -->
           <div class="funnel-drop-indicator" id="drop1">
-            <span>🔻 Qualificação MQL: <strong id="dropPct1">0%</strong></span>
+            <span>Qualificação MQL: <strong id="dropPct1">0%</strong></span>
           </div>
 
           <!-- Level 2: MQL & Downsell Branch (Desqualificados) -->
@@ -244,7 +244,7 @@
             <!-- Level 2: MQL -->
             <div class="funnel-layer layer-2" data-step="mql" style="flex: 2;">
               <div class="layer-content">
-                <div class="layer-title"><span class="layer-icon">🔥</span> 2. Qualificados (MQL)</div>
+                <div class="layer-title"><span class="layer-icon"></span> 2. Qualificados (MQL)</div>
                 <div class="layer-stats">
                   <strong id="pyramidMqlCount">-</strong>
                   <span class="layer-pct" id="pyramidMqlPct">--% do total</span>
@@ -255,7 +255,7 @@
             <!-- Downsell Branch (Desqualificados) -->
             <div class="funnel-layer layer-downsell" data-step="downsell" style="flex: 1;">
               <div class="layer-content">
-                <div class="layer-title"><span class="layer-icon">🔄</span> Downsell (Desqualificados)</div>
+                <div class="layer-title"><span class="layer-icon"></span> Downsell (Desqualificados)</div>
                 <div class="layer-stats">
                   <strong id="pyramidDownsellCount">-</strong>
                   <span class="layer-pct" id="pyramidDownsellPct">oferta entrada</span>
@@ -267,13 +267,13 @@
 
           <!-- Drop indicator 2 -->
           <div class="funnel-drop-indicator" id="drop2">
-            <span>🔻 SDR ➔ Agendamento: <strong id="dropPct2">0%</strong></span>
+            <span>SDR → Agendamento: <strong id="dropPct2">0%</strong></span>
           </div>
 
           <!-- Level 3: Agendada -->
           <div class="funnel-layer layer-3" data-step="agendada">
             <div class="layer-content">
-              <div class="layer-title"><span class="layer-icon">📅</span> 3. Reuniões Agendadas (Total SDR)</div>
+              <div class="layer-title"><span class="layer-icon"></span> 3. Reuniões Agendadas (Total SDR)</div>
               <div class="layer-stats">
                 <strong id="pyramidAgendadaCount">-</strong>
                 <span class="layer-pct" id="pyramidAgendadaPct">--% dos MQLs</span>
@@ -285,7 +285,7 @@
           <div class="funnel-branch-row">
             <div class="funnel-layer layer-noshow" data-step="noshow">
               <div class="layer-content">
-                <div class="layer-title"><span class="layer-icon">⚠️</span> No Show (Ausências na Reunião)</div>
+                <div class="layer-title"><span class="layer-icon"></span> No Show (Ausências na Reunião)</div>
                 <div class="layer-stats">
                   <strong id="pyramidNoShowCount">-</strong>
                   <span class="layer-pct text-warning" id="pyramidNoShowPct">--% ausência</span>
@@ -296,13 +296,13 @@
 
           <!-- Drop indicator 3 -->
           <div class="funnel-drop-indicator" id="drop3">
-            <span>🔻 Presença / Show-Up Closer: <strong id="dropPct3">0%</strong></span>
+            <span>Presença / Show-Up Closer: <strong id="dropPct3">0%</strong></span>
           </div>
 
           <!-- Level 4: Realizada -->
           <div class="funnel-layer layer-4" data-step="realizada">
             <div class="layer-content">
-              <div class="layer-title"><span class="layer-icon">🤝</span> 4. Reuniões Realizadas (Show-Up)</div>
+              <div class="layer-title"><span class="layer-icon"></span> 4. Reuniões Realizadas (Show-Up)</div>
               <div class="layer-stats">
                 <strong id="pyramidRealizadaCount">-</strong>
                 <span class="layer-pct" id="pyramidRealizadaPct">--% de presença</span>
@@ -312,13 +312,13 @@
 
           <!-- Drop indicator 4 -->
           <div class="funnel-drop-indicator" id="drop4">
-            <span>🔻 Fechamento Mentoria: <strong id="dropPct4">0%</strong></span>
+            <span>Fechamento Mentoria: <strong id="dropPct4">0%</strong></span>
           </div>
 
           <!-- Level 5: Won -->
           <div class="funnel-layer layer-5" data-step="won">
             <div class="layer-content">
-              <div class="layer-title"><span class="layer-icon">🏆</span> 5. Vendas Ganhas (Fechamento Mentoria)</div>
+              <div class="layer-title"><span class="layer-icon"></span> 5. Vendas Ganhas (Fechamento Mentoria)</div>
               <div class="layer-stats">
                 <strong id="pyramidWonCount">-</strong>
                 <span class="layer-pct text-success" id="pyramidWonRevenue">R$ 0,00</span>
@@ -335,7 +335,7 @@
       <section class="media-paga-section glass-card" id="mediaPagaSection">
         <div class="media-paga-header">
           <div class="media-paga-title">
-            <h2>📊 Desempenho de Mídia Paga</h2>
+            <h2>Desempenho de Mídia Paga</h2>
             <p id="mediaPagaSubtitle">Cruzamento de dados ao vivo: Investimento Meta Ads × Leads Reais do Kommo CRM</p>
           </div>
           <span class="badge-live-ads">META ADS LIVE</span>
@@ -343,41 +343,41 @@
 
         <!-- Sub-Tabs Bar per Funnel -->
         <div class="media-paga-tabs-bar" id="mediaPagaTabs">
-          <button class="media-tab-btn active" data-media-tab="mlfp">🔵 Mentoria MLFP</button>
-          <button class="media-tab-btn" data-media-tab="komando">🔴 Komando</button>
-          <button class="media-tab-btn" data-media-tab="kor">🔄 KOR Inbound</button>
-          <button class="media-tab-btn" data-media-tab="engajamento">🎬 Conteúdo (Views/Perfil)</button>
+          <button class="media-tab-btn active" data-media-tab="mlfp">Mentoria MLFP</button>
+          <button class="media-tab-btn" data-media-tab="komando">Komando</button>
+          <button class="media-tab-btn" data-media-tab="kor">KOR Inbound</button>
+          <button class="media-tab-btn" data-media-tab="engajamento">Conteúdo (Views/Perfil)</button>
         </div>
 
         <!-- KPI Cards (Dynamic per Selected Funnel or Overview) -->
         <div class="media-paga-kpis" id="mediaPagaKpis">
           <div class="meta-kpi-card">
-            <span class="meta-kpi-label">💰 Valor Investido</span>
+            <span class="meta-kpi-label">Valor Investido</span>
             <span class="meta-kpi-value" id="metaSpend">—</span>
             <span class="meta-kpi-sub" id="metaSpendSub">Período selecionado</span>
           </div>
           <div class="meta-kpi-card">
-            <span class="meta-kpi-label">👆 Cliques / CTR</span>
+            <span class="meta-kpi-label">Cliques / CTR</span>
             <span class="meta-kpi-value" id="metaClicks">—</span>
             <span class="meta-kpi-sub" id="metaCTR">CTR: —</span>
           </div>
           <div class="meta-kpi-card">
-            <span class="meta-kpi-label">👤 Leads Reais (Kommo)</span>
+            <span class="meta-kpi-label">Leads Reais (Kommo)</span>
             <span class="meta-kpi-value text-primary" id="metaLeadsKommo">—</span>
             <span class="meta-kpi-sub">Fonte: CRM (prioridade)</span>
           </div>
           <div class="meta-kpi-card">
-            <span class="meta-kpi-label">💵 CPL Real</span>
+            <span class="meta-kpi-label">CPL Real</span>
             <span class="meta-kpi-value" id="metaCPL">—</span>
             <span class="meta-kpi-sub" id="metaCPLSub">Verba de lead/venda ÷ Leads Kommo</span>
           </div>
           <div class="meta-kpi-card">
-            <span class="meta-kpi-label">🔥 MQLs / CPMQL</span>
+            <span class="meta-kpi-label">MQLs / CPMQL</span>
             <span class="meta-kpi-value text-warning" id="metaMQLsKommo">—</span>
             <span class="meta-kpi-sub" id="metaCPMQL">CPMQL: —</span>
           </div>
           <div class="meta-kpi-card" id="cardMetaRoas">
-            <span class="meta-kpi-label">🏆 ROAS (Vendas)</span>
+            <span class="meta-kpi-label">ROAS (Vendas)</span>
             <span class="meta-kpi-value text-success" id="metaROAS">—</span>
             <span class="meta-kpi-sub" id="metaROASSub">Receita Kommo ÷ Spend</span>
           </div>
@@ -453,7 +453,7 @@
       <div class="rankings-header-bar" id="secRankings" style="display: flex; align-items: center; justify-content: space-between; margin-top: 1.5rem; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
         <div>
           <h2 style="font-size: 1.25rem; font-weight: 800; color: var(--text-main); margin: 0; display: flex; align-items: center; gap: 0.5rem;">
-            🏆 Ranking de Performance de Mídia Paga
+            Ranking de Performance de Mídia Paga
           </h2>
           <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.2rem 0 0 0;">
             Alterne entre campanhas e criativos. Clique em qualquer item para ver a lista de leads e o link do anúncio.
@@ -461,10 +461,10 @@
         </div>
         <div class="ranking-segmented-tabs" style="display: flex; background: rgba(241, 245, 249, 0.9); border: 1px solid rgba(226, 232, 240, 0.9); padding: 4px; border-radius: 12px; gap: 4px;">
           <button type="button" id="btnRankCampaigns" class="rank-tab-btn active" onclick="switchRankingType('campaign')">
-            📢 Melhores Campanhas
+            Melhores Campanhas
           </button>
           <button type="button" id="btnRankCreatives" class="rank-tab-btn" onclick="switchRankingType('creative')">
-            🎨 Melhores Criativos
+            Melhores Criativos
           </button>
         </div>
       </div>
@@ -472,7 +472,7 @@
         <!-- Card 1: Top Leads -->
         <div class="ranking-card glass-card">
           <div class="ranking-card-header">
-            <div class="ranking-icon icon-blue">📥</div>
+            <div class="ranking-icon icon-blue"></div>
             <div>
               <h3>Mais Leads Capturados</h3>
               <p>Top campanhas por volume de entrada</p>
@@ -486,7 +486,7 @@
         <!-- Card 2: Top Follow Up -->
         <div class="ranking-card glass-card">
           <div class="ranking-card-header">
-            <div class="ranking-icon icon-amber">⏳</div>
+            <div class="ranking-icon icon-amber"></div>
             <div>
               <h3>Mais Leads em Follow Up</h3>
               <p>Top campanhas sem resposta nos 1ºs contatos</p>
@@ -500,7 +500,7 @@
         <!-- Card 3: Top MQLs -->
         <div class="ranking-card glass-card">
           <div class="ranking-card-header">
-            <div class="ranking-icon icon-orange">🔥</div>
+            <div class="ranking-icon icon-orange"></div>
             <div>
               <h3>Mais Leads Qualificados (MQL)</h3>
               <p>Top campanhas por perfil ideal</p>
@@ -514,7 +514,7 @@
         <!-- Card 4: Top Downsell -->
         <div class="ranking-card glass-card">
           <div class="ranking-card-header">
-            <div class="ranking-icon icon-pink">🔄</div>
+            <div class="ranking-icon icon-pink"></div>
             <div>
               <h3>Mais Leads em Downsell</h3>
               <p>Top campanhas com leads desqualificados</p>
@@ -528,7 +528,7 @@
         <!-- Card 5: Top Agendadas -->
         <div class="ranking-card glass-card">
           <div class="ranking-card-header">
-            <div class="ranking-icon icon-purple">📅</div>
+            <div class="ranking-icon icon-purple"></div>
             <div>
               <h3>Mais Reuniões Agendadas</h3>
               <p>Top campanhas marcadas no SDR</p>
@@ -542,7 +542,7 @@
         <!-- Card 6: Top Realizadas -->
         <div class="ranking-card glass-card">
           <div class="ranking-card-header">
-            <div class="ranking-icon icon-green">🤝</div>
+            <div class="ranking-icon icon-green"></div>
             <div>
               <h3>Mais Reuniões Realizadas</h3>
               <p>Top campanhas com presença de closer</p>
@@ -655,7 +655,7 @@
       <!-- SDR & Closer Performance Section -->
       <section class="sdr-closer-section glass-card" id="sdrCloserSection" style="margin-top: 1.5rem;">
         <div class="section-header">
-          <h2>🎯 Desempenho por SDR & Closer</h2>
+          <h2>Desempenho por SDR & Closer</h2>
           <p>Mapeamento de leads atribuídos, reuniões agendadas/realizadas, conversão e faturamento por SDR e Closer</p>
         </div>
 
@@ -663,7 +663,7 @@
           <!-- SDR Table Card -->
           <div class="sdr-card glass-card" style="padding: 1.25rem;">
             <div class="media-paga-header" style="margin-bottom: 0.8rem;">
-              <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--text-main);">📞 SDRs (Pré-Vendas / Agendamento)</h3>
+              <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--text-main);">SDRs (Pré-Vendas / Agendamento)</h3>
             </div>
             <div class="table-responsive">
               <table class="media-paga-table">
@@ -687,7 +687,7 @@
           <!-- Closer Table Card -->
           <div class="closer-card glass-card" style="padding: 1.25rem;">
             <div class="media-paga-header" style="margin-bottom: 0.8rem;">
-              <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--text-main);">🤝 Closers (Reunião / Fechamento)</h3>
+              <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--text-main);">Closers (Reunião / Fechamento)</h3>
             </div>
             <div class="table-responsive">
               <table class="media-paga-table">
@@ -718,7 +718,7 @@
       <section class="section-header-banner glass-card" style="padding: 1.5rem 2rem; margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
         <div>
           <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
-            <span style="font-size: 1.5rem;">🎯</span>
+            <span style="font-size: 1.5rem;"></span>
             <h2 style="font-size: 1.35rem; font-weight: 800; color: var(--text-main); margin: 0;">Painel Executivo: Tráfego × Comercial</h2>
           </div>
           <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Acompanhamento semanal de Meta vs Realizado, CAC, CPL, ROAS e Criativos Campeões.</p>
@@ -728,22 +728,22 @@
             <!-- opções geradas por popularMesesTrafego() no app.js -->
           </select>
           <button id="btnSaveTrafficGoals" class="btn btn-outline" style="font-size: 0.8rem; font-weight: 700; padding: 0.45rem 1rem; border-radius: 10px; background: rgba(37,99,235,0.08); color: #2563eb; border: 1px solid rgba(37,99,235,0.3); cursor: pointer;">
-            💾 Salvar Metas
+            Salvar Metas
           </button>
         </div>
       <!-- Product / Funnel Sub-Navigation Bar -->
       <div class="pipeline-navigation-tabs glass-card" id="trafficProductNav" style="margin-bottom: 1.5rem;">
         <button class="traffic-funnel-btn active" data-traffic-funnel="mlfp">
           <span class="tab-dot dot-mlfp"></span>
-          🔵 Mentoria [MLFP]
+          Mentoria [MLFP]
         </button>
         <button class="traffic-funnel-btn" data-traffic-funnel="komando">
           <span class="tab-dot dot-ko"></span>
-          🔴 Komando [KO]
+          Komando [KO]
         </button>
         <button class="traffic-funnel-btn" data-traffic-funnel="kor">
           <span class="tab-dot" style="background:#a855f7;"></span>
-          🔄 KOR Inbound
+          KOR Inbound
         </button>
       </div>
 
@@ -751,11 +751,11 @@
       <div class="table-card glass-card" style="margin-bottom: 2rem;">
         <div class="table-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
           <div>
-            <h2 style="font-size: 1.15rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.2rem;">📊 Resultado Semanal & Mensal Inbound</h2>
+            <h2 style="font-size: 1.15rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.2rem;">Resultado Semanal & Mensal Inbound</h2>
             <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">Investimento no Meta Ads cruzado com os resultados comerciais de cada semana.</p>
             <p id="trafficGoalsSource" style="font-size: 0.75rem; color: #2563eb; font-weight: 600; margin: 0.25rem 0 0;" hidden></p>
           </div>
-          <span class="badge" style="background: rgba(16,185,129,0.12); color: #059669; font-weight: 800; font-size: 0.75rem; padding: 0.3rem 0.75rem; border-radius: 20px;">Atualização Automática em Tempo Real</span>
+          <span class="badge" style="background: rgba(16,185,129,0.12); color: #059669; font-weight: 800; font-size: 0.75rem; padding: 0.3rem 0.75rem; border-radius: 20px;">Atualizado automaticamente</span>
         </div>
         <div class="table-responsive">
           <table class="data-table traffic-weekly-table" id="trafficWeeklyTable">
@@ -796,7 +796,7 @@
       <!-- 2. Quadro de Criativos Campeões -->
       <div class="table-card glass-card" style="margin-bottom: 2rem;">
         <div class="table-header" style="margin-bottom: 1rem;">
-          <h2 style="font-size: 1.15rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.2rem;">🏆 Quadro de Criativos Campeões</h2>
+          <h2 style="font-size: 1.15rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.2rem;">Quadro de Criativos Campeões</h2>
           <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">Performance detalhada por criativo, custo por lead e plano de melhorias de copy/design.</p>
         </div>
         <div class="table-responsive">
@@ -824,7 +824,7 @@
       <!-- 3. Investimento x Faturado Mensal -->
       <div class="table-card glass-card">
         <div class="table-header" style="margin-bottom: 1rem;">
-          <h2 style="font-size: 1.15rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.2rem;">📈 Investimento × Faturamento Anual (Mês a Mês)</h2>
+          <h2 style="font-size: 1.15rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.2rem;">Investimento × Faturamento Anual (Mês a Mês)</h2>
           <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">Histórico e evolução do retorno sobre o investimento (ROAS) ao longo do ano.</p>
         </div>
         <div class="table-responsive">
@@ -833,7 +833,7 @@
               <tr>
                 <th>Mês</th>
                 <th class="text-center">Valor Investido (Meta Ads)</th>
-                <th class="text-center">Valor Faturado (Vendas)</th>
+                <th class="text-center">Receita Ganha (Vendas)</th>
                 <th class="text-center">ROAS</th>
                 <th class="text-center">Eficiência</th>
               </tr>
@@ -1018,7 +1018,7 @@
     <div id="pagesMainTabContent" class="main-tab-content">
         <div class="pages-header">
             <h2 class="section-title" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-              🎬 Páginas, VSL & Teste A/B
+              Páginas, VSL & Teste A/B
             </h2>
             <div class="pages-date-pills" id="pagesDatePills">
                 <button class="pill-btn active" data-period="today">Hoje</button>
@@ -1031,8 +1031,8 @@
 
         <!-- Sub-Tabs Navigation (Komando vs Outras Páginas) -->
         <div class="pages-subnav-bar" id="pagesSubnavBar">
-            <button class="pages-subnav-btn active" data-subtab="komando">👑 Komando (VSL, Teste A/B & UTMs)</button>
-            <button class="pages-subnav-btn" data-subtab="ecosystem">🌐 Outras Páginas (MLFP e KOR)</button>
+            <button class="pages-subnav-btn active" data-subtab="komando">Komando (VSL, Teste A/B & UTMs)</button>
+            <button class="pages-subnav-btn" data-subtab="ecosystem">Outras Páginas (MLFP e KOR)</button>
         </div>
 
         <!-- SUBTAB 1: KOMANDO VSL & TESTE A/B -->
@@ -1040,7 +1040,7 @@
             <!-- Komando Live & Top KPIs -->
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
                 <h3 style="font-family: var(--font-heading); font-size: 1.1rem; font-weight: 700; color: var(--text-main); margin: 0;">
-                  👑 Consultoria Komando (<a href="https://consultoriakomando.com.br" target="_blank" rel="noopener" style="color: #2563eb; text-decoration: none;">consultoriakomando.com.br</a>)
+                  Consultoria Komando (<a href="https://consultoriakomando.com.br" target="_blank" rel="noopener" style="color: #2563eb; text-decoration: none;">consultoriakomando.com.br</a>)
                 </h3>
                 <span class="live-pill" style="display: inline-flex; align-items: center; gap: 6px; background: rgba(239, 68, 68, 0.12); color: #dc2626; padding: 4px 12px; border-radius: 20px; font-size: 0.78rem; font-weight: 800; border: 1px solid rgba(239, 68, 68, 0.25);">
                     <span style="width: 8px; height: 8px; background: #ef4444; border-radius: 50%; box-shadow: 0 0 8px #ef4444;"></span>
@@ -1050,7 +1050,7 @@
 
             <!-- VTurb Player Detail -->
             <div class="pages-table-card" style="margin-bottom: 1.5rem;">
-                <h3 class="pages-chart-title">🎬 Player VSL Oficial (VTurb Analytics)</h3>
+                <h3 class="pages-chart-title">Player VSL Oficial (VTurb Analytics)</h3>
                 <div class="table-responsive">
                     <table class="data-table">
                         <thead>
@@ -1094,7 +1094,7 @@
             <div class="pages-table-card" style="margin-bottom: 1.5rem;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
                     <div>
-                        <h3 class="pages-chart-title" style="margin-bottom: 0.2rem;">🧪 Comparativo de Variações A/B (Komando)</h3>
+                        <h3 class="pages-chart-title" style="margin-bottom: 0.2rem;">Comparativo de Variações A/B (Komando)</h3>
                         <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">Cruzamento automático: Acessos da página × Leads taggeados no CRM (Campo 494249 / Tags AB_1 a AB_6)</p>
                     </div>
                 </div>
@@ -1117,7 +1117,7 @@
 
             <!-- UTM Sources Table -->
             <div class="pages-table-card">
-                <h3 class="pages-chart-title">🔍 Origens de Tráfego & Campanhas (Komando)</h3>
+                <h3 class="pages-chart-title">Origens de Tráfego & Campanhas (Komando)</h3>
                 <div class="table-responsive">
                     <table class="data-table">
                         <thead>
@@ -1138,12 +1138,12 @@
             <!-- Product KPI Cards Grid -->
             <div class="ecosystem-product-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
                 <div class="pages-kpi-card" style="border-left: 4px solid #3b82f6;">
-                    <div class="pages-kpi-label">🎓 Mentoria Líder Faixa Preta</div>
+                    <div class="pages-kpi-label">Mentoria Líder Faixa Preta</div>
                     <div class="pages-kpi-value" id="ecoMetricMlfp" style="color: #2563eb;">—</div>
                     <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">chefkaka.com · Funil [MLFP] Inbound</div>
                 </div>
                 <div class="pages-kpi-card" style="border-left: 4px solid #8b5cf6;">
-                    <div class="pages-kpi-label">🔄 KOR Inbound / Downsell</div>
+                    <div class="pages-kpi-label">KOR Inbound / Downsell</div>
                     <div class="pages-kpi-value" id="ecoMetricKor" style="color: #7c3aed;">—</div>
                     <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">chefkakagomes.com/kor · Funil [KOR] Inbound</div>
                 </div>
@@ -1153,7 +1153,7 @@
             <div class="pages-table-card" style="margin-bottom: 1.5rem;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.5rem;">
                     <div>
-                        <h3 class="pages-chart-title" style="margin-bottom: 0.25rem;">🌐 Desempenho dos Funis & Páginas do Ecossistema</h3>
+                        <h3 class="pages-chart-title" style="margin-bottom: 0.25rem;">Desempenho dos Funis & Páginas do Ecossistema</h3>
                         <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">Volume de captação e performance comercial integrados ao Kommo CRM.</p>
                     </div>
                 </div>
@@ -1182,10 +1182,10 @@
             <div class="pages-table-card" style="margin-bottom: 1.5rem;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.5rem;">
                     <div>
-                        <h3 class="pages-chart-title" style="margin-bottom: 0.25rem;">📊 Tráfego Web & Conversão por Página (Google Analytics 4)</h3>
+                        <h3 class="pages-chart-title" style="margin-bottom: 0.25rem;">Tráfego Web & Conversão por Página (Google Analytics 4)</h3>
                         <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">Sessões e visitantes únicos medidos via GA4 cruzados com os leads do Kommo CRM.</p>
                     </div>
-                    <span class="badge" style="background:rgba(16,185,129,0.12); color:#059669; font-weight:800; font-size:0.75rem; padding:0.35rem 0.75rem; border-radius:20px;">🟢 GA4 Conectado (ID: 436068393)</span>
+                    <span class="badge" style="background:rgba(16,185,129,0.12); color:#059669; font-weight:800; font-size:0.75rem; padding:0.35rem 0.75rem; border-radius:20px;">GA4 Conectado (ID: 436068393)</span>
                 </div>
                 <div class="table-responsive">
                     <table class="data-table">
@@ -1232,7 +1232,7 @@
   <!-- Toast Notification Banner -->
   <div id="toastNotification" class="toast glass-card">
     <div class="toast-content">
-      <span id="toastIcon">ℹ️</span>
+      <span id="toastIcon"></span>
       <span id="toastMsg">Mensagem informativa</span>
     </div>
   </div>
@@ -1251,7 +1251,7 @@
     <div class="modal-dialog glass-card">
       <div class="modal-header">
         <div class="modal-title-group">
-          <span class="modal-badge-icon" id="modalStepIcon">🔥</span>
+          <span class="modal-badge-icon" id="modalStepIcon"></span>
           <div>
             <h2 id="modalStepTitle">Leads na Etapa — Qualificados MQL</h2>
             <p id="modalStepSubtitle">Exibindo leads individuais correspondentes a esta etapa do funil</p>
@@ -1308,7 +1308,7 @@
   <!-- Floating AI Assistant Trigger -->
   <div class="ai-fab-container" id="aiFabContainer">
     <button class="ai-fab-btn" id="aiFabBtn" title="Abrir o Cérebro da Operação">
-      <span class="ai-fab-icon">🧠</span>
+      <span class="ai-fab-icon"></span>
       <span class="ai-fab-label">Cérebro da Operação</span>
       <span class="ai-fab-pulse"></span>
     </button>
@@ -1321,7 +1321,7 @@
     <div class="ai-drawer-header">
       <div class="ai-drawer-title-group">
         <div class="ai-avatar-badge">
-          <span>✨</span>
+          <span></span>
         </div>
         <div>
           <h3>Cérebro da Operação</h3>
@@ -1342,19 +1342,19 @@
     <div class="ai-chips-wrapper" id="aiChipsWrapper">
       <div class="ai-chips-scroll">
         <button class="ai-chip-btn" data-query="Resumo executivo do mês atual: leads, vendas, faturamento e ROAS">
-          📊 Resumo do Mês
+          Resumo do Mês
         </button>
         <button class="ai-chip-btn" data-query="Quantos leads MQL entraram na Komando esta semana e quais seus faturamentos?">
-          🔥 MQLs da Komando
+          MQLs da Komando
         </button>
         <button class="ai-chip-btn" data-query="Qual o desempenho das campanhas de Meta Ads este mês por produto?">
-          🎯 Meta Ads & ROAS
+          Meta Ads & ROAS
         </button>
         <button class="ai-chip-btn" data-query="Quais são os maiores gargalos e desafios citados pelos leads no formulário?">
-          🚧 Gargalos dos Leads
+          Gargalos dos Leads
         </button>
         <button class="ai-chip-btn" data-query="Quantas vendas o KOR fez este mês e como está contra a meta de 2 vendas por dia?">
-          💳 KOR contra a meta
+          KOR contra a meta
         </button>
       </div>
     </div>
@@ -1362,11 +1362,11 @@
     <!-- Chat Messages Container -->
     <div class="ai-messages-container" id="aiMessagesContainer">
       <div class="ai-message ai-message-system">
-        <div class="ai-msg-avatar">✨</div>
+        <div class="ai-msg-avatar"></div>
         <div class="ai-msg-bubble">
           <p>Olá! Sou o <strong>Cérebro da Operação</strong>.</p>
           <p>Respondo com os dados reais do Meta Ads, do Kommo e da Eduzz: metas, tráfego, leads, reuniões e vendas de cada produto.</p>
-          <p class="ai-tip">💡 <em>Você pode clicar em uma das sugestões acima ou fazer qualquer pergunta sobre o negócio.</em></p>
+          <p class="ai-tip"><em>Você pode clicar em uma das sugestões acima ou fazer qualquer pergunta sobre o negócio.</em></p>
         </div>
       </div>
     </div>
@@ -1385,7 +1385,7 @@
         </button>
       </form>
       <div class="ai-footer-note">
-        <span>Alimentado por Kommo CRM, Meta Ads & Eduzz Data Engine</span>
+        <span>Dados: Kommo, Meta Ads e Eduzz</span>
       </div>
     </div>
   </aside>
