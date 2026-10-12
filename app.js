@@ -3912,33 +3912,35 @@ const METAS_DOCUMENTO = {
   }
 };
 
-// KOR: meta por retorno, gerada para todo mês a partir de out/2026.
-// Mínima = ROAS 2x, supermeta = ROAS 4x, sobre a verba planejada de R$ 100/dia
-// (orçamento da campanha 01 - [VENDA] [KOR]). Vendas = receita ÷ ticket do Kit,
-// arredondado para cima. Se a verba mudar, muda ORCAMENTO_DIARIO_KOR.
+// KOR: meta por vendas por dia, gerada para todo mês a partir de out/2026.
+// Mínima = 2 vendas/dia, supermeta = 3 vendas/dia (a meta por ROAS 2x/4x ficou
+// longe demais da realidade: 67 e 129 vendas no mês). Verba planejada de
+// R$ 100/dia (orçamento da campanha 01 - [VENDA] [KOR]); receita = vendas ×
+// ticket do Kit. Se a verba mudar, muda ORCAMENTO_DIARIO_KOR.
 const ORCAMENTO_DIARIO_KOR = 100;
 const TICKET_KOR = 97;
+const VENDAS_DIA_KOR = { minima: 2, supermeta: 3 };
 
 function metasKorDoMes(mes) {
   if (mes < '2026-10') return null;
   const [ano, m] = mes.split('-').map(Number);
   const dias = [5, 7, 7, 7, new Date(ano, m, 0).getDate() - 26];
   const investimento = dias.map(d => d * ORCAMENTO_DIARIO_KOR);
-  const montar = roas => {
-    const faturamento = investimento.map(v => v * roas);
-    const vendas = faturamento.map(f => Math.ceil(f / TICKET_KOR));
+  const montar = vendasDia => {
+    const vendas = dias.map(d => d * vendasDia);
+    const faturamento = vendas.map(v => v * TICKET_KOR);
     return {
       investimento, faturamento, vendas,
-      roas: investimento.map(() => roas),
+      roas: investimento.map((v, i) => Math.round((faturamento[i] / v) * 100) / 100),
       cac: investimento.map((v, i) => Math.round((v / vendas[i]) * 100) / 100),
       ticketMedio: investimento.map(() => TICKET_KOR)
     };
   };
   return {
-    versao: `kor-roas-2x-4x-${mes}`,
-    fonte: 'meta do KOR: ROAS 2x (mínima) e 4x (supermeta) sobre R$ 100/dia de verba',
-    metas: montar(2),
-    supermetas: montar(4)
+    versao: `kor-vendas-2-3-dia-${mes}`,
+    fonte: 'meta do KOR: 2 vendas por dia (mínima) e 3 por dia (supermeta), com R$ 100/dia de verba',
+    metas: montar(VENDAS_DIA_KOR.minima),
+    supermetas: montar(VENDAS_DIA_KOR.supermeta)
   };
 }
 

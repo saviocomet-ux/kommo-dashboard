@@ -5710,7 +5710,7 @@ const SISTEMA_ASSISTENTE = `Você é o assistente de dados do painel comercial e
 Produtos (independentes; nunca some KOP ou KOR ao Komando):
 - Mentoria MLFP: captação por lead na landing page; MQL = renda ou faturamento a partir de R$ 3 mil com cargo qualificado; vende em reunião com closer. Downsell: Kit de Liderança (R$ 97) e mentoria gravada (R$ 997).
 - Komando (consultoria): captação por lead; MQL = dono/sócio/CEO/diretor com faturamento a partir de R$ 100 mil; vende em reunião. "Fase 2" e renovações são de clientes que já existiam e ficam fora do ROAS de tráfego.
-- KOR (Kit de Operação de Restaurantes, R$ 97): venda direta no checkout da Eduzz; o custo que importa é por venda (CAC), não por lead. Meta por retorno: ROAS 2x é a meta mínima e 4x a supermeta.
+- KOR (Kit de Operação de Restaurantes, R$ 97): venda direta no checkout da Eduzz; o custo que importa é por venda (CAC), não por lead. Meta: 2 vendas por dia é a meta mínima e 3 por dia a supermeta, com R$ 100 por dia de verba.
 - KOP e Ebooks não são mais acompanhados no painel; só fale deles se perguntarem.
 - Conteúdo: campanhas de views e seguidores, fora de CPL e ROAS.
 
