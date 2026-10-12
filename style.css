@@ -3365,3 +3365,108 @@ tr:hover td {
 
 
 
+
+/* ============================================================
+   CÉREBRO DA OPERAÇÃO (primeira barra do painel)
+   ============================================================ */
+.cerebro-bar {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.6fr);
+  gap: 0.75rem 1.5rem;
+  align-items: center;
+  padding: 1.1rem 1.5rem;
+  margin-bottom: 1.25rem;
+  border: 1.5px solid rgba(255, 107, 0, 0.25);
+  background: linear-gradient(120deg, rgba(255, 247, 240, 0.95), rgba(255, 255, 255, 0.9));
+}
+.cerebro-identidade { display: flex; align-items: center; gap: 0.85rem; }
+.cerebro-icone {
+  font-size: 1.6rem; line-height: 1;
+  width: 48px; height: 48px; border-radius: 14px;
+  display: grid; place-items: center;
+  background: var(--color-primary-glow);
+}
+.cerebro-identidade h2 { font-family: var(--font-heading); font-size: 1.15rem; font-weight: 800; color: var(--text-main); margin: 0; }
+.cerebro-identidade p { font-size: 0.8rem; color: var(--text-muted); margin: 0.15rem 0 0; }
+.cerebro-form { display: flex; gap: 0.5rem; }
+.cerebro-form input {
+  flex: 1; min-width: 0;
+  padding: 0.7rem 1rem;
+  border: 1.5px solid #e2e8f0; border-radius: 12px;
+  font: inherit; font-size: 0.9rem; color: var(--text-main);
+  background: #fff;
+}
+.cerebro-form input:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-glow); }
+.cerebro-enviar {
+  padding: 0.7rem 1.2rem; border: none; border-radius: 12px;
+  background: var(--color-primary); color: #fff; font-weight: 700; font-size: 0.88rem;
+  cursor: pointer; transition: var(--transition-smooth);
+}
+.cerebro-enviar:hover { background: var(--color-primary-hover); }
+.cerebro-sugestoes { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.cerebro-sugestao {
+  padding: 0.35rem 0.75rem; border-radius: 999px;
+  border: 1px solid rgba(255, 107, 0, 0.25); background: #fff;
+  font-size: 0.78rem; font-weight: 600; color: var(--text-body); cursor: pointer;
+  transition: var(--transition-smooth);
+}
+.cerebro-sugestao:hover { border-color: var(--color-primary); color: var(--color-primary); }
+
+/* ============================================================
+   PROGRESSO DA META (Visão Geral)
+   ============================================================ */
+.meta-progresso-card { padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; }
+.meta-progresso-card:empty { display: none; }
+.meta-cabecalho { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+.meta-cabecalho h2 { font-family: var(--font-heading); font-size: 1.1rem; font-weight: 800; color: var(--text-main); margin: 0; }
+.meta-cabecalho p { font-size: 0.82rem; color: var(--text-muted); margin: 0.2rem 0 0; }
+.meta-modo { display: inline-flex; background: var(--bg-secondary); border-radius: 10px; padding: 3px; }
+.meta-modo-btn {
+  border: none; background: transparent; padding: 0.35rem 0.9rem; border-radius: 8px;
+  font-size: 0.8rem; font-weight: 700; color: var(--text-muted); cursor: pointer;
+}
+.meta-modo-btn.active { background: #fff; color: var(--color-primary); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
+.meta-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1rem 1.5rem; margin-top: 1.1rem; }
+.meta-linha-topo, .meta-linha-base { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+.meta-rotulo { font-size: 0.82rem; font-weight: 700; color: var(--text-body); }
+.meta-valores { font-size: 0.8rem; color: var(--text-muted); }
+.meta-valores strong { color: var(--text-main); font-size: 0.92rem; }
+.meta-trilha { position: relative; height: 10px; border-radius: 999px; background: #eef2f6; margin: 0.4rem 0 0.3rem; overflow: visible; }
+.meta-preenchimento { height: 100%; border-radius: 999px; transition: width 0.6s ease; }
+.meta-ok { background: var(--color-success); }
+.meta-atencao { background: var(--color-warning); }
+.meta-abaixo { background: var(--color-danger); }
+.meta-neutro { background: #94a3b8; }
+.meta-marcador { position: absolute; top: -3px; width: 2px; height: 16px; background: var(--text-main); border-radius: 1px; transform: translateX(-1px); }
+.meta-linha-base { font-size: 0.74rem; color: var(--text-muted); }
+.meta-status { font-weight: 700; }
+.meta-status-ok { color: #047857; }
+.meta-status-atencao { color: #b45309; }
+.meta-status-abaixo { color: #b91c1c; }
+.meta-status-neutro { color: var(--text-muted); }
+.meta-rodape { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 1.5rem; margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--glass-border); font-size: 0.76rem; color: var(--text-muted); }
+.meta-rodape strong { color: var(--text-main); }
+.meta-vazia { font-size: 0.85rem; color: var(--text-muted); margin: 0.75rem 0 0; }
+.meta-carregando { height: 90px; margin-top: 1rem; border-radius: 12px; background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%); background-size: 200% 100%; animation: metaBrilho 1.4s infinite; }
+@keyframes metaBrilho { to { background-position: -200% 0; } }
+
+@media (max-width: 768px) {
+  .cerebro-bar { grid-template-columns: 1fr; padding: 1rem; }
+  .cerebro-form { flex-direction: column; }
+  .meta-progresso-card { padding: 1rem; }
+}
+
+/* Social Selling: novos contatos por perfil */
+.social-resumo { display: grid; grid-template-columns: minmax(180px, 0.6fr) 2fr; gap: 1.25rem; margin-top: 1rem; align-items: center; }
+.social-total strong { display: block; font-family: var(--font-heading); font-size: 2.2rem; font-weight: 800; color: var(--text-main); line-height: 1; }
+.social-total span { display: block; font-size: 0.85rem; font-weight: 700; color: var(--text-body); margin-top: 0.3rem; }
+.social-total small { display: block; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem; }
+.social-perfis { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 0.75rem; }
+.social-perfil { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.7rem 0.8rem; border-radius: 12px; background: var(--bg-secondary); }
+.social-perfil-cor { width: 10px; height: 10px; border-radius: 50%; margin-top: 0.4rem; flex: none; }
+.social-perfil strong { display: block; font-size: 1.25rem; font-weight: 800; color: var(--text-main); line-height: 1.1; }
+.social-perfil span { display: block; font-size: 0.8rem; font-weight: 700; color: var(--text-body); }
+.social-perfil small { display: block; font-size: 0.72rem; color: var(--text-muted); margin-top: 0.15rem; }
+.social-barra { display: flex; height: 12px; border-radius: 999px; overflow: hidden; margin-top: 1rem; background: #eef2f6; }
+.social-barra > div { height: 100%; }
+@media (max-width: 768px) { .social-resumo { grid-template-columns: 1fr; } }

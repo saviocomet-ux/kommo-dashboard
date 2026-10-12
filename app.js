@@ -7,8 +7,10 @@ const state = {
   filteredLeads: [],
   // Active filters
   // Precisa bater com a aba marcada como .active no index.html,
-  // senão o dashboard abre mostrando um funil diferente do botão aceso
-  pipelineId: 'all',
+  // senão o dashboard abre mostrando um funil diferente do botão aceso.
+  // Não existe mais "Todos os Funis": cada produto é visto separado.
+  pipelineId: '13304583',
+  selectedMediaTab: 'mlfp',
   dateFrom: null, // Date object
   dateTo: null,   // Date object
   activePeriod: 'this_month', // tracks which pill is active
@@ -706,21 +708,6 @@ function setupEventListeners() {
     });
   });
 
-  // Telemetry MLFP card clicks to open modal
-  const bindTelClick = (cardId, stepKey) => {
-    const card = document.getElementById(cardId);
-    if (card) {
-      card.addEventListener('click', () => {
-        state.selectedStep = stepKey;
-        openLeadModal(stepKey);
-      });
-    }
-  };
-  bindTelClick('cardTelParouAutomacao', 'tel_automacao');
-  bindTelClick('cardTelHumano', 'tel_humano');
-  bindTelClick('cardTelDownsell', 'tel_downsell');
-  bindTelClick('cardTelSemResposta', 'tel_sem_resposta');
-
   // Modal Close & Search Listeners
   const closeBtn = document.getElementById('closeModalBtn');
   if (closeBtn) closeBtn.onclick = closeLeadModal;
@@ -854,7 +841,7 @@ async function loadData() {
 // Populate Filter Dropdowns
 function populateFilters() {
   // 1. Populate Pipelines
-  elements.pipelineFilter.innerHTML = '<option value="all">Todos os Funis</option>';
+  elements.pipelineFilter.innerHTML = '';
   const pipelinesList = state.pipelines._embedded?.pipelines || [];
   pipelinesList.forEach(p => {
     const option = document.createElement('option');
@@ -862,6 +849,7 @@ function populateFilters() {
     option.textContent = p.name;
     elements.pipelineFilter.appendChild(option);
   });
+  elements.pipelineFilter.value = state.pipelineId;
 
   // 2. Populate Owners
   elements.ownerFilter.innerHTML = '<option value="all">Todo o Time</option>';
@@ -1051,7 +1039,7 @@ function applyFilters() {
   // Calculate funnel step counts on base filtered set
   const baseFiltered = [...filtered];
   updateGraphicFunnel(baseFiltered);
-  renderMlfpTelemetry(baseFiltered);
+  renderProgressoMeta(baseFiltered);
   renderCampaignRankings(baseFiltered);
 
   // 4. Step Filter (if user clicked on a specific funnel stage layer)
@@ -1261,101 +1249,6 @@ function updateGraphicFunnel(baseLeads = state.filteredLeads) {
 }
 
 // Render Telemetria de Atendimento MLFP (Taxa de Resposta, Automação vs Atendimento Humano)
-function renderMlfpTelemetry(baseLeads = state.filteredLeads) {
-  const section = document.getElementById('mlfpTelemetrySection');
-  if (!section) return;
-
-  // Só no funil MLFP Inbound. Na visão "Todos os Funis" ela abria a página com
-  // números de um único funil (91 entradas) logo acima do funil consolidado
-  // (124), e os dois pareciam contradizer-se.
-  const isMlfpSelected = String(state.pipelineId) === String(PIPELINES.MLFP);
-
-  if (!isMlfpSelected) {
-    section.style.display = 'none';
-    return;
-  }
-
-  // Filtrar estritamente leads MLFP Inbound (desconsiderando repescagem e testes)
-  const mlfpLeads = (baseLeads || []).filter(l => l.pipeline_id === PIPELINES.MLFP && !isRepescagemLead(l) && !isTestLead(l));
-
-  section.style.display = 'block';
-
-  let countHumano = 0;
-  let countAutomacao = 0;
-  let countDownsell = 0;
-  let countSemResp = 0;
-
-  mlfpLeads.forEach(lead => {
-    const e = FUNNEL.evaluate(lead);
-    if (e.isChegouHumano) {
-      countHumano++;
-    } else if (e.isDownsellDireto || (e.isDownsell && !e.isParouAutomacao)) {
-      countDownsell++;
-    } else if (e.isParouAutomacao) {
-      countAutomacao++;
-    } else {
-      countSemResp++;
-    }
-  });
-
-  const total = mlfpLeads.length;
-  const responderam = countHumano + countAutomacao;
-  const abordados = total - countDownsell;
-  const txRespGeral = total > 0 ? ((responderam / total) * 100).toFixed(1) : '0.0';
-  const txRespAbordados = abordados > 0 ? ((responderam / abordados) * 100).toFixed(1) : '0.0';
-  const pctHumano = total > 0 ? ((countHumano / total) * 100).toFixed(1) : '0.0';
-  const pctAutomacao = total > 0 ? ((countAutomacao / total) * 100).toFixed(1) : '0.0';
-  const pctDownsell = total > 0 ? ((countDownsell / total) * 100).toFixed(1) : '0.0';
-  const pctSemResp = total > 0 ? ((countSemResp / total) * 100).toFixed(1) : '0.0';
-  const pctHumanoDasRespostas = responderam > 0 ? ((countHumano / responderam) * 100).toFixed(1) : '0.0';
-  const pctAutoDasRespostas = responderam > 0 ? ((countAutomacao / responderam) * 100).toFixed(1) : '0.0';
-
-  const setTxt = (id, txt) => {
-    const el = document.getElementById(id);
-    if (el) el.innerText = txt;
-  };
-
-  setTxt('telTaxaResp', `${txRespGeral}%`);
-  setTxt('telTaxaRespSub', `${responderam.toLocaleString('pt-BR')} responderam (${txRespAbordados}% dos MQLs abordados)`);
-
-  setTxt('telParouAutomacao', countAutomacao.toLocaleString('pt-BR'));
-  setTxt('telParouAutomacaoSub', `${pctAutomacao}% do total (${pctAutoDasRespostas}% das respostas)`);
-
-  setTxt('telHumano', countHumano.toLocaleString('pt-BR'));
-  setTxt('telHumanoSub', `${pctHumano}% do total (${pctHumanoDasRespostas}% das respostas)`);
-
-  setTxt('telDownsell', countDownsell.toLocaleString('pt-BR'));
-  setTxt('telDownsellSub', `${pctDownsell}% do total (auxiliares / quiz)`);
-
-  setTxt('telSemResposta', countSemResp.toLocaleString('pt-BR'));
-  setTxt('telSemRespostaSub', `${pctSemResp}% silenciosos`);
-
-  // Update progress bars
-  const setBarWidth = (id, pct) => {
-    const el = document.getElementById(id);
-    if (el) el.style.width = `${pct}%`;
-  };
-  setBarWidth('barTelHumano', pctHumano);
-  setBarWidth('barTelAutomacao', pctAutomacao);
-  setBarWidth('barTelSemResp', pctSemResp);
-  setBarWidth('barTelDownsell', pctDownsell);
-
-  setTxt('telConversionFlowSummary', `100% Entrada (${total.toLocaleString('pt-BR')}) ➔ ${txRespGeral}% Resposta (${responderam.toLocaleString('pt-BR')}) ➔ ${pctHumano}% Humano (${countHumano.toLocaleString('pt-BR')})`);
-
-  // Update period badge
-  const periodBadge = document.getElementById('telemetryPeriodBadge');
-  if (periodBadge) {
-    const activePill = document.querySelector('#datePills .pill-btn.active');
-    if (activePill && activePill.getAttribute('data-period') !== 'custom') {
-      periodBadge.innerText = `🗓️ Período: ${activePill.innerText.trim()}`;
-    } else if (state.dateFrom && state.dateTo) {
-      periodBadge.innerText = `🗓️ ${state.dateFrom.toLocaleDateString('pt-BR')} até ${state.dateTo.toLocaleDateString('pt-BR')}`;
-    } else {
-      periodBadge.innerText = '🗓️ Todo o Período';
-    }
-  }
-}
-
 if (!state.rankingType) state.rankingType = 'campaign';
 
 function switchRankingType(type) {
@@ -2988,7 +2881,7 @@ function renderMediaPaga(metaData) {
   }
 
   // Build metrics for each funnel
-  const funnelOrder = ['mlfp', 'komando', 'kop', 'kor', 'recuperacao', 'ebook', 'engajamento', 'outros'];
+  const funnelOrder = ['mlfp', 'komando', 'kor', 'recuperacao', 'engajamento', 'outros'];
   const funnelMetrics = {};
   let totalSpend = 0, totalImpressions = 0, totalClicks = 0;
   let totalKommoLeads = 0, totalMQLs = 0, totalWonRevenue = 0;
@@ -3474,22 +3367,6 @@ function renderEcosystemTable() {
       kpiElId: 'ecoMetricMlfp'
     },
     {
-      id: 'ebooks',
-      name: '📚 Ebooks & Iscas Digitais',
-      url: 'consultoriakomando.com.br/ebooks',
-      pipelineId: 13537971,
-      pipelineName: '[KO] Ebooks',
-      kpiElId: 'ecoMetricEbooks'
-    },
-    {
-      id: 'kop',
-      name: '⚙️ KOP Komando Operação',
-      url: 'chefkakagomes.com/kop',
-      pipelineId: 14173256,
-      pipelineName: '[KOP] Inbound',
-      kpiElId: 'ecoMetricKop'
-    },
-    {
       id: 'kor',
       name: '🔄 KOR Inbound / Downsell',
       url: 'chefkakagomes.com/kor',
@@ -3902,7 +3779,7 @@ function switchMainTab(tabName) {
 //  PAINEL EXECUTIVO TRÁFEGO X COMERCIAL
 // ============================================================
 
-let activeTrafficFunnel = 'all';
+let activeTrafficFunnel = 'mlfp';
 
 const DEFAULT_TRAFFIC_GOALS_BY_FUNNEL = {
   all: {
@@ -4003,22 +3880,406 @@ const DEFAULT_TRAFFIC_GOALS_BY_FUNNEL = {
   }
 };
 
+// Metas fechadas com o comercial, por mês e funil. Têm prioridade sobre os
+// padrões acima e sobre metas salvas no navegador antes de existirem.
+// Outubro/2026 MLFP: documento "Metas da Mentoria MLFP — Outubro/2026"
+// (R$ 150/dia, CPL R$ 11, MQL 40%, 30% de agendamento, 60% de comparecimento,
+// 35% de fechamento, ticket R$ 3.000). Semanas iguais às do painel.
+const METAS_DOCUMENTO = {
+  '2026-10': {
+    mlfp: {
+      versao: 'doc-metas-mlfp-2026-10',
+      fonte: 'Metas da Mentoria MLFP — Outubro/2026',
+      metas: {
+        investimento: [750, 1050, 1050, 1050, 750],
+        leads: [68, 95, 95, 95, 67],
+        mql: [27, 38, 38, 38, 27],
+        cpl: [11.03, 11.05, 11.05, 11.05, 11.19],
+        cpmql: [27.78, 27.63, 27.63, 27.63, 27.78],
+        agendadas: [8, 12, 11, 11, 8],
+        comparecidas: [5, 7, 7, 6, 5],
+        vendas: [2, 2, 2, 2, 2],
+        faturamento: [6000, 6000, 6000, 6000, 6000],
+        noShow: [3, 5, 4, 5, 3],
+        cpa: [93.75, 87.50, 95.45, 95.45, 93.75],
+        cpr: [150.00, 150.00, 150.00, 175.00, 150.00],
+        cac: [375.00, 525.00, 525.00, 525.00, 375.00],
+        ticketMedio: [3000, 3000, 3000, 3000, 3000],
+        noShowPct: [40, 40, 40, 40, 40],
+        roas: [8.00, 5.71, 5.71, 5.71, 8.00]
+      }
+    }
+  }
+};
+
+// KOR: meta por retorno, gerada para todo mês a partir de out/2026.
+// Mínima = ROAS 2x, supermeta = ROAS 4x, sobre a verba planejada de R$ 100/dia
+// (orçamento da campanha 01 - [VENDA] [KOR]). Vendas = receita ÷ ticket do Kit,
+// arredondado para cima. Se a verba mudar, muda ORCAMENTO_DIARIO_KOR.
+const ORCAMENTO_DIARIO_KOR = 100;
+const TICKET_KOR = 97;
+
+function metasKorDoMes(mes) {
+  if (mes < '2026-10') return null;
+  const [ano, m] = mes.split('-').map(Number);
+  const dias = [5, 7, 7, 7, new Date(ano, m, 0).getDate() - 26];
+  const investimento = dias.map(d => d * ORCAMENTO_DIARIO_KOR);
+  const montar = roas => {
+    const faturamento = investimento.map(v => v * roas);
+    const vendas = faturamento.map(f => Math.ceil(f / TICKET_KOR));
+    return {
+      investimento, faturamento, vendas,
+      roas: investimento.map(() => roas),
+      cac: investimento.map((v, i) => Math.round((v / vendas[i]) * 100) / 100),
+      ticketMedio: investimento.map(() => TICKET_KOR)
+    };
+  };
+  return {
+    versao: `kor-roas-2x-4x-${mes}`,
+    fonte: 'meta do KOR: ROAS 2x (mínima) e 4x (supermeta) sobre R$ 100/dia de verba',
+    metas: montar(2),
+    supermetas: montar(4)
+  };
+}
+
+function metasDoDocumento(monthKey, funnelKey) {
+  return (METAS_DOCUMENTO[monthKey] || {})[funnelKey] || (funnelKey === 'kor' ? metasKorDoMes(monthKey) : null);
+}
+
 function getSavedTrafficGoals(monthKey, funnelKey = 'all') {
+  const doc = metasDoDocumento(monthKey, funnelKey);
   try {
     const saved = localStorage.getItem(`traffic_goals_${funnelKey}_${monthKey}`);
-    if (saved) return JSON.parse(saved);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Meta salva antes do documento fica para trás; ajustes feitos depois valem
+      if (!doc || parsed._versao === doc.versao) return parsed;
+    }
   } catch(e) {}
-  const def = DEFAULT_TRAFFIC_GOALS_BY_FUNNEL[funnelKey] || DEFAULT_TRAFFIC_GOALS_BY_FUNNEL.all;
+  const def = doc ? doc.metas : (DEFAULT_TRAFFIC_GOALS_BY_FUNNEL[funnelKey] || DEFAULT_TRAFFIC_GOALS_BY_FUNNEL.all);
   return JSON.parse(JSON.stringify(def));
 }
 
 function saveTrafficGoalsToStorage(monthKey, funnelKey, goals) {
+  const doc = metasDoDocumento(monthKey, funnelKey);
+  if (doc) goals._versao = doc.versao;
   try {
     localStorage.setItem(`traffic_goals_${funnelKey}_${monthKey}`, JSON.stringify(goals));
   } catch(e) {}
 }
 
+// Meta do mês das métricas de custo e razão sai das somas (investimento ÷ leads
+// etc.), não da média das semanas: semanas de tamanhos diferentes distorcem a média.
+const BASE_DA_META_MENSAL = {
+  cpl: ['investimento', 'leads'],
+  cpmql: ['investimento', 'mql'],
+  cpa: ['investimento', 'agendadas'],
+  cpr: ['investimento', 'comparecidas'],
+  cac: ['investimento', 'vendas'],
+  ticketMedio: ['faturamento', 'vendas'],
+  roas: ['faturamento', 'investimento'],
+  noShowPct: ['noShow', 'agendadas', 100]
+};
+
+// ============================================================
+//  PROGRESSO DA META (Visão Geral, funil selecionado)
+// ============================================================
+// Mesmo realizado e mesmas metas da aba Tráfego × Comercial. Período curto no
+// filtro de data (até 7 dias) mostra a semana do painel; período maior mostra o
+// mês. O botão Semana/Mês troca o modo até o filtro de data mudar de novo.
+// KOP e Ebooks saíram do painel (sem investimento nem acompanhamento)
+const PIPELINE_PARA_PRODUTO = { '13304583': 'mlfp', '13304659': 'komando', '14268556': 'kor' };
+const NOME_PRODUTO_META = { mlfp: 'Mentoria MLFP', komando: 'Komando', kor: 'KOR' };
+const PIPELINE_SOCIAL_SELLING = '14104532';
+const MESES_META = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+const METRICAS_META = [
+  { key: 'investimento', label: 'Verba investida', dinheiro: true, verba: true },
+  { key: 'leads', label: 'Leads', captacao: true },
+  { key: 'mql', label: 'MQL', captacao: true },
+  { key: 'agendadas', label: 'Reuniões agendadas', captacao: true },
+  { key: 'comparecidas', label: 'Reuniões realizadas', captacao: true },
+  { key: 'vendas', label: 'Vendas' },
+  // Vendas ganhas no Kommo e pagas na Eduzz: receita ganha, ainda não faturada
+  { key: 'faturamento', label: 'Receita ganha', dinheiro: true }
+];
+let metaModoEscolhido = null; // { modo, chaveFiltro }
+let pedidoProgressoMeta = 0;
+const cacheProgressoMeta = new Map(); // "mes|produto" -> { em, data }
+
+const semanaDoDia = dia => dia <= 5 ? 0 : dia <= 12 ? 1 : dia <= 19 ? 2 : dia <= 26 ? 3 : 4;
+const chaveFiltroData = () => `${state.activePeriod}|${state.dateFrom ? state.dateFrom.getTime() : ''}|${state.dateTo ? state.dateTo.getTime() : ''}`;
+
+function modoMetaPeloFiltro() {
+  if (!state.dateFrom || !state.dateTo) return 'mes';
+  // O filtro "7D" vai de 7 dias atrás até o fim de hoje: 8 dias de calendário
+  const dias = (state.dateTo - state.dateFrom) / 86400000;
+  return dias <= 8.1 ? 'semana' : 'mes';
+}
+
+function metasDoProduto(mes, produto) {
+  const doc = metasDoDocumento(mes, produto);
+  let salvas = false;
+  try { salvas = Boolean(localStorage.getItem(`traffic_goals_${produto}_${mes}`)); } catch (e) {}
+  if (!doc && !salvas) return null;
+  return {
+    metas: getSavedTrafficGoals(mes, produto),
+    supermetas: doc && doc.supermetas ? doc.supermetas : null,
+    fonte: doc ? (doc.fonte.startsWith('meta ') ? doc.fonte : `documento "${doc.fonte}"`) : 'metas salvas na aba Tráfego × Comercial'
+  };
+}
+
+async function dadosSemanaisDoProduto(mes, produto) {
+  const chave = `${mes}|${produto}`;
+  const guardado = cacheProgressoMeta.get(chave);
+  if (guardado && Date.now() - guardado.em < 5 * 60 * 1000) return guardado.data;
+  const res = await fetch(`/api/traffic-sales-weekly?month=${mes}&funnel=${produto}`);
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error || 'Erro ao carregar o realizado');
+  cacheProgressoMeta.set(chave, { em: Date.now(), data });
+  return data;
+}
+
+function cabecalhoMeta(titulo, subtitulo, modo, comBotoes) {
+  const botoes = comBotoes ? `
+      <div class="meta-modo" role="group" aria-label="Período da meta">
+        <button type="button" class="meta-modo-btn${modo === 'semana' ? ' active' : ''}" data-meta-modo="semana" aria-pressed="${modo === 'semana'}">Semana</button>
+        <button type="button" class="meta-modo-btn${modo === 'mes' ? ' active' : ''}" data-meta-modo="mes" aria-pressed="${modo === 'mes'}">Mês</button>
+      </div>` : '';
+  return `
+    <div class="meta-cabecalho">
+      <div>
+        <h2>🎯 ${titulo}</h2>
+        <p>${subtitulo}</p>
+      </div>${botoes}
+    </div>`;
+}
+
+// ------------------------------------------------------------
+// SOCIAL SELLING: novos contatos do Instagram e o perfil de cada um
+// ------------------------------------------------------------
+// O perfil vem da resposta "Qual é o seu cargo?" e, sem resposta, da etapa em
+// que a automação colocou o lead (Empresário / Chef de cozinha / cozinheiro).
+const PERFIS_SOCIAL = [
+  { key: 'empresario', label: 'Empresários', cor: '#ff6b00', etapa: 110934096, re: /empres|dono|s[oó]cio|propriet/i, produto: 'público do Komando' },
+  { key: 'chef', label: 'Chefs de cozinha', cor: '#0ea5e9', etapa: 110934100, re: /chef/i, produto: 'público do MLFP' },
+  { key: 'cozinheiro', label: 'Cozinheiros', cor: '#10b981', etapa: 110934412, re: /cozinheir/i, produto: 'público do MLFP e do downsell' },
+  { key: 'sem_resposta', label: 'Ainda sem perfil', cor: '#94a3b8' }
+];
+let seguidoresInstagram = null; // { em, dados }
+
+function perfilSocial(lead) {
+  const cargo = (lead.custom_fields_values || []).find(f => f.field_id === 128884)?.values?.[0]?.value || '';
+  if (cargo) {
+    const p = PERFIS_SOCIAL.find(x => x.re && x.re.test(cargo));
+    if (p) return p.key;
+  }
+  const porEtapa = PERFIS_SOCIAL.find(x => x.etapa === lead.status_id);
+  return porEtapa ? porEtapa.key : 'sem_resposta';
+}
+
+async function carregarSeguidores() {
+  if (seguidoresInstagram && Date.now() - seguidoresInstagram.em < 10 * 60 * 1000) return seguidoresInstagram.dados;
+  const r = await fetch('/api/instagram/seguidores').then(x => x.json()).catch(() => null);
+  seguidoresInstagram = { em: Date.now(), dados: r && r.success ? r : null };
+  return seguidoresInstagram.dados;
+}
+
+async function renderSocialSelling(card, leads) {
+  const doFunil = leads.filter(l => String(l.pipeline_id) === PIPELINE_SOCIAL_SELLING);
+  const total = doFunil.length;
+  const contagem = Object.fromEntries(PERFIS_SOCIAL.map(p => [p.key, 0]));
+  doFunil.forEach(l => { contagem[perfilSocial(l)]++; });
+  const comPerfil = total - contagem.sem_resposta;
+
+  const periodo = state.dateFrom && state.dateTo
+    ? `${state.dateFrom.toLocaleDateString('pt-BR')} a ${state.dateTo.toLocaleDateString('pt-BR')}`
+    : 'todo o período';
+
+  const barra = PERFIS_SOCIAL.filter(p => contagem[p.key] > 0)
+    .map(p => `<div style="width:${(100 * contagem[p.key] / (total || 1)).toFixed(1)}%;background:${p.cor}" title="${p.label}: ${contagem[p.key]}"></div>`).join('');
+
+  const blocos = PERFIS_SOCIAL.map(p => `
+      <div class="social-perfil">
+        <span class="social-perfil-cor" style="background:${p.cor}"></span>
+        <div>
+          <strong>${contagem[p.key].toLocaleString('pt-BR')}</strong>
+          <span>${p.label}</span>
+          <small>${total ? Math.round(100 * contagem[p.key] / total) : 0}% dos novos${p.produto ? ` · ${p.produto}` : ''}</small>
+        </div>
+      </div>`).join('');
+
+  const desenhar = seguidoresTxt => {
+    card.innerHTML = cabecalhoMeta('Social Selling — novos contatos e perfil', `${periodo} · ${seguidoresTxt}`, null, false) + `
+      <div class="social-resumo">
+        <div class="social-total"><strong>${total.toLocaleString('pt-BR')}</strong><span>novos contatos no Instagram</span><small>${comPerfil.toLocaleString('pt-BR')} já disseram quem são (${total ? Math.round(100 * comPerfil / total) : 0}%)</small></div>
+        <div class="social-perfis">${blocos}</div>
+      </div>
+      <div class="social-barra" role="img" aria-label="Divisão dos novos contatos por perfil">${barra}</div>
+      <div class="meta-rodape"><span>Novo contato = lead que entrou no funil Instagram (Social Selling) por comentário ou direct. Perfil pela resposta "Qual é o seu cargo?" ou pela etapa da automação.</span></div>`;
+  };
+
+  desenhar('carregando seguidores...');
+  const seg = await carregarSeguidores();
+  if (String(state.pipelineId) !== PIPELINE_SOCIAL_SELLING) return;
+  if (!seg || !seg.historico || !seg.historico.length) { desenhar('seguidores do Instagram indisponíveis'); return; }
+
+  const hist = seg.historico;
+  const atual = hist[hist.length - 1];
+  const ini = state.dateFrom ? formatDateLocal(state.dateFrom) : hist[0].data;
+  const fim = state.dateTo ? formatDateLocal(state.dateTo) : atual.data;
+  const antes = [...hist].reverse().find(h => h.data < ini);
+  const noFim = [...hist].reverse().find(h => h.data <= fim);
+  let txt = `@${seg.conta}: ${atual.seguidores.toLocaleString('pt-BR')} seguidores`;
+  if (antes && noFim) {
+    const dif = noFim.seguidores - antes.seguidores;
+    txt += ` (${dif >= 0 ? '+' : ''}${dif.toLocaleString('pt-BR')} novos no período)`;
+  } else {
+    txt += ` · contagem diária desde ${hist[0].data.slice(8, 10)}/${hist[0].data.slice(5, 7)}`;
+  }
+  desenhar(txt);
+}
+
+async function renderProgressoMeta(leadsDoPeriodo) {
+  const card = document.getElementById('metaProgressoCard');
+  if (!card) return;
+
+  if (String(state.pipelineId) === PIPELINE_SOCIAL_SELLING) {
+    renderSocialSelling(card, leadsDoPeriodo || state.filteredLeads || []);
+    return;
+  }
+
+  const produto = PIPELINE_PARA_PRODUTO[String(state.pipelineId)];
+  if (!produto) {
+    card.innerHTML = cabecalhoMeta('Progresso da meta', 'Este funil não tem meta própria. As metas ficam nos funis MLFP, Komando e KOR.', null, false);
+    return;
+  }
+
+  const hoje = new Date();
+  const ref = state.dateTo && state.dateTo < hoje ? state.dateTo : hoje;
+  const mes = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
+  const nomeMes = `${MESES_META[ref.getMonth()]} de ${ref.getFullYear()}`;
+  const chaveFiltro = chaveFiltroData();
+  const modo = metaModoEscolhido && metaModoEscolhido.chaveFiltro === chaveFiltro ? metaModoEscolhido.modo : modoMetaPeloFiltro();
+  const semana = semanaDoDia(ref.getDate());
+  const titulo = `Progresso da meta — ${NOME_PRODUTO_META[produto]}`;
+
+  const fonteMetas = metasDoProduto(mes, produto);
+  if (!fonteMetas) {
+    card.innerHTML = cabecalhoMeta(titulo, `Sem meta definida para ${nomeMes}. Defina as metas na aba Tráfego × Comercial.`, modo, false);
+    return;
+  }
+
+  const pedido = ++pedidoProgressoMeta;
+  card.innerHTML = cabecalhoMeta(titulo, 'Carregando o realizado...', modo, true) + '<div class="meta-carregando"></div>';
+
+  let data;
+  try {
+    data = await dadosSemanaisDoProduto(mes, produto);
+  } catch (err) {
+    if (pedido !== pedidoProgressoMeta) return;
+    card.innerHTML = cabecalhoMeta(titulo, `Não foi possível carregar o realizado: ${escapeHTML(err.message)}`, modo, true);
+    return;
+  }
+  if (pedido !== pedidoProgressoMeta) return;
+
+  const metas = fonteMetas.metas;
+  const semanaApi = (data.weeks || [])[semana] || {};
+  const inicio = modo === 'semana' ? semanaApi.since : `${mes}-01`;
+  const fim = modo === 'semana' ? semanaApi.until : `${mes}-${String(new Date(ref.getFullYear(), ref.getMonth() + 1, 0).getDate()).padStart(2, '0')}`;
+
+  // Quanto do período já passou: é o ritmo esperado para comparar
+  const hojeStr = formatDateLocal(hoje);
+  const diasEntre = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 86400000) + 1;
+  let ritmo = 0;
+  if (inicio && fim) {
+    if (hojeStr > fim) ritmo = 1;
+    else if (hojeStr >= inicio) ritmo = diasEntre(inicio, hojeStr) / diasEntre(inicio, fim);
+  }
+
+  const vendaDireta = ['kor', 'kop', 'ebook'].includes(produto);
+  const somar = arr => (arr || []).reduce((a, b) => a + (parseFloat(b) || 0), 0);
+  const fmt = (v, dinheiro) => dinheiro ? formatMoney(v) : Math.round(v || 0).toLocaleString('pt-BR');
+
+  const supermetas = fonteMetas.supermetas;
+  const linhas = METRICAS_META.filter(m => !(vendaDireta && m.captacao)).map(m => {
+    const meta = modo === 'semana' ? (parseFloat((metas[m.key] || [])[semana]) || 0) : somar(metas[m.key]);
+    if (!meta) return '';
+    const superMeta = supermetas && !m.verba ? (modo === 'semana' ? (parseFloat((supermetas[m.key] || [])[semana]) || 0) : somar(supermetas[m.key])) : 0;
+    const real = modo === 'semana' ? (parseFloat(semanaApi[m.key]) || 0) : (parseFloat((data.totals || {})[m.key]) || 0);
+    const progresso = real / meta;
+    const pct = Math.round(progresso * 100);
+
+    let status = 'neutro', rotulo = 'período não começou';
+    if (ritmo > 0) {
+      const noRitmo = progresso / ritmo;
+      if (superMeta && real / superMeta / ritmo >= 0.9) { status = 'ok'; rotulo = real >= superMeta ? 'supermeta batida' : 'no ritmo da supermeta'; }
+      else if (m.verba) {
+        if (noRitmo > 1.15) { status = 'atencao'; rotulo = 'acima do plano'; }
+        else if (noRitmo < 0.85) { status = 'atencao'; rotulo = 'abaixo do plano'; }
+        else { status = 'ok'; rotulo = 'no plano'; }
+      } else if (noRitmo >= 0.9) { status = 'ok'; rotulo = progresso >= 1 ? 'meta batida' : 'no ritmo'; }
+      else if (noRitmo >= 0.6) { status = 'atencao'; rotulo = 'atenção'; }
+      else { status = 'abaixo'; rotulo = 'abaixo do ritmo'; }
+    }
+
+    return `
+      <div class="meta-linha">
+        <div class="meta-linha-topo">
+          <span class="meta-rotulo">${m.label}</span>
+          <span class="meta-valores"><strong>${fmt(real, m.dinheiro)}</strong> de ${fmt(meta, m.dinheiro)}${superMeta ? ` · supermeta ${fmt(superMeta, m.dinheiro)}` : ''}</span>
+        </div>
+        <div class="meta-trilha" role="progressbar" aria-label="${m.label}: ${pct}% da meta" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.min(pct, 100)}">
+          <div class="meta-preenchimento meta-${status}" style="width:${Math.min(pct, 100)}%"></div>
+          ${ritmo > 0 && ritmo < 1 ? `<div class="meta-marcador" style="left:${Math.round(ritmo * 100)}%" title="Ritmo esperado hoje"></div>` : ''}
+        </div>
+        <div class="meta-linha-base">
+          <span>${pct}% da meta</span>
+          <span class="meta-status meta-status-${status}">${rotulo}</span>
+        </div>
+      </div>`;
+  }).join('');
+
+  const invMeta = modo === 'semana' ? (parseFloat((metas.investimento || [])[semana]) || 0) : somar(metas.investimento);
+  const fatMeta = modo === 'semana' ? (parseFloat((metas.faturamento || [])[semana]) || 0) : somar(metas.faturamento);
+  const invReal = modo === 'semana' ? (parseFloat(semanaApi.investimento) || 0) : (parseFloat((data.totals || {}).investimento) || 0);
+  const fatReal = modo === 'semana' ? (parseFloat(semanaApi.faturamento) || 0) : (parseFloat((data.totals || {}).faturamento) || 0);
+  const roasSuper = supermetas ? ` · supermeta ${(somar(supermetas.faturamento) / somar(supermetas.investimento)).toFixed(2).replace('.', ',')}x` : '';
+  const roas = invMeta && fatMeta ? `<span>ROAS: <strong>${invReal ? (fatReal / invReal).toFixed(2).replace('.', ',') + 'x' : '—'}</strong> realizado · meta ${(fatMeta / invMeta).toFixed(2).replace('.', ',')}x${roasSuper}</span>` : '';
+
+  const periodoTxt = modo === 'semana'
+    ? `Semana ${semana + 1} · ${inicio ? inicio.slice(8, 10) + '/' + inicio.slice(5, 7) : ''} a ${fim ? fim.slice(8, 10) + '/' + fim.slice(5, 7) : ''}`
+    : nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1);
+  const ritmoTxt = fim && hojeStr > fim ? 'período encerrado'
+    : ritmo >= 1 ? 'último dia do período'
+    : ritmo > 0 ? `ritmo esperado hoje: ${Math.round(ritmo * 100)}% do período` : 'período ainda não começou';
+
+  card.innerHTML = cabecalhoMeta(titulo, `${periodoTxt} · ${ritmoTxt}`, modo, true) + `
+    <div class="meta-grade">${linhas || '<p class="meta-vazia">As metas deste período estão zeradas.</p>'}</div>
+    <div class="meta-rodape">
+      ${roas}
+      <span>Metas: ${escapeHTML(fonteMetas.fonte)}. Realizado igual à aba Tráfego × Comercial (Meta Ads, Kommo e Eduzz); receita ganha soma vendas ganhas no Kommo e pagas na Eduzz, ainda não faturadas.</span>
+    </div>`;
+}
+
+document.addEventListener('click', (e) => {
+  const botao = e.target.closest('.meta-modo-btn');
+  if (!botao) return;
+  metaModoEscolhido = { modo: botao.getAttribute('data-meta-modo'), chaveFiltro: chaveFiltroData() };
+  renderProgressoMeta();
+});
+
+function metaMensalDerivada(goals, key) {
+  const base = BASE_DA_META_MENSAL[key];
+  if (!base) return null;
+  const soma = k => (goals[k] || []).reduce((a, b) => a + (parseFloat(b) || 0), 0);
+  const num = soma(base[0]);
+  const den = soma(base[1]);
+  if (!num || !den) return null;
+  return (num / den) * (base[2] || 1);
+}
+
 let currentTrafficSalesData = null;
+let pedidoTrafegoAtual = 0;
 
 // Destaca no menu de atalhos a seção que está na tela
 function iniciarNavSecoes() {
@@ -4070,9 +4331,14 @@ async function loadTrafficSalesDashboard() {
   if (tbodyChamps) tbodyChamps.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-muted">Carregando criativos campeões...</td></tr>';
   if (tbodyAnnual) tbodyAnnual.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-muted">Carregando histórico anual...</td></tr>';
 
+  // A API leva segundos; se o funil ou o mês mudar no meio, a resposta antiga
+  // não pode sobrescrever a tabela do funil que está selecionado agora
+  const pedido = ++pedidoTrafegoAtual;
+
   try {
     const res = await fetch(`/api/traffic-sales-weekly?month=${month}&funnel=${funnel}`);
     const data = await res.json();
+    if (pedido !== pedidoTrafegoAtual) return;
     if (!data.success) {
       throw new Error(data.error || 'Erro ao carregar dados');
     }
@@ -4081,6 +4347,7 @@ async function loadTrafficSalesDashboard() {
     renderChampionCreatives(data.championCreatives || []);
     renderAnnualTrafficSalesTable(data.annual || []);
   } catch(err) {
+    if (pedido !== pedidoTrafegoAtual) return;
     console.error('Error loading traffic sales dashboard:', err);
     if (tbodyWeekly) tbodyWeekly.innerHTML = `<tr><td colspan="14" class="text-center py-4 text-danger">Erro: ${err.message}</td></tr>`;
   }
@@ -4100,6 +4367,15 @@ function renderTrafficWeeklyTable(data) {
   const goals = getSavedTrafficGoals(monthKey, funnelKey);
   const weeks = data.weeks || [];
   const totals = data.totals || {};
+
+  const fonteMetas = document.getElementById('trafficGoalsSource');
+  if (fonteMetas) {
+    const doc = metasDoDocumento(monthKey, funnelKey);
+    fonteMetas.hidden = !doc;
+    fonteMetas.textContent = doc
+      ? `Metas do documento "${doc.fonte}"${goals._versao === doc.versao ? ', com os ajustes salvos aqui' : ''}.`
+      : '';
+  }
 
   // Cabeçalho vem da API: a 5ª semana termina em 28, 29, 30 ou 31
   weeks.forEach((w, i) => {
@@ -4122,7 +4398,7 @@ function renderTrafficWeeklyTable(data) {
     { key: 'agendadas', label: 'Reuniões Agendadas', isMoney: false },
     { key: 'comparecidas', label: 'Reuniões Comparecidas', isMoney: false },
     { key: 'vendas', label: 'Número de Novos Clientes / Vendas', isMoney: false, highlight: true },
-    { key: 'faturamento', label: 'Valor Total Faturado / Vendas', isMoney: true, highlight: true },
+    { key: 'faturamento', label: 'Receita das Vendas Ganhas (ainda não faturada)', isMoney: true, highlight: true },
     { key: 'noShow', label: 'No Show Reunião (Qtd)', isMoney: false },
     { key: 'cpa', label: 'Custo por Reunião Agendada (CPA)', isMoney: true },
     { key: 'cpr', label: 'Custo por Reunião Comparecida (CPR)', isMoney: true },
@@ -4138,8 +4414,10 @@ function renderTrafficWeeklyTable(data) {
     const nonZeroGoals = goalArr.filter(b => (parseFloat(b) || 0) > 0);
     // Para métricas unitárias de custo, percentuais e razões (CPL, CAC, Ticket, ROAS), a meta do mês é a média das semanas
     const isUnitOrRatioMetric = m.isPct || m.isRatio || METRICAS_DE_CUSTO.includes(m.key);
+    const metaDerivada = isUnitOrRatioMetric ? metaMensalDerivada(goals, m.key) : null;
     const effectiveMonthlyGoal = isUnitOrRatioMetric
-      ? (nonZeroGoals.length > 0 ? (totalGoalSum / nonZeroGoals.length) : (totalGoalSum / 5))
+      ? (metaDerivada !== null ? metaDerivada
+        : (nonZeroGoals.length > 0 ? (totalGoalSum / nonZeroGoals.length) : (totalGoalSum / 5)))
       : totalGoalSum;
     const totalReal = totals[m.key] || 0;
 
@@ -4489,12 +4767,36 @@ function initAIAssistant() {
         });
     }
 
+    // Barra do Cérebro da Operação no topo do painel: abre a conversa e envia
+    const cerebroForm = document.getElementById('cerebroForm');
+    const cerebroInput = document.getElementById('cerebroInput');
+    const perguntarAoCerebro = texto => {
+        if (!texto) return;
+        openDrawer();
+        submitAIMessage(texto);
+    };
+    if (cerebroForm) {
+        cerebroForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const texto = (cerebroInput ? cerebroInput.value : '').trim();
+            if (cerebroInput) cerebroInput.value = '';
+            perguntarAoCerebro(texto);
+        });
+    }
+    const cerebroSugestoes = document.getElementById('cerebroSugestoes');
+    if (cerebroSugestoes) {
+        cerebroSugestoes.addEventListener('click', (e) => {
+            const botao = e.target.closest('.cerebro-sugestao');
+            if (botao) perguntarAoCerebro(botao.getAttribute('data-query'));
+        });
+    }
+
     function appendMessageUI(role, htmlContent) {
         if (!messagesContainer) return;
         const msgDiv = document.createElement('div');
         msgDiv.className = `ai-message ai-message-${role}`;
         
-        const avatar = role === 'user' ? '👤' : '✨';
+        const avatar = role === 'user' ? '👤' : '🧠';
         msgDiv.innerHTML = `
             <div class="ai-msg-avatar">${avatar}</div>
             <div class="ai-msg-bubble">${htmlContent}</div>
@@ -4602,9 +4904,20 @@ function initAIAssistant() {
 
         try {
             // Gather active dashboard context
+            // Metas do mês atual por produto, para a IA comparar o realizado com o plano
+            const hojeCtx = new Date();
+            const mesCtx = `${hojeCtx.getFullYear()}-${String(hojeCtx.getMonth() + 1).padStart(2, '0')}`;
+            const metasDoMes = {};
+            Object.keys(NOME_PRODUTO_META).forEach(p => {
+                const m = metasDoProduto(mesCtx, p);
+                if (!m) return;
+                const { _versao, ...valores } = m.metas;
+                metasDoMes[p] = { fonte: m.fonte, por_semana_do_painel: valores, supermeta_por_semana: m.supermetas || undefined };
+            });
             const context = {
-                active_pipeline: typeof currentPipelineFilter !== 'undefined' ? currentPipelineFilter : 'all',
-                active_period: typeof dateFilterType !== 'undefined' ? dateFilterType : 'this_month'
+                funil_na_tela: getPipelineName(state.pipelineId) || state.pipelineId,
+                periodo_na_tela: state.dateFrom && state.dateTo ? `${formatDateLocal(state.dateFrom)} a ${formatDateLocal(state.dateTo)}` : 'todo o período',
+                metas_do_mes: { mes: mesCtx, produtos: metasDoMes }
             };
 
             const res = await fetch('/api/ai-assistant', {

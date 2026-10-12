@@ -516,7 +516,12 @@ async function nomesNoBlob() {
 async function lerDoBlob(filename) {
   const nomes = await nomesNoBlob();
   if (!nomes.has(filename)) return undefined;
+  return lerDoBlobDireto(filename);
+}
 
+// Sem a checagem de nomesNoBlob(): a lista é guardada por instância e não
+// enxerga arquivos criados por outra instância depois dela
+async function lerDoBlobDireto(filename) {
   const res = await blobGet(BLOB_PREFIXO + filename, { token: BLOB_TOKEN, access: BLOB_ACCESS });
   if (!res || res.statusCode !== 200 || !res.stream) return undefined;
 
@@ -766,18 +771,44 @@ const PRODUTO_KOR = /KIT DE OPERA[ÇC][ÃA]O DE RESTAURANTES/i;
 // sem valor no lead, usa o preço do Kit
 const PRECO_KOR = parseFloat(process.env.PRECO_KOR) || 97;
 
-// Compradores do Kit na Base Eduzz criados no intervalo (segundos UNIX)
-function vendasKorBaseEduzz(leads, iniSec, fimSec) {
-  let vendas = 0, valor = 0, estimadas = 0;
+const nomeComparavel = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/\[eduzz\]/g, '').replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+// Compradores do Kit no intervalo (segundos UNIX): leads criados na Base Eduzz
+// mais as vendas pagas registradas pelo webhook cujo comprador não está entre
+// eles. Quem já era cliente recompra num lead antigo, que não é criado de novo
+// — de 09/09 a 08/10/2026 foram 3 vendas fora da contagem só pelo CRM.
+function vendasKorBaseEduzz(leads, iniSec, fimSec, vendasEduzz = []) {
+  let vendas = 0, valor = 0, estimadas = 0, recompras = 0;
+  const nomesCrm = [];
   (leads || []).forEach(l => {
     if (l.pipeline_id !== 13956856) return;
     if (l.created_at < iniSec || l.created_at > fimSec) return;
     if (!(l._embedded?.tags || []).some(t => PRODUTO_KOR.test(t.name || ''))) return;
     vendas++;
+    nomesCrm.push(nomeComparavel(l.name));
     if (parseFloat(l.price) > 0) valor += parseFloat(l.price);
     else { valor += PRECO_KOR; estimadas++; }
   });
-  return { vendas, valor, estimadas };
+
+  // "Luiz Fernando" na Eduzz e "LUIZ FERNANDO Candido de Souza" no Kommo são a
+  // mesma pessoa: um nome que começa com o outro conta como o mesmo comprador
+  const mesmoComprador = (a, b) => a && b && (a.startsWith(b) || b.startsWith(a));
+  (vendasEduzz || []).forEach(s => {
+    if (!PRODUTO_KOR.test(s.content_title || s.product_name || '')) return;
+    if (!(s.sale_status === 3 || s.sale_status_name === 'Paga' || s.status === 'paid')) return;
+    const raw = s.date_payment || s.date_create;
+    if (!raw) return;
+    const iso = String(raw).replace(' ', 'T');
+    const seg = Math.floor(new Date(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}-03:00`).getTime() / 1000);
+    if (isNaN(seg) || seg < iniSec || seg > fimSec) return;
+    const nome = nomeComparavel(s.client_name);
+    if (nomesCrm.some(n => mesmoComprador(n, nome))) return;
+    nomesCrm.push(nome);
+    vendas++; recompras++;
+    valor += parseFloat(s.sale_total) || PRECO_KOR;
+  });
+  return { vendas, valor, estimadas, recompras };
 }
 
 // 'nao_cartao' (padrão): cartão aprova na hora e o pixel do checkout já
@@ -845,12 +876,91 @@ async function enviarPurchaseEduzz({ payload, eduzzId, email, phone, name, produ
   return r;
 }
 
-// Grava uma venda paga no mesmo formato do export da Eduzz (sale_id,
-// date_payment, sale_status 3, sale_total, content_title, utm_*), para que
-// /api/eduzz-analytics e /api/traffic-sales-weekly a leiam sem adaptação.
-// Guarda também os últimos payloads crus, para conferir os nomes de campo.
-async function registrarVendaEduzz({ payload, eduzzId, email, name, phone, productName, value, utm_source, utm_campaign, utm_medium, utm_content }) {
-  const agoraSP = new Date(Date.now() - 3 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+// Dados da venda no payload da Eduzz. Usado pelo webhook e para reconstruir
+// vendas a partir do log de webhooks.
+function extrairDadosEduzz(payload) {
+  const email = (
+    payload.data?.buyer?.email ||
+    payload.data?.client?.email ||
+    payload.client_email ||
+    payload.email ||
+    ''
+  ).toLowerCase().trim();
+
+  const name = payload.data?.buyer?.name ||
+               payload.data?.client?.name ||
+               payload.client_name ||
+               payload.name ||
+               'Sem Nome';
+
+  const rawPhone = payload.data?.buyer?.phone ||
+                   payload.data?.buyer?.cellphone ||
+                   payload.data?.client?.phone ||
+                   payload.client_cel ||
+                   payload.phone ||
+                   '';
+  const phone = rawPhone.replace(/[^0-9+]/g, '');
+
+  const productName = payload.data?.items?.[0]?.name ||
+                      payload.data?.product_name ||
+                      payload.content_title ||
+                      payload.product ||
+                      payload.product_name ||
+                      'Produto Eduzz';
+
+  // Valor bruto da venda. Desde julho todos os leads criados por aqui ficaram
+  // com price 0: o payload myeduzz traz o valor como objeto { value, currency }
+  // (paid / price / total), e só os campos planos antigos eram lidos.
+  const valorDe = v => {
+    if (v === null || v === undefined) return 0;
+    if (typeof v === 'object') return parseFloat(v.value) || 0;
+    return parseFloat(v) || 0;
+  };
+  const somaItens = (payload.data?.items || []).reduce((acc, it) => acc + valorDe(it.price), 0);
+  const value = valorDe(payload.data?.paid) ||
+                valorDe(payload.data?.price) ||
+                valorDe(payload.data?.total) ||
+                somaItens ||
+                valorDe(payload.data?.value) ||
+                valorDe(payload.data?.amount) ||
+                valorDe(payload.sale_total) ||
+                valorDe(payload.value) ||
+                valorDe(payload.data?.gains?.producer) ||
+                0;
+
+  const utm_source = payload.data?.utm?.source || payload.data?.utm_source || payload.utm_source || '';
+  const utm_campaign = payload.data?.utm?.campaign || payload.data?.utm_campaign || payload.utm_campaign || '';
+  const utm_medium = payload.data?.utm?.medium || payload.data?.utm_medium || payload.utm_medium || '';
+  const utm_content = payload.data?.utm?.content || payload.data?.utm_content || payload.utm_content || '';
+
+  const idDaEduzz = payload.data?.id ||
+                    payload.data?.invoice?.id ||
+                    payload.sale_id ||
+                    payload.invoice_id ||
+                    payload.id ||
+                    null;
+  const eduzzId = idDaEduzz || String(Date.now());
+
+  const clientIp = payload.data?.client_ip || payload.client_ip || payload.data?.buyer?.ip || null;
+  const clientUserAgent = payload.data?.client_user_agent || payload.client_user_agent || null;
+
+  return { email, name, phone, productName, value, utm_source, utm_campaign, utm_medium, utm_content, eduzzId, idDaEduzz, clientIp, clientUserAgent };
+}
+
+function eventoPagoEduzz(payload) {
+  const event = payload.event || payload.status || '';
+  return event === 'myeduzz.invoice_paid' || payload.data?.status === 'paid' || payload.status === 'paid';
+}
+
+// Cada venda paga vira um arquivo próprio no Blob (eduzz-vendas/<sale_id>.json).
+// Antes todas ficavam num único eduzz_sales_raw.json, lido, alterado e gravado
+// inteiro a cada venda: quando a leitura voltava uma versão anterior, a venda
+// gravada logo antes sumia. Entre 09/09 e 08/10/2026 o webhook recebeu o
+// pagamento de pelo menos 8 vendas que não ficaram no arquivo (31 de 46 do KOR).
+// Arquivo por venda não tem leitura-alteração-gravação, então nada se perde.
+const PASTA_VENDAS_EDUZZ = 'eduzz-vendas/';
+
+function montarVendaEduzz({ payload, eduzzId, email, name, phone, productName, value, utm_source, utm_campaign, utm_medium, utm_content }, agoraSP) {
   const paidRaw = payload.data?.paidAt || payload.data?.paid_at || payload.date_payment || null;
   const createdRaw = payload.data?.createdAt || payload.data?.created_at || payload.date_create || null;
   // Datas ISO com fuso viram horário de Brasília no formato "YYYY-MM-DD HH:mm:ss"
@@ -875,11 +985,28 @@ async function registrarVendaEduzz({ payload, eduzzId, email, name, phone, produ
     utm_source, utm_campaign, utm_medium, utm_content,
     origem: 'webhook'
   };
+  return venda;
+}
 
-  const vendas = await lerCache('eduzz_sales_raw.json', []);
-  const semDuplicata = vendas.filter(v => String(v.sale_id) !== venda.sale_id);
-  semDuplicata.push(venda);
-  await gravarCache('eduzz_sales_raw.json', semDuplicata);
+// Grava uma venda paga no mesmo formato do export da Eduzz (sale_id,
+// date_payment, sale_status 3, sale_total, content_title, utm_*), para que
+// /api/eduzz-analytics e /api/traffic-sales-weekly a leiam sem adaptação.
+// Guarda também os últimos payloads crus, para conferir os nomes de campo.
+async function registrarVendaEduzz(dados) {
+  const agoraSP = new Date(Date.now() - 3 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  const venda = montarVendaEduzz(dados, agoraSP);
+  const { payload } = dados;
+
+  if (BLOB_ATIVO) {
+    await gravarNoBlob(`${PASTA_VENDAS_EDUZZ}${venda.sale_id}.json`, venda);
+    vendasEduzzMemo = null;
+  } else {
+    // Sem Blob (ambiente local) o arquivo único em disco é a persistência
+    const vendas = await lerCache('eduzz_sales_raw.json', []);
+    const semDuplicata = vendas.filter(v => String(v.sale_id) !== venda.sale_id);
+    semDuplicata.push(venda);
+    await gravarCache('eduzz_sales_raw.json', semDuplicata);
+  }
 
   const log = await lerCache('eduzz_webhook_log.json', []);
   log.push({ recebido_em: agoraSP, valor_extraido: venda.sale_total, payload });
@@ -888,11 +1015,70 @@ async function registrarVendaEduzz({ payload, eduzzId, email, name, phone, produ
   console.log(`[Webhook] Venda ${venda.sale_id} registrada no cache Eduzz (R$ ${venda.sale_total})`);
 }
 
+// Todas as vendas pagas: o arquivo antigo (export de junho + o que o webhook
+// gravou até 09/10/2026) somado aos arquivos por venda. Por venda vence.
+let vendasEduzzMemo = null;
+const vendasIndividuaisLidas = new Map(); // pathname -> { uploadedAt, venda }
+
+async function lerVendasEduzz() {
+  if (vendasEduzzMemo && Date.now() - vendasEduzzMemo.em < TTL_MEMORIA_MS) return vendasEduzzMemo.dados;
+
+  const porId = new Map();
+  for (const v of await lerCache('eduzz_sales_raw.json', [])) porId.set(String(v.sale_id), v);
+
+  if (BLOB_ATIVO) {
+    try {
+      const blobs = [];
+      let cursor;
+      do {
+        const r = await blobList({ token: BLOB_TOKEN, prefix: BLOB_PREFIXO + PASTA_VENDAS_EDUZZ, cursor, limit: 1000 });
+        blobs.push(...(r.blobs || []));
+        cursor = r.hasMore ? r.cursor : undefined;
+      } while (cursor);
+
+      // Cada venda é lida uma vez por instância; só relê se o arquivo mudou
+      const faltam = blobs.filter(b => vendasIndividuaisLidas.get(b.pathname)?.uploadedAt !== String(b.uploadedAt));
+      for (let i = 0; i < faltam.length; i += 10) {
+        await Promise.all(faltam.slice(i, i + 10).map(async b => {
+          const venda = await lerDoBlobDireto(b.pathname.replace(BLOB_PREFIXO, ''));
+          if (venda) vendasIndividuaisLidas.set(b.pathname, { uploadedAt: String(b.uploadedAt), venda });
+        }));
+      }
+      for (const { venda } of vendasIndividuaisLidas.values()) porId.set(String(venda.sale_id), venda);
+    } catch (err) {
+      console.error('[Eduzz] Falha ao ler as vendas por arquivo:', err.message);
+    }
+
+    // Recupera vendas pagas que chegaram pelo webhook e não ficaram gravadas
+    // (as perdidas no arquivo único). O log guarda os 20 últimos payloads.
+    try {
+      const log = await lerCache('eduzz_webhook_log.json', []);
+      for (const item of log) {
+        const payload = item.payload || {};
+        if (!eventoPagoEduzz(payload)) continue;
+        const dados = extrairDadosEduzz(payload);
+        if (!dados.idDaEduzz || !dados.email || porId.has(String(dados.idDaEduzz))) continue;
+        const venda = montarVendaEduzz({ payload, ...dados }, item.recebido_em);
+        porId.set(venda.sale_id, venda);
+        gravarNoBlob(`${PASTA_VENDAS_EDUZZ}${venda.sale_id}.json`, venda)
+          .then(() => console.log(`[Eduzz] Venda ${venda.sale_id} recuperada do log de webhooks`))
+          .catch(err => console.error(`[Eduzz] Falha ao gravar venda recuperada ${venda.sale_id}:`, err.message));
+      }
+    } catch (err) {
+      console.error('[Eduzz] Falha ao conferir o log de webhooks:', err.message);
+    }
+  }
+
+  const dados = [...porId.values()];
+  vendasEduzzMemo = { dados, em: Date.now() };
+  return dados;
+}
+
 app.get('/api/eduzz-analytics', async (req, res) => {
   try {
     const { from, to } = req.query;
     const processedClients = await lerCache('eduzz_clients_processed.json', []);
-    const rawSales = await lerCache('eduzz_sales_raw.json', []);
+    const rawSales = await lerVendasEduzz();
     
     // Filter paid sales
     let paidSales = rawSales.filter(s => s.sale_status === 3 || s.sale_status_name === 'Paga' || s.status === 'paid');
@@ -1678,8 +1864,46 @@ app.get('/api/ga4-analytics', async (req, res) => {
   }
 });
 
+// ------------------------------------------------------------
+// SEGUIDORES DO INSTAGRAM (Social Selling)
+// ------------------------------------------------------------
+// O token do Meta lê o total de seguidores da conta, mas não o histórico
+// (falta a permissão instagram_manage_insights). Então o total é guardado uma
+// vez por dia e os novos seguidores saem da diferença entre os dias.
+// A conta vem de INSTAGRAM_CONTA_ID; sem ela, a conta ligada à página do Chef.
+const INSTAGRAM_CONTA_ID = process.env.INSTAGRAM_CONTA_ID || '17841465409102319';
+
+async function registrarSeguidoresInstagram() {
+  const token = (process.env.META_ACCESS_TOKEN && process.env.META_ACCESS_TOKEN.trim()) || DEFAULT_META_ACCESS_TOKEN;
+  const r = await fetch(`https://graph.facebook.com/v20.0/${INSTAGRAM_CONTA_ID}?fields=username,followers_count&access_token=${token}`).then(x => x.json());
+  if (r.error || typeof r.followers_count !== 'number') throw new Error(r.error?.message || 'seguidores indisponíveis');
+  const hoje = dataBrasilia(0);
+  const dados = await lerCache('instagram_seguidores.json', { conta: null, historico: [] });
+  const historico = (dados.historico || []).filter(h => h.data !== hoje);
+  historico.push({ data: hoje, seguidores: r.followers_count });
+  historico.sort((a, b) => a.data.localeCompare(b.data));
+  const novo = { conta: r.username, contaId: INSTAGRAM_CONTA_ID, historico: historico.slice(-400) };
+  await gravarCache('instagram_seguidores.json', novo);
+  return novo;
+}
+
+app.get('/api/instagram/seguidores', async (req, res) => {
+  try {
+    let dados = await lerCache('instagram_seguidores.json', { conta: null, historico: [] });
+    const ultimo = (dados.historico || [])[dados.historico.length - 1];
+    if (!ultimo || ultimo.data !== dataBrasilia(0) || dados.contaId !== INSTAGRAM_CONTA_ID) {
+      dados = await registrarSeguidoresInstagram();
+    }
+    res.json({ success: true, ...dados });
+  } catch (err) {
+    res.status(200).json({ success: false, error: err.message });
+  }
+});
+
 // Sync Data from Kommo CRM (Supports POST for manual trigger and GET for Vercel Cron)
 app.all(['/api/sync', '/api/cron/sync'], async (req, res) => {
+  // Aproveita o cron de 2 em 2 horas para registrar os seguidores do dia
+  registrarSeguidoresInstagram().catch(err => console.warn('[Instagram] Seguidores não registrados:', err.message));
   try {
     const isFullSync = req.query.full === '1';
     
@@ -1992,71 +2216,8 @@ app.post('/api/eduzz-webhook', async (req, res) => {
   
   try {
     // 3. Extract customer and purchase details
-    const email = (
-      payload.data?.buyer?.email || 
-      payload.data?.client?.email || 
-      payload.client_email || 
-      payload.email || 
-      ''
-    ).toLowerCase().trim();
-    
-    const name = payload.data?.buyer?.name || 
-                 payload.data?.client?.name || 
-                 payload.client_name || 
-                 payload.name || 
-                 'Sem Nome';
-                 
-    const rawPhone = payload.data?.buyer?.phone || 
-                     payload.data?.buyer?.cellphone || 
-                     payload.data?.client?.phone || 
-                     payload.client_cel || 
-                     payload.phone || 
-                     '';
-    const phone = rawPhone.replace(/[^0-9+]/g, '');
-    
-    const productName = payload.data?.items?.[0]?.name || 
-                        payload.data?.product_name || 
-                        payload.content_title || 
-                        payload.product || 
-                        payload.product_name || 
-                        'Produto Eduzz';
-                        
-    // Valor bruto da venda. Desde julho todos os leads criados por aqui ficaram
-    // com price 0: o payload myeduzz traz o valor como objeto { value, currency }
-    // (paid / price / total), e só os campos planos antigos eram lidos.
-    const valorDe = v => {
-      if (v === null || v === undefined) return 0;
-      if (typeof v === 'object') return parseFloat(v.value) || 0;
-      return parseFloat(v) || 0;
-    };
-    const somaItens = (payload.data?.items || []).reduce((acc, it) => acc + valorDe(it.price), 0);
-    const value = valorDe(payload.data?.paid) ||
-                  valorDe(payload.data?.price) ||
-                  valorDe(payload.data?.total) ||
-                  somaItens ||
-                  valorDe(payload.data?.value) ||
-                  valorDe(payload.data?.amount) ||
-                  valorDe(payload.sale_total) ||
-                  valorDe(payload.value) ||
-                  valorDe(payload.data?.gains?.producer) ||
-                  0;
-
+    const { email, name, phone, productName, value, utm_source, utm_campaign, utm_medium, utm_content, eduzzId, clientIp, clientUserAgent } = extrairDadosEduzz(payload);
     const valueToAdd = isPaidEvent ? value : 0;
-
-    const utm_source = payload.data?.utm?.source || payload.data?.utm_source || payload.utm_source || '';
-    const utm_campaign = payload.data?.utm?.campaign || payload.data?.utm_campaign || payload.utm_campaign || '';
-    const utm_medium = payload.data?.utm?.medium || payload.data?.utm_medium || payload.utm_medium || '';
-    const utm_content = payload.data?.utm?.content || payload.data?.utm_content || payload.utm_content || '';
-    
-    const eduzzId = payload.data?.id || 
-                    payload.data?.invoice?.id || 
-                    payload.sale_id || 
-                    payload.invoice_id || 
-                    payload.id || 
-                    String(Date.now());
-                    
-    const clientIp = payload.data?.client_ip || payload.client_ip || payload.data?.buyer?.ip || null;
-    const clientUserAgent = payload.data?.client_user_agent || payload.client_user_agent || null;
     
     console.log(`[Webhook] Sale Details:
       Email: ${email}
@@ -3332,7 +3493,7 @@ app.post(['/api/ko-webhook', '/api/webhook/komando', '/api/komando-webhook', '/a
         if (isQualified && leadId) {
           try {
             await sendMetaEvent(
-              'MQL',
+              'Lead_Qualificado_Komando',
               { email, phone, name },
               {
                 content_name: `MQL ${isEbookEvent ? '[KO] Ebooks' : '[KO] Inbound'}`,
@@ -3667,26 +3828,37 @@ app.post('/api/lp-webhook', async (req, res) => {
       console.log(`[LP Webhook] Complex Lead + Contact created successfully (Lead ID: ${leadId})`);
     }
 
-    // 3. Send Meta Conversions API (CAPI) event
-    try {
-      const buyerInfo = {
-        email,
-        phone,
-        name
-      };
-      const customData = {
-        content_name: 'Mentoria Líder Faixa Preta - Inscrição LP',
-        content_type: 'product'
-      };
-      if (utm_source) customData.utm_source = utm_source;
-      if (utm_medium) customData.utm_medium = utm_medium;
-      if (utm_campaign) customData.utm_campaign = utm_campaign;
-      if (utm_content) customData.utm_content = utm_content;
-      
-      const eventId = `lp_mlfp_${leadId || Date.now()}`;
-      await sendMetaEvent('Lead', buyerInfo, customData, eventId);
-    } catch (capiErr) {
-      console.error('[LP Webhook] Failed to send Meta CAPI Lead event:', capiErr.message);
+    // 3. Evento Lead: só para a página mentoria.chefkakagomes.com.
+    //
+    // A LP3 (GreatPages, chefkakagomes.com/diagnosticoexclusivo-2407) já
+    // dispara Lead no pixel 1601746558049023 pelo navegador, com event_id
+    // próprio. Mandar o nosso também duplicava: entre 15 e 18/09/2026 o
+    // Gerenciador reportou 36 leads de MLFP contra 17 no CRM, e de 25/09 a
+    // 08/10 a LP3 reportou 235 contra 129.
+    //
+    // A página mentoria.chefkakagomes.com dispara o Lead do navegador em OUTRO
+    // pixel (825634764746487), mas os conjuntos de anúncio otimizam por Lead no
+    // pixel 1601746558049023. Para ela, este evento é o único sinal no pixel
+    // certo — sem ele os anúncios dela ficam sem conversão.
+    //
+    // O lead QUALIFICADO sai na qualificação (Lead_Qualificado_MLFP e
+    // Lead_Qualificado_Komando), para as duas páginas.
+    const origemPagina = String(payload.pagina_origem || payload.source_domain || '');
+    if (origemPagina.includes('mentoria.chefkakagomes.com')) {
+      try {
+        const customData = {
+          content_name: 'Mentoria Líder Faixa Preta - Diagnóstico VSL',
+          content_type: 'product'
+        };
+        if (utm_source) customData.utm_source = utm_source;
+        if (utm_medium) customData.utm_medium = utm_medium;
+        if (utm_campaign) customData.utm_campaign = utm_campaign;
+        if (utm_content) customData.utm_content = utm_content;
+
+        await sendMetaEvent('Lead', { email, phone, name }, customData, `lp_mlfp_${leadId || Date.now()}`);
+      } catch (capiErr) {
+        console.error('[LP Webhook] Falha ao enviar Lead da página mentoria ao Meta:', capiErr.message);
+      }
     }
 
     // Update Google Sheets with CRM result
@@ -3964,7 +4136,7 @@ app.post('/api/kommo-lead-created', async (req, res) => {
           // Evento de meio de funil para o Meta (disparado com deduplicação por event_id mql_${leadId})
           try {
             await sendMetaEvent(
-              'MQL',
+              'Lead_Qualificado_Komando',
               { email, phone, name: clientName },
               {
                 content_name: `MQL ${pipelineName}`,
@@ -4039,6 +4211,32 @@ app.post('/api/kommo-lead-created', async (req, res) => {
             console.log(`[Z-API Webhook] Successfully moved lead ${leadId} to Downsell stage and removed MQL tag.`);
           } catch (patchErr) {
             console.error(`[Z-API Webhook] Error moving lead ${leadId} to Downsell stage:`, patchErr.message);
+          }
+        }
+
+        // Lead qualificado do MLFP para o Meta. O Lead genérico é do pixel da
+        // página; aqui vai só quem passou na régua (renda >= 3k e cargo válido),
+        // que o pixel não tem como saber. Evento diferente, sem duplicar.
+        if (isQualified && !shouldMoveToDownsell && leadId) {
+          try {
+            await sendMetaEvent(
+              'Lead_Qualificado_MLFP',
+              { email, phone, name: clientName },
+              {
+                content_name: 'MQL [MLFP] Inbound',
+                content_type: 'lead',
+                cargo: displayCargo || 'nao informado',
+                faturamento: displayFaturamento || 'nao informado',
+                utm_source: utmSource || undefined,
+                utm_campaign: utmCampaign || undefined,
+                utm_medium: utmMedium || undefined,
+                utm_content: utmContent || undefined
+              },
+              `mql_${leadId}`
+            );
+            console.log(`[Z-API Webhook] Evento Lead_Qualificado_MLFP enviado ao Meta para o lead ${leadId}`);
+          } catch (capiErr) {
+            console.error(`[Z-API Webhook] Falha ao enviar Lead_Qualificado_MLFP ao Meta para o lead ${leadId}:`, capiErr.message);
           }
         }
       } else if (isKopPipeline) {
@@ -4856,7 +5054,7 @@ async function querySpreadsheet(sheetName, searchQuery) {
 async function getLoadedCRMData() {
   const allLeads = await lerCache('all_leads.json', []);
   const validLeads = allLeads.filter(l => !isTestLead(l));
-  const rawSales = await lerCache('eduzz_sales_raw.json', []);
+  const rawSales = await lerVendasEduzz();
   return { allLeads: validLeads, rawSales };
 }
 
@@ -5150,130 +5348,312 @@ async function getMetaAdsDataSummary(since, until) {
   }
 }
 
-// Autonomous / Smart Fallback Dispatcher for Dashboard AI
-async function executeSmartAnalyticsResponse(userMessage) {
-  const msg = userMessage.toLowerCase();
-  
-  // 1. Resumo do Mês / Geral / Hoje
-  if (msg.includes('resumo') || msg.includes('mês') || msg.includes('mes') || msg.includes('hoje') || msg.includes('geral') || msg.includes('semana') || msg.includes('performance')) {
-    const timeframe = msg.includes('hoje') ? 'today' : (msg.includes('semana') || msg.includes('7d') ? '7d' : 'this_month');
-    const tfLabel = timeframe === 'today' ? 'Hoje' : (timeframe === '7d' ? 'Últimos 7 Dias' : 'Mês Atual');
+// ------------------------------------------------------------
+// MÉTRICAS DO ASSISTENTE: produto × período, com as regras do painel
+// ------------------------------------------------------------
+// Antes o assistente respondia "vendas do KOR em 7 dias" com o total de todas
+// as vendas de todos os produtos desde sempre, e "CPL do MLFP" com o gasto da
+// conta inteira. Agora toda resposta de número sai daqui: período e produto
+// lidos da pergunta, gasto do Meta (duas contas), CRM sincronizado na hora e
+// vendas pelas mesmas fontes do painel.
 
-    const [allMetrics, koMetrics, mlfpMetrics, kopMetrics, korMetrics, metaData] = await Promise.all([
-      getExecutiveMetrics('all', timeframe),
-      getExecutiveMetrics('komando', timeframe),
-      getExecutiveMetrics('mlfp', timeframe),
-      getExecutiveMetrics('kop', timeframe),
-      getExecutiveMetrics('kor', timeframe),
-      getMetaAdsDataSummary()
-    ]);
+const PRODUTOS_ASSISTENTE = {
+  mlfp: { nome: 'Mentoria MLFP', pipes: [13304583, 14290224], reuniao: { 13304583: [102599203] } },
+  komando: { nome: 'Komando', pipes: [13304659], reuniao: { 13304659: [102599811] } },
+  kop: { nome: 'KOP', pipes: [14173256] },
+  kor: { nome: 'KOR', pipes: [14268556, 13956952] },
+  ebook: { nome: 'Ebooks', pipes: [13537971], reuniao: { 13537971: [104458027] } },
+  conteudo: { nome: 'Conteúdo', pipes: [] }
+};
 
-    return `### 📊 Resumo Executivo de Performance (${tfLabel})
+const MESES_PT = ['janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+const semAcento = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const fmtDataBR = iso => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+const brl = v => 'R$ ' + (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-Aqui está o panorama consolidado de **Leads, Qualificação (MQL), Tráfego e Vendas**:
+// Período da pergunta, no fuso de Brasília. Sem período explícito: mês atual.
+function periodoDaPergunta(texto) {
+  const t = semAcento(texto);
+  const hoje = dataBrasilia(0);
+  const menosDias = n => dataBrasilia(n);
+  const [ano, mes] = hoje.split('-').map(Number);
+  const pad = n => String(n).padStart(2, '0');
+  const fimDoMes = (a, m) => `${a}-${pad(m)}-${pad(new Date(a, m, 0).getDate())}`;
 
----
+  const intervalo = t.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\s*(?:a|ate|-)\s*(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+  if (intervalo) {
+    const anoDe = v => v ? (v.length === 2 ? 2000 + Number(v) : Number(v)) : ano;
+    const since = `${anoDe(intervalo[3])}-${pad(intervalo[2])}-${pad(intervalo[1])}`;
+    const until = `${anoDe(intervalo[6])}-${pad(intervalo[5])}-${pad(intervalo[4])}`;
+    return { since, until, rotulo: `${fmtDataBR(since)} a ${fmtDataBR(until)}` };
+  }
+  if (/\bhoje\b/.test(t)) return { since: hoje, until: hoje, rotulo: `hoje (${fmtDataBR(hoje)})` };
+  if (/\bontem\b/.test(t)) { const d = menosDias(1); return { since: d, until: d, rotulo: `ontem (${fmtDataBR(d)})` }; }
+  const nDias = t.match(/(\d{1,3})\s*dias/);
+  if (nDias) {
+    const n = Math.max(1, Math.min(365, Number(nDias[1])));
+    const since = menosDias(n - 1);
+    return { since, until: hoje, rotulo: `últimos ${n} dias (${fmtDataBR(since)} a ${fmtDataBR(hoje)})` };
+  }
+  if (/semana/.test(t)) { const since = menosDias(6); return { since, until: hoje, rotulo: `últimos 7 dias (${fmtDataBR(since)} a ${fmtDataBR(hoje)})` }; }
+  if (/mes passado|ultimo mes/.test(t)) {
+    const a = mes === 1 ? ano - 1 : ano, m = mes === 1 ? 12 : mes - 1;
+    return { since: `${a}-${pad(m)}-01`, until: fimDoMes(a, m), rotulo: `${MESES_PT[m - 1]} de ${a}` };
+  }
+  const idxMes = MESES_PT.findIndex(m => new RegExp(`\\b${m}\\b`).test(t));
+  if (idxMes >= 0) {
+    const m = idxMes + 1;
+    const a = m > mes ? ano - 1 : ano;
+    const until = m === mes && a === ano ? hoje : fimDoMes(a, m);
+    return { since: `${a}-${pad(m)}-01`, until, rotulo: `${MESES_PT[m - 1]} de ${a}${until === hoje ? ` (até ${fmtDataBR(hoje)})` : ''}` };
+  }
+  const since = `${ano}-${pad(mes)}-01`;
+  return { since, until: hoje, rotulo: `${MESES_PT[mes - 1]} até ${fmtDataBR(hoje)}` };
+}
 
-#### 🌟 Indicadores Gerais Consolidados:
-* 📥 **Total de Leads Entrantes:** \`${allMetrics.total_leads}\` leads
-* 🔥 **Leads Qualificados (MQL):** \`${allMetrics.total_mql}\` leads (**${allMetrics.mql_rate_pct}%** de qualificação)
-* 💳 **Vendas Confirmadas (Eduzz + CRM):** \`${allMetrics.total_sales_count}\` vendas
-* 💰 **Faturamento Total:** \`R$ ${allMetrics.total_revenue_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\`
-* 🎯 **Ticket Médio:** \`R$ ${allMetrics.ticket_medio_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\`
-* 📢 **Investimento Meta Ads:** \`R$ ${metaData.totals?.total_spend_brl ? metaData.totals.total_spend_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}\`
+function produtosDaPergunta(texto) {
+  const t = semAcento(texto);
+  const achados = [];
+  if (/mlfp|mentoria|faixa preta|lideranca/.test(t)) achados.push('mlfp');
+  if (/komando|\bko\b/.test(t)) achados.push('komando');
+  if (/\bkop\b|praca/.test(t)) achados.push('kop');
+  if (/\bkor\b|restaurantes/.test(t)) achados.push('kor');
+  if (/e-?book/.test(t)) achados.push('ebook');
+  if (/conteudo|views|seguidores/.test(t)) achados.push('conteudo');
+  return achados;
+}
 
----
+// Produto de uma venda da Eduzz. Fase 2 e renovação do Komando são de clientes
+// que já existiam: não vêm do tráfego e ficam fora do ROAS (Batovi, 08/10/2026).
+function produtoDaVendaEduzz(titulo) {
+  const t = semAcento(titulo).toUpperCase();
+  if (/KIT DE OPERACAO DE RESTAURANTES/.test(t)) return 'kor';
+  if (/KIT DE OPERACAO DE PRACA|\bKOP\b/.test(t)) return 'kop';
+  if (/KIT DE LIDERAN/.test(t)) return 'mlfp_downsell';
+  if (/MENTORIA|MLFP|FAIXA PRETA|LINK ESPECIAL/.test(t)) return 'mlfp';
+  if (/K[OØ]MANDO/.test(semAcento(titulo).toUpperCase().replace(/Ø/g, 'O'))) return /FASE 2|RENOVA/.test(t) ? 'komando_renovacao' : 'komando';
+  if (/E-?BOOK|10 PASSOS|LIVRO/.test(t)) return 'ebook';
+  return 'outros';
+}
 
-#### 📂 Desempenho por Funil / Produto:
-| Funil / Produto | Leads | MQLs | Taxa MQL | Vendas | Faturamento |
-| :--- | :---: | :---: | :---: | :---: | :--- |
-| 🔴 **Komando (KO Inbound)** | ${koMetrics.total_leads} | ${koMetrics.total_mql} | ${koMetrics.mql_rate_pct}% | ${koMetrics.total_sales_count} | R$ ${koMetrics.total_revenue_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} |
-| 🔵 **Mentoria [MLFP]** | ${mlfpMetrics.total_leads} | ${mlfpMetrics.total_mql} | ${mlfpMetrics.mql_rate_pct}% | ${mlfpMetrics.total_sales_count} | R$ ${mlfpMetrics.total_revenue_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} |
-| 📦 **KOP (Praça)** | ${kopMetrics.total_leads} | ${kopMetrics.total_mql} | ${kopMetrics.mql_rate_pct}% | ${kopMetrics.total_sales_count} | R$ ${kopMetrics.total_revenue_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} |
-| 🔄 **KOR (Restaurantes)** | ${korMetrics.total_leads} | ${korMetrics.total_mql} | ${korMetrics.mql_rate_pct}% | ${korMetrics.total_sales_count} | R$ ${korMetrics.total_revenue_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} |
+// Sincroniza o CRM se a última sincronização tiver mais de 30 minutos
+async function garantirCrmAtualizado(baseUrl) {
+  const info = await lerCache('sync_info.json', null);
+  const idadeMin = info?.timestamp ? (Date.now() - new Date(info.timestamp).getTime()) / 60000 : Infinity;
+  if (idadeMin <= 30 || !baseUrl) return info?.timestamp || null;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
+    await fetch(`${baseUrl}/api/sync`, { method: 'POST', signal: ctrl.signal });
+    clearTimeout(timer);
+    // A sincronização gravou em outra invocação; a cópia em memória desta está velha
+    memoriaCache.delete('all_leads.json');
+    memoriaCache.delete('sync_info.json');
+    const nova = await lerCache('sync_info.json', null);
+    return nova?.timestamp || info?.timestamp || null;
+  } catch (err) {
+    console.warn('[Assistente] Sincronização do CRM não terminou a tempo:', err.message);
+    return info?.timestamp || null;
+  }
+}
 
-💡 *Dica: Você pode me pedir detalhes específicos de qualquer lead, campanha ou faturamento digitando o nome ou o tema desejado!*`;
+// Leads que entraram numa etapa de reunião realizada dentro do período
+async function reunioesRealizadas(reuniao, iniSec, fimSec) {
+  const leads = new Set();
+  for (const [pipe, etapas] of Object.entries(reuniao || {})) {
+    for (const etapa of etapas) {
+      for (let page = 1; page < 10; page++) {
+        const d = await kommoRequest('GET', `/api/v4/events?filter[type]=lead_status_changed&filter[value_after][leads_statuses][0][pipeline_id]=${pipe}&filter[value_after][leads_statuses][0][status_id]=${etapa}&filter[created_at][from]=${iniSec}&filter[created_at][to]=${fimSec}&limit=100&page=${page}`);
+        const ev = d?._embedded?.events || [];
+        ev.forEach(e => leads.add(e.entity_id));
+        if (ev.length < 100) break;
+      }
+    }
+  }
+  return leads.size;
+}
+
+async function metricasPorProduto(since, until, baseUrl) {
+  const sincronizadoEm = await garantirCrmAtualizado(baseUrl);
+  const iniSec = Math.floor(new Date(`${since}T00:00:00-03:00`).getTime() / 1000);
+  const fimSec = Math.floor(new Date(`${until}T23:59:59-03:00`).getTime() / 1000);
+
+  const [trafego, todosLeads, vendasEduzz] = await Promise.all([
+    coletarTrafego(since, until).catch(err => ({ erro: err.message, funis: {} })),
+    lerCache('all_leads.json', []),
+    lerVendasEduzz()
+  ]);
+
+  const dataVenda = s => {
+    const raw = s.date_payment || s.date_create;
+    if (!raw) return NaN;
+    const iso = String(raw).replace(' ', 'T');
+    return Math.floor(new Date(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}-03:00`).getTime() / 1000);
+  };
+  const vendasPagas = vendasEduzz.filter(s => s.sale_status === 3 || s.sale_status_name === 'Paga' || s.status === 'paid');
+  const doPeriodo = vendasPagas.filter(s => { const t = dataVenda(s); return !isNaN(t) && t >= iniSec && t <= fimSec; });
+
+  const resultado = {};
+  for (const [chave, cfg] of Object.entries(PRODUTOS_ASSISTENTE)) {
+    const funil = trafego.funis?.[chave === 'conteudo' ? 'engajamento' : chave] || {};
+    const leads = cfg.pipes.length ? todosLeads.filter(l => !isTestLead(l) && !isRepescagemLead(l)
+      && cfg.pipes.includes(l.pipeline_id) && l.created_at >= iniSec && l.created_at <= fimSec) : [];
+    const mql = leads.filter(l => (l._embedded?.tags || []).some(t => t.name === 'MQL')).length;
+
+    let vendas = 0, receita = 0;
+    const itens = [];
+    if (chave === 'kor') {
+      const r = vendasKorBaseEduzz(todosLeads, iniSec, fimSec, vendasPagas);
+      vendas = r.vendas; receita = r.valor;
+    } else if (chave !== 'conteudo') {
+      const daEduzz = doPeriodo.filter(s => produtoDaVendaEduzz(s.content_title || s.product_name) === chave);
+      daEduzz.forEach(s => {
+        vendas++; receita += parseFloat(s.sale_total) || 0;
+        itens.push({ data: String(s.date_payment || s.date_create).slice(0, 10), produto: s.content_title, valor: parseFloat(s.sale_total) || 0, cliente: s.client_name });
+      });
+      // Ganho no CRM com valor e sem pagamento na Eduzz (link especial, Pix direto)
+      const nomesEduzz = vendasPagas.filter(s => produtoDaVendaEduzz(s.content_title || s.product_name) === chave).map(s => nomeComparavel(s.client_name));
+      todosLeads.filter(l => cfg.pipes.includes(l.pipeline_id) && l.status_id === 142 && parseFloat(l.price) > 0)
+        .filter(l => { const f = l.closed_at || l.updated_at || 0; return f >= iniSec && f <= fimSec; })
+        .filter(l => { const n = nomeComparavel(String(l.name).replace(/^\[[^\]]*\]\s*/, '')); return !nomesEduzz.some(e => e && n && (e.startsWith(n) || n.startsWith(e))); })
+        .forEach(l => {
+          vendas++; receita += parseFloat(l.price);
+          itens.push({ data: new Date(((l.closed_at || l.updated_at) - 3 * 3600) * 1000).toISOString().slice(0, 10), produto: 'Ganho no CRM', valor: parseFloat(l.price), cliente: l.name });
+        });
+    }
+
+    const investimento = funil.gasto || 0;
+    // KOR, KOP e Ebooks são venda direta: o anúncio leva ao checkout e o
+    // custo que importa é por venda (CAC), não por lead
+    const vendaDireta = ['kor', 'kop', 'ebook'].includes(chave);
+    resultado[chave] = {
+      produto: cfg.nome,
+      investimento: Math.round(investimento * 100) / 100,
+      leads: leads.length,
+      mql,
+      cpl: !vendaDireta && leads.length && investimento ? investimento / leads.length : null,
+      cpmql: !vendaDireta && mql && investimento ? investimento / mql : null,
+      reunioes_realizadas: cfg.reuniao ? await reunioesRealizadas(cfg.reuniao, iniSec, fimSec).catch(() => null) : null,
+      vendas,
+      receita: Math.round(receita * 100) / 100,
+      cac: vendas && investimento ? investimento / vendas : null,
+      roas: investimento ? receita / investimento : null,
+      vendas_detalhe: itens
+    };
   }
 
-  // 2. Gargalos e Dores dos Leads
-  if (msg.includes('gargalo') || msg.includes('dor') || msg.includes('desafio') || msg.includes('problema') || msg.includes('reclam')) {
+  // Fora dos produtos: renovação do Komando, downsell do MLFP e outros produtos
+  const extras = {};
+  doPeriodo.forEach(s => {
+    const p = produtoDaVendaEduzz(s.content_title || s.product_name);
+    if (!['komando_renovacao', 'mlfp_downsell', 'outros'].includes(p)) return;
+    extras[p] = extras[p] || { vendas: 0, receita: 0, itens: [] };
+    extras[p].vendas++; extras[p].receita += parseFloat(s.sale_total) || 0;
+    extras[p].itens.push(`${s.content_title} (${brl(s.sale_total)})`);
+  });
+
+  return { since, until, sincronizadoEm, erroTrafego: trafego.erro || null, produtos: resultado, extras };
+}
+
+function tabelaMetricas(m, chaves) {
+  const fmt = (v, tipo) => {
+    if (v === null || v === undefined) return '—';
+    if (tipo === 'brl') return brl(v);
+    if (tipo === 'x') return v.toFixed(2).replace('.', ',') + 'x';
+    return String(v);
+  };
+  const linhas = chaves.map(k => {
+    const p = m.produtos[k];
+    return `| **${p.produto}** | ${fmt(p.investimento, 'brl')} | ${p.leads || '—'} | ${fmt(p.cpl, 'brl')} | ${p.mql || '—'} | ${fmt(p.cpmql, 'brl')} | ${fmt(p.reunioes_realizadas)} | ${p.vendas} | ${fmt(p.receita, 'brl')} | ${fmt(p.cac, 'brl')} | ${fmt(p.roas, 'x')} |`;
+  });
+  return `| Produto | Investimento | Leads | CPL | MQL | CPMQL | Reuniões realizadas | Vendas | Receita | CAC | ROAS |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+${linhas.join('\n')}`;
+}
+
+async function respostaMetricas(userMessage, baseUrl) {
+  const periodo = periodoDaPergunta(userMessage);
+  const pedidos = produtosDaPergunta(userMessage);
+  const m = await metricasPorProduto(periodo.since, periodo.until, baseUrl);
+  const chaves = pedidos.length ? pedidos : Object.keys(PRODUTOS_ASSISTENTE).filter(k => {
+    const p = m.produtos[k];
+    return p.investimento || p.leads || p.vendas;
+  });
+  const t = semAcento(userMessage);
+
+  let texto = `### 📊 ${chaves.length === 1 ? m.produtos[chaves[0]].produto : 'Resultados por produto'} — ${periodo.rotulo}\n\n`;
+
+  // Resposta direta para a métrica perguntada, antes da tabela
+  if (chaves.length === 1) {
+    const p = m.produtos[chaves[0]];
+    const diretas = [];
+    if (/venda|vendeu|faturamento|receita|compra/.test(t)) diretas.push(`**${p.vendas} venda(s)**, ${brl(p.receita)} de receita`);
+    if (/\bcpl\b|custo por lead/.test(t)) diretas.push(`CPL de **${p.cpl ? brl(p.cpl) : '—'}** (${brl(p.investimento)} ÷ ${p.leads} leads)`);
+    if (/cpmql|custo por mql/.test(t)) diretas.push(`CPMQL de **${p.cpmql ? brl(p.cpmql) : '—'}**`);
+    if (/roas|retorno/.test(t)) diretas.push(`ROAS de **${p.roas !== null ? p.roas.toFixed(2).replace('.', ',') + 'x' : '—'}**`);
+    if (/\bcac\b|custo por venda/.test(t)) diretas.push(`CAC de **${p.cac ? brl(p.cac) : '—'}**`);
+    if (/reuni/.test(t)) diretas.push(`**${p.reunioes_realizadas ?? '—'}** reunião(ões) realizada(s)`);
+    if (/\bmql/.test(t) && !/cpmql/.test(t)) diretas.push(`**${p.mql} MQL** de ${p.leads} leads (${p.leads ? Math.round(100 * p.mql / p.leads) : 0}%)`);
+    if (/invest|gasto|gastou/.test(t)) diretas.push(`investimento de **${brl(p.investimento)}**`);
+    if (diretas.length) texto += `${diretas.join(' · ')}.\n\n`;
+  }
+
+  texto += tabelaMetricas(m, chaves) + '\n';
+
+  if (/venda|vendeu|faturamento|receita|compra/.test(t)) {
+    const itens = chaves.flatMap(k => m.produtos[k].vendas_detalhe.map(i => ({ ...i, prod: m.produtos[k].produto })));
+    if (itens.length && itens.length <= 15) {
+      texto += `\n**Vendas do período:**\n${itens.sort((a, b) => a.data.localeCompare(b.data)).map(i => `* ${fmtDataBR(i.data)} — ${i.prod}: ${i.produto} · ${brl(i.valor)} · ${i.cliente}`).join('\n')}\n`;
+    }
+  }
+
+  if (!pedidos.length || pedidos.includes('komando') || pedidos.includes('mlfp')) {
+    const notas = [];
+    if (m.extras.komando_renovacao && (!pedidos.length || pedidos.includes('komando'))) notas.push(`Renovação do Komando fora do ROAS: ${m.extras.komando_renovacao.itens.join(', ')}.`);
+    if (m.extras.mlfp_downsell && (!pedidos.length || pedidos.includes('mlfp'))) notas.push(`Downsell do MLFP (Kit de Liderança): ${m.extras.mlfp_downsell.vendas} venda(s), ${brl(m.extras.mlfp_downsell.receita)}.`);
+    if (notas.length) texto += `\n${notas.join('\n')}\n`;
+  }
+
+  const sync = m.sincronizadoEm ? new Date(new Date(m.sincronizadoEm).getTime() - 3 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ') : 'desconhecida';
+  texto += `\n_Fontes: Meta Ads (duas contas), Kommo sincronizado em ${sync} e vendas pagas da Eduzz. Leads e MQL contam pelo dia de entrada no CRM; o KOR conta as compras do Kit, inclusive de clientes antigos._`;
+  if (m.erroTrafego) texto += `\n\n⚠️ O Meta Ads não respondeu (${m.erroTrafego}); o investimento pode estar zerado.`;
+  return texto;
+}
+
+// "lead" e "MQL" sozinhos podem ser busca de pessoa; só contam como métrica
+// com palavra de contagem ("quantos leads", "taxa de MQL")
+const PERGUNTA_DE_METRICA = /resumo|venda|vendeu|faturamento|receita|compra|\bcpl\b|cpmql|custo|roas|\bcac\b|retorno|invest|gasto|gastou|trafego|anuncio|campanha|meta ads|\bads\b|reuni|performance|resultado|metrica|numeros|como (esta|foi|estamos)/;
+const CONTAGEM = /quant|total|taxa|numero|volume/;
+
+// Autonomous / Smart Fallback Dispatcher for Dashboard AI
+async function executeSmartAnalyticsResponse(userMessage, baseUrl) {
+  const msg = userMessage.toLowerCase();
+  const t = semAcento(userMessage);
+
+  // Gargalos e dores dos leads (antes das métricas: "problema" não é número)
+  if (/gargalo|\bdor\b|dores|desafio|problema|reclam/.test(t)) {
     const analysis = await getPainPointsAndProfileAnalysis();
-    let gargalosList = analysis.principais_gargalos.map((g, i) => `${i + 1}. **${g.name}** — \`${g.count} leads\` (${g.pct})`).join('\n');
-    let fatList = analysis.faixas_de_faturamento.map((f, i) => `* **${f.name}**: \`${f.count} leads\` (${f.pct})`).join('\n');
+    const gargalosList = analysis.principais_gargalos.map((g, i) => `${i + 1}. **${g.name}** — \`${g.count} leads\` (${g.pct})`).join('\n');
+    const fatList = analysis.faixas_de_faturamento.map(f => `* **${f.name}**: \`${f.count} leads\` (${f.pct})`).join('\n');
+    return `### 🚧 Gargalos e perfil dos leads
 
-    return `### 🚧 Análise de Gargalos & Perfil dos Leads
+Com base em **${analysis.total_leads_with_form_data} respostas de formulário**:
 
-Com base em **${analysis.total_leads_with_form_data} respostas de formulário** cadastradas:
-
-#### ⚠️ Principais Gargalos Operacionais Citados:
+#### ⚠️ Gargalos mais citados
 ${gargalosList || 'Nenhum gargalo registrado ainda.'}
 
----
-
-#### 💰 Distribuição de Faturamento dos Estabelecimentos:
-${fatList || 'Nenhum faturamento registrado ainda.'}
-
-📌 **Insight Comercial:** A maior parte dos donos de restaurante que chegam no funil estão sofrendo com dependência operacional e falta de processos padronizados.`;
+#### 💰 Faixas de faturamento
+${fatList || 'Nenhum faturamento registrado ainda.'}`;
   }
 
-  // 3. Meta Ads e Tráfego Pago
-  if (msg.includes('meta') || msg.includes('ads') || msg.includes('trafego') || msg.includes('tráfego') || msg.includes('campanha') || msg.includes('cpl') || msg.includes('cpc') || msg.includes('roas') || msg.includes('investimento')) {
-    const metaData = await getMetaAdsDataSummary();
-    if (metaData.error) return `⚠️ Erro ao consultar Meta Ads: ${metaData.error}`;
-
-    let campRows = (metaData.top_campaigns || []).map(c => `| ${c.name.substring(0, 38)}... | R$ ${c.spend.toLocaleString('pt-BR')} | ${c.clicks} | ${c.ctr} | ${c.cpc} | ${c.pixel_leads} | ${c.pixel_purchases} |`).join('\n');
-
-    return `### 🎯 Desempenho de Tráfego Pago — Meta Ads
-
-* 💸 **Investimento Total:** \`R$ ${metaData.totals.total_spend_brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\`
-* 👁️ **Impressões:** \`${metaData.totals.total_impressions.toLocaleString('pt-BR')}\`
-* 🖱️ **Cliques no Link:** \`${metaData.totals.total_clicks.toLocaleString('pt-BR')}\`
-* 📊 **CTR Médio:** \`${metaData.totals.avg_ctr}\` | **CPC Médio:** \`${metaData.totals.avg_cpc}\`
-* 📥 **Leads (Pixel Meta):** \`${metaData.totals.total_pixel_leads}\` | 💳 **Compras (Pixel Meta):** \`${metaData.totals.total_pixel_purchases}\`
-
----
-
-#### 🏆 Principais Campanhas Ativas:
-| Campanha | Investido | Cliques | CTR | CPC | Leads | Compras |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-${campRows || '| Nenhuma campanha com gasto encontrada | - | - | - | - | - | - |'}`;
+  // Números: sempre calculados por produto e período
+  const buscaDeLead = /\b(quem e|procur|encontr|busc|lead (do|da|de)|telefone|email|contato d)/.test(t) && !CONTAGEM.test(t);
+  const ehMetrica = PERGUNTA_DE_METRICA.test(t) || (/lead|mql/.test(t) && CONTAGEM.test(t)) || produtosDaPergunta(userMessage).length > 0;
+  if (!buscaDeLead && ehMetrica) {
+    return respostaMetricas(userMessage, baseUrl);
   }
 
-  // 4. Vendas Eduzz
-  if (msg.includes('eduzz') || msg.includes('venda') || msg.includes('faturamento') || msg.includes('compra') || msg.includes('receita')) {
-    const { rawSales } = await getLoadedCRMData();
-    const paidSales = rawSales.filter(s => s.sale_status === 3 || s.sale_status_name === 'Paga' || s.status === 'paid');
-    const totalRev = paidSales.reduce((a, s) => a + (parseFloat(s.sale_total) || parseFloat(s.value) || 0), 0);
-    
-    // Top products
-    const prodMap = {};
-    paidSales.forEach(s => {
-      const name = s.content_title || s.product_name || 'Outro Produto';
-      const val = parseFloat(s.sale_total) || parseFloat(s.value) || 0;
-      if (!prodMap[name]) prodMap[name] = { count: 0, revenue: 0 };
-      prodMap[name].count++;
-      prodMap[name].revenue += val;
-    });
-
-    let prodRows = Object.entries(prodMap).sort((a, b) => b[1].revenue - a[1].revenue).map(([name, data]) => {
-      return `| **${name}** | \`${data.count}\` | R$ ${data.revenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} |`;
-    }).join('\n');
-
-    return `### 💳 Relatório de Vendas & Faturamento (Eduzz)
-
-* 💰 **Faturamento Total Pago:** \`R$ ${totalRev.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\`
-* 📦 **Total de Vendas Confirmadas:** \`${paidSales.length}\` vendas
-* 🎯 **Ticket Médio:** \`R$ ${(paidSales.length > 0 ? (totalRev / paidSales.length) : 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\`
-
----
-
-#### 🛍️ Vendas por Produto:
-| Produto | Vendas | Faturamento |
-| :--- | :---: | :--- |
-${prodRows || '| Nenhum produto com vendas pagas | 0 | R$ 0,00 |'}`;
-  }
-
-  // 5. Busca de Lead Específico ou MQLs
+  // Busca de lead específico
   const searchRes = await searchLeadsDeep(userMessage, 8);
   if (searchRes.leads.length > 0) {
     let leadCards = searchRes.leads.map(l => {
@@ -5312,8 +5692,260 @@ ${leadCards}`;
 Como posso te ajudar agora?`;
 }
 
+// ------------------------------------------------------------
+// ASSISTENTE COM CLAUDE (linguagem livre sobre os dados reais)
+// ------------------------------------------------------------
+// Ativa quando ANTHROPIC_API_KEY está configurada. O Claude conversa e decide
+// o que consultar; todo número vem das mesmas funções do painel. Se a chave
+// não existir, se a API falhar ou se o tempo acabar, a resposta sai do motor
+// calculado (executeSmartAnalyticsResponse), nunca de estimativa.
+const AnthropicSDK = require('@anthropic-ai/sdk');
+const Anthropic = AnthropicSDK.default || AnthropicSDK;
+const MODELO_ASSISTENTE = process.env.ASSISTENTE_MODELO || 'claude-opus-5-5';
+// A função da Vercel tem 60 s; a resposta calculada precisa caber no que sobra
+const LIMITE_ASSISTENTE_MS = 42000;
+
+const SISTEMA_ASSISTENTE = `Você é o assistente de dados do painel comercial e de tráfego do Chef Kaká Gomes. Responde em português do Brasil, para o dono do negócio e o time comercial.
+
+Produtos (independentes; nunca some KOP ou KOR ao Komando):
+- Mentoria MLFP: captação por lead na landing page; MQL = renda ou faturamento a partir de R$ 3 mil com cargo qualificado; vende em reunião com closer. Downsell: Kit de Liderança (R$ 97) e mentoria gravada (R$ 997).
+- Komando (consultoria): captação por lead; MQL = dono/sócio/CEO/diretor com faturamento a partir de R$ 100 mil; vende em reunião. "Fase 2" e renovações são de clientes que já existiam e ficam fora do ROAS de tráfego.
+- KOR (Kit de Operação de Restaurantes, R$ 97): venda direta no checkout da Eduzz; o custo que importa é por venda (CAC), não por lead. Meta por retorno: ROAS 2x é a meta mínima e 4x a supermeta.
+- KOP e Ebooks não são mais acompanhados no painel; só fale deles se perguntarem.
+- Conteúdo: campanhas de views e seguidores, fora de CPL e ROAS.
+
+Como trabalhar:
+- Todo número da resposta vem de uma ferramenta chamada nesta conversa. Não estime, não complete de memória e não invente. Se a ferramenta não trouxer o dado, diga que não há o dado.
+- Para investimento, leads, MQL, CPL, CPMQL, reuniões, vendas, receita, CAC ou ROAS, use metricas_produto com o período pedido. Sem período na pergunta, use do dia 1 do mês atual até hoje. "Últimos N dias" termina hoje.
+- Para comparar períodos, chame metricas_produto uma vez por período.
+- O painel divide o mês em cinco semanas fixas: dias 1 a 5, 6 a 12, 13 a 19, 20 a 26 e 27 ao fim do mês. "Esta semana" e "semana passada" seguem essas semanas.
+- Metas: quando a mensagem trouxer metas_do_mes, cada lista tem um valor por semana do painel, na ordem acima; a meta do mês é a soma. Quando houver supermeta, compare também com ela. Para dizer se está "no ritmo", compare o realizado com a meta proporcional aos dias já passados do período. Sem metas na mensagem, diga que não há meta definida para aquele produto.
+- Para campanhas ou criativos, use campanhas_meta. Para uma pessoa específica, use buscar_leads. Para dores e perfil dos leads, use gargalos_leads.
+- Em perguntas de decisão ("vale a pena", "devo", "o que fazer"), consulte também os meses anteriores, até achar o último período em que o produto teve investimento, e baseie a opinião nesses números. Diga o que os dados mostram e o que eles não permitem concluir.
+- Vendas ganhas no Kommo e pagas na Eduzz contam como vendas ganhas, mas ainda não são faturamento: chame o valor de "receita ganha", nunca de "faturado".
+- Diga sempre o período e de onde vêm os números, pelo nome do sistema (Meta Ads, Kommo, Eduzz), nunca pelo nome da ferramenta. Leads e MQL contam pelo dia de entrada no CRM.
+
+Formato: comece pela resposta direta, em uma ou duas frases com o número pedido. Depois, só o que ajuda a decidir: uma tabela curta em Markdown quando houver vários produtos ou períodos, e no máximo três observações. Valores em reais no formato R$ 1.234,56. Sem emojis e sem cabeçalhos longos.`;
+
+const FERRAMENTAS_ASSISTENTE = [
+  {
+    name: 'metricas_produto',
+    description: 'Métricas reais por produto num período: investimento no Meta Ads (duas contas), leads e MQL do Kommo (sincronizado na hora), reuniões realizadas, vendas e receita (Eduzz + ganhos do CRM, com a lista de vendas), CPL, CPMQL, CAC e ROAS. Também traz vendas fora dos produtos: renovação do Komando, downsell do MLFP e outros.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        since: { type: 'string', description: 'Data inicial no formato YYYY-MM-DD (horário de Brasília).' },
+        until: { type: 'string', description: 'Data final no formato YYYY-MM-DD (horário de Brasília), no máximo hoje.' },
+        produto: { type: 'string', enum: ['todos', 'mlfp', 'komando', 'kop', 'kor', 'ebook', 'conteudo'], description: 'Produto a detalhar, ou "todos".' }
+      },
+      required: ['since', 'until', 'produto']
+    }
+  },
+  {
+    name: 'campanhas_meta',
+    description: 'Campanhas e criativos do Meta Ads num período, nas duas contas: gasto e leads por campanha (agrupadas por produto) e os criativos com maior gasto.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        since: { type: 'string', description: 'Data inicial YYYY-MM-DD.' },
+        until: { type: 'string', description: 'Data final YYYY-MM-DD.' }
+      },
+      required: ['since', 'until']
+    }
+  },
+  {
+    name: 'buscar_leads',
+    description: 'Busca leads no Kommo por nome, telefone, e-mail, tag, cargo ou faturamento. Devolve até 10 leads com tags, campos do formulário e link do CRM.',
+    input_schema: {
+      type: 'object',
+      properties: { termo: { type: 'string', description: 'Nome, telefone, e-mail ou palavra-chave.' } },
+      required: ['termo']
+    }
+  },
+  {
+    name: 'gargalos_leads',
+    description: 'Ranking dos gargalos, faixas de faturamento e cargos que os leads informaram nos formulários.',
+    input_schema: { type: 'object', properties: {} }
+  }
+];
+
+const DATA_ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+async function executarFerramentaAssistente(nome, entrada, baseUrl) {
+  if (nome === 'metricas_produto' || nome === 'campanhas_meta') {
+    const hoje = dataBrasilia(0);
+    const since = DATA_ISO.test(entrada?.since || '') ? entrada.since : hoje.slice(0, 8) + '01';
+    const until = DATA_ISO.test(entrada?.until || '') ? (entrada.until > hoje ? hoje : entrada.until) : hoje;
+    if (since > until) return { erro: `Período inválido: ${since} depois de ${until}.` };
+    if (nome === 'campanhas_meta') {
+      const t = await coletarTrafego(since, until);
+      return {
+        periodo: { since, until },
+        por_produto: Object.fromEntries(Object.entries(t.funis).map(([f, v]) => [f, {
+          gasto: Math.round(v.gasto * 100) / 100,
+          campanhas: v.campanhas.filter(c => c.gasto > 0).map(c => ({ nome: c.nome, conta: c.conta, gasto: Math.round(c.gasto * 100) / 100, leads_pixel: c.leads, compras_pixel: c.compras }))
+        }])),
+        criativos_maior_gasto: t.criativos.sort((a, b) => b.gasto - a.gasto).slice(0, 15)
+          .map(c => ({ nome: c.nome, conta: c.conta, gasto: Math.round(c.gasto * 100) / 100, leads_pixel: c.leads }))
+      };
+    }
+    const m = await metricasPorProduto(since, until, baseUrl);
+    const produto = entrada?.produto && entrada.produto !== 'todos' ? entrada.produto : null;
+    return produto && m.produtos[produto] ? { ...m, produtos: { [produto]: m.produtos[produto] } } : m;
+  }
+  if (nome === 'buscar_leads') return searchLeadsDeep(String(entrada?.termo || ''), 10);
+  if (nome === 'gargalos_leads') return getPainPointsAndProfileAnalysis();
+  return { erro: `Ferramenta desconhecida: ${nome}` };
+}
+
+async function responderComClaude(userMessage, history, context, baseUrl) {
+  const inicio = Date.now();
+  const client = new Anthropic({ timeout: LIMITE_ASSISTENTE_MS, maxRetries: 1 });
+
+  // O painel já inclui a pergunta atual no fim do histórico
+  const messages = historicoDoChat(history, userMessage);
+  // Data e tela atual vão na mensagem (e não no sistema) para o prefixo fixo ficar em cache
+  const ctx = context && Object.keys(context).length ? `\nContexto do painel: ${JSON.stringify(context).slice(0, 4000)}` : '';
+  messages.push({ role: 'user', content: `Hoje é ${dataBrasilia(0)} (horário de Brasília).${ctx}\n\n${userMessage}` });
+
+  for (let rodada = 0; rodada < 5; rodada++) {
+    const restante = LIMITE_ASSISTENTE_MS - (Date.now() - inicio);
+    if (restante < 8000) throw new Error('tempo esgotado antes da resposta final');
+
+    const response = await client.beta.messages.create({
+      model: MODELO_ASSISTENTE,
+      max_tokens: 8000,
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+      output_config: { effort: 'low' },
+      system: [{ type: 'text', text: SISTEMA_ASSISTENTE, cache_control: { type: 'ephemeral' } }],
+      tools: FERRAMENTAS_ASSISTENTE,
+      messages
+    }, { timeout: restante });
+
+    if (response.stop_reason === 'refusal') throw new Error('pedido recusado pelo modelo');
+    if (response.stop_reason === 'pause_turn') { messages.push({ role: 'assistant', content: response.content }); continue; }
+
+    const chamadas = response.content.filter(b => b.type === 'tool_use');
+    if (response.stop_reason !== 'tool_use' || !chamadas.length) {
+      const texto = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+      if (!texto) throw new Error(`resposta vazia (${response.stop_reason})`);
+      return texto;
+    }
+
+    messages.push({ role: 'assistant', content: response.content });
+    // Todas as ferramentas em paralelo, e todos os resultados numa única mensagem
+    const resultados = await Promise.all(chamadas.map(async c => {
+      try {
+        const saida = await executarFerramentaAssistente(c.name, c.input, baseUrl);
+        return { type: 'tool_result', tool_use_id: c.id, content: JSON.stringify(saida).slice(0, 60000) };
+      } catch (err) {
+        return { type: 'tool_result', tool_use_id: c.id, content: `Erro ao consultar: ${err.message}`, is_error: true };
+      }
+    }));
+    messages.push({ role: 'user', content: resultados });
+  }
+  throw new Error('limite de consultas por pergunta atingido');
+}
+
+// Histórico do chat no formato { role, content }, sem a pergunta atual repetida
+function historicoDoChat(history, userMessage, limite = 8) {
+  const anteriores = Array.isArray(history) ? [...history] : [];
+  const ultima = anteriores[anteriores.length - 1];
+  if (ultima && ultima.role === 'user' && String(ultima.content).trim() === userMessage.trim()) anteriores.pop();
+  const saida = [];
+  anteriores.slice(-limite).forEach(h => {
+    if (!h || typeof h.content !== 'string' || !h.content.trim()) return;
+    const role = h.role === 'user' ? 'user' : 'assistant';
+    if (!saida.length && role !== 'user') return;
+    saida.push({ role, content: h.content });
+  });
+  return saida;
+}
+
+// ------------------------------------------------------------
+// ASSISTENTE COM OPENAI (mesmas ferramentas e regras do Claude)
+// ------------------------------------------------------------
+const MODELO_OPENAI = process.env.ASSISTENTE_MODELO_OPENAI || 'gpt-5.5';
+
+// Responses API: no gpt-5.5, ferramentas com nível de raciocínio só são
+// aceitas aqui (o /v1/chat/completions devolve 400)
+async function responderComOpenAI(userMessage, history, context, baseUrl) {
+  const inicio = Date.now();
+  const ctx = context && Object.keys(context).length ? `\nContexto do painel: ${JSON.stringify(context).slice(0, 4000)}` : '';
+  let input = [
+    ...historicoDoChat(history, userMessage),
+    { role: 'user', content: `Hoje é ${dataBrasilia(0)} (horário de Brasília).${ctx}\n\n${userMessage}` }
+  ];
+  const tools = FERRAMENTAS_ASSISTENTE.map(f => ({ type: 'function', name: f.name, description: f.description, parameters: f.input_schema }));
+
+  for (let rodada = 0; rodada < 5; rodada++) {
+    const restante = LIMITE_ASSISTENTE_MS - (Date.now() - inicio);
+    if (restante < 8000) throw new Error('tempo esgotado antes da resposta final');
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), restante);
+    let resp;
+    try {
+      resp = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+        body: JSON.stringify({ model: MODELO_OPENAI, instructions: SISTEMA_ASSISTENTE, input, tools, reasoning: { effort: 'low' }, max_output_tokens: 8000, store: false }),
+        signal: ctrl.signal
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(`OpenAI ${resp.status}: ${data.error?.message || 'erro desconhecido'}`);
+
+    const saida = Array.isArray(data.output) ? data.output : [];
+    const chamadas = saida.filter(o => o.type === 'function_call');
+    if (!chamadas.length) {
+      const texto = saida.filter(o => o.type === 'message').flatMap(o => o.content || [])
+        .filter(c => c.type === 'output_text').map(c => c.text).join('\n').trim();
+      if (!texto) throw new Error(`resposta vazia (${data.status}${data.incomplete_details ? ': ' + data.incomplete_details.reason : ''})`);
+      return texto;
+    }
+
+    // A próxima rodada leva tudo o que o modelo produziu mais o resultado de cada chamada
+    const resultados = await Promise.all(chamadas.map(async c => {
+      let res;
+      try {
+        res = await executarFerramentaAssistente(c.name, JSON.parse(c.arguments || '{}'), baseUrl);
+      } catch (err) {
+        res = { erro: `Erro ao consultar: ${err.message}` };
+      }
+      return { type: 'function_call_output', call_id: c.call_id, output: JSON.stringify(res).slice(0, 60000) };
+    }));
+    input = [...input, ...saida, ...resultados];
+  }
+  throw new Error('limite de consultas por pergunta atingido');
+}
+
 // Master Dashboard AI Assistant Handler
-async function processDashboardAIAssistant(userMessage, history = [], context = {}) {
+async function processDashboardAIAssistant(userMessage, history = [], context = {}, baseUrl = 'https://kommo-dashboard-delta.vercel.app') {
+  if (process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+    try {
+      return await responderComOpenAI(userMessage, history, context, baseUrl);
+    } catch (err) {
+      console.warn('[Assistente] OpenAI não respondeu, usando o motor calculado:', err.message);
+      return executeSmartAnalyticsResponse(userMessage, baseUrl);
+    }
+  }
+
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      return await responderComClaude(userMessage, history, context, baseUrl);
+    } catch (err) {
+      if (err instanceof Anthropic.AuthenticationError) console.error('[Assistente] Chave da Anthropic inválida:', err.message);
+      else if (err instanceof Anthropic.RateLimitError) console.warn('[Assistente] Limite de uso da Anthropic atingido:', err.message);
+      else if (err instanceof Anthropic.APIConnectionError) console.warn('[Assistente] Sem conexão com a API Anthropic:', err.message);
+      else if (err instanceof Anthropic.APIError) console.error(`[Assistente] Erro da API Anthropic ${err.status}:`, err.message);
+      else console.warn('[Assistente] Claude não respondeu, usando o motor calculado:', err.message);
+      return executeSmartAnalyticsResponse(userMessage, baseUrl);
+    }
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (apiKey) {
@@ -5325,13 +5957,32 @@ async function processDashboardAIAssistant(userMessage, history = [], context = 
           text: `Você é o Assistente Executivo de Inteligência Artificial da Komando e Chef Kaká Gomes.
 Você tem acesso completo aos dados em tempo real do Kommo CRM, Vendas da Eduzz, Campanhas de Meta Ads e Respostas de Formulários.
 Responda em português com clareza, objetividade e riqueza de detalhes. Use Markdown (tabelas, listas, negrito, links clicáveis).
+Hoje é ${dataBrasilia(0)} (horário de Brasília).
 Contexto Atual do Dashboard: ${JSON.stringify(context || {})}.
-Sempre que o usuário perguntar sobre leads, vendas, campanhas, gargalos ou métricas, use as funções disponíveis para consultar os dados exatos antes de responder.`
+Regras:
+- Todo número da resposta vem de uma função chamada nesta conversa. Nunca estime, arredonde de memória ou invente.
+- Para investimento, leads, MQL, CPL, CPMQL, reuniões, vendas, receita, CAC ou ROAS por produto, use getMetricasProduto com as datas do período pedido (sem período: do dia 1 do mês até hoje).
+- MLFP, Komando, KOP, KOR e Ebooks são produtos independentes; nunca some KOP ou KOR ao Komando.
+- Renovação do Komando (Fase 2) não é venda de tráfego e fica fora do ROAS.
+- Diga sempre o período e a fonte dos números.`
         }]
       };
 
       const tools = [{
         functionDeclarations: [
+          {
+            name: "getMetricasProduto",
+            description: "Métricas reais por produto num período: investimento no Meta Ads (duas contas), leads e MQL do Kommo, reuniões realizadas, vendas e receita (Eduzz + CRM), CPL, CPMQL, CAC e ROAS. Use para qualquer pergunta com número.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                since: { type: "STRING", description: "Data inicial YYYY-MM-DD (horário de Brasília)" },
+                until: { type: "STRING", description: "Data final YYYY-MM-DD (horário de Brasília)" },
+                produto: { type: "STRING", description: "Opcional: 'mlfp', 'komando', 'kop', 'kor', 'ebook' ou 'conteudo'. Sem ele, todos os produtos." }
+              },
+              required: ["since", "until"]
+            }
+          },
           {
             name: "getExecutiveMetrics",
             description: "Obtém métricas consolidadas de leads, MQLs, vendas e faturamento.",
@@ -5412,7 +6063,11 @@ Sempre que o usuário perguntar sobre leads, vendas, campanhas, gargalos ou mét
         for (const fc of functionCalls) {
           const c = fc.functionCall;
           let result;
-          if (c.name === 'getExecutiveMetrics') result = await getExecutiveMetrics(c.args?.funnel, c.args?.timeframe);
+          if (c.name === 'getMetricasProduto') {
+            const m = await metricasPorProduto(c.args?.since || dataBrasilia(0).slice(0, 8) + '01', c.args?.until || dataBrasilia(0), baseUrl);
+            result = c.args?.produto && m.produtos[c.args.produto] ? { ...m, produtos: { [c.args.produto]: m.produtos[c.args.produto] } } : m;
+          }
+          else if (c.name === 'getExecutiveMetrics') result = await getExecutiveMetrics(c.args?.funnel, c.args?.timeframe);
           else if (c.name === 'searchLeadsDeep') result = await searchLeadsDeep(c.args?.query, c.args?.limit);
           else if (c.name === 'getPainPointsAndProfileAnalysis') result = await getPainPointsAndProfileAnalysis();
           else if (c.name === 'getMetaAdsDataSummary') result = await getMetaAdsDataSummary(c.args?.since, c.args?.until);
@@ -5429,8 +6084,8 @@ Sempre que o usuário perguntar sobre leads, vendas, campanhas, gargalos ou mét
     }
   }
 
-  // High-accuracy fallback analytics engine
-  return await executeSmartAnalyticsResponse(userMessage);
+  // Sem LLM (ou se ele falhar): respostas calculadas por produto e período
+  return await executeSmartAnalyticsResponse(userMessage, baseUrl);
 }
 
 // REST Endpoint for Web Dashboard AI Assistant
@@ -5441,7 +6096,8 @@ app.post(['/api/ai-assistant', '/api/chat'], async (req, res) => {
       return res.status(400).json({ success: false, error: 'Mensagem não informada' });
     }
 
-    const answer = await processDashboardAIAssistant(message.trim(), history || [], context || {});
+    const baseUrl = `${req.headers['x-forwarded-proto'] || (isVercel ? 'https' : 'http')}://${req.headers.host}`;
+    const answer = await processDashboardAIAssistant(message.trim(), history || [], context || {}, baseUrl);
     res.json({ success: true, response: answer });
   } catch (err) {
     console.error('[AI Assistant Endpoint Error]:', err);
@@ -5990,7 +6646,7 @@ async function coletarTrafego(since, until) {
     // KOR: vendas reais da Base Eduzz no CRM. O pixel perde ~metade das compras
     // (Pix/boleto aprovam fora do checkout); o número dele fica só como referência.
     if (funis.kor) {
-      const real = vendasKorBaseEduzz(todosLeads, ini, fim);
+      const real = vendasKorBaseEduzz(todosLeads, ini, fim, await lerVendasEduzz());
       funis.kor.comprasPixel = funis.kor.compras;
       funis.kor.compras = real.vendas;
       funis.kor.receita = real.valor;
@@ -6256,7 +6912,7 @@ async function executarAuditoriaSemanal() {
   const fimSec = seg(fim) + 86399;
 
   const leads = await lerCache('all_leads.json', []);
-  const korCrm = vendasKorBaseEduzz(leads, iniSec, fimSec);
+  const korCrm = vendasKorBaseEduzz(leads, iniSec, fimSec, await lerVendasEduzz());
 
   let pixelKor = 0, gastoKor = 0;
   for (const conta of CONTAS_TRAFEGO) {
@@ -6835,7 +7491,7 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
     });
 
     // Carregar vendas Eduzz do cache
-    const rawSales = await lerCache('eduzz_sales_raw.json', []);
+    const rawSales = await lerVendasEduzz();
     const paidSales = rawSales.filter(s => s.sale_status === 3 || s.sale_status_name === 'Paga' || s.status === 'paid');
 
     const TIPOS_COMPRA = ['purchase', 'offsite_conversion.fb_pixel_purchase', 'omni_purchase', 'onsite_web_purchase'];
@@ -6888,6 +7544,14 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
     const FIM_EXPORT_EDUZZ = datasExport.length ? Math.max(...datasExport) : -Infinity;
     const eduzzCobre = (ini, fim) => fim <= FIM_EXPORT_EDUZZ || ini >= EDUZZ_WEBHOOK_DESDE;
 
+    // Compradores com pagamento na Eduzz (qualquer data), para não contar de
+    // novo no CRM quem já pagou por lá
+    const nomesPagosEduzz = paidSales.filter(vendaEduzzDoFunil).map(s => nomeComparavel(s.client_name)).filter(Boolean);
+    const pagouNaEduzz = lead => {
+      const n = nomeComparavel(String(lead.name || '').replace(/^\[[^\]]*\]\s*/, ''));
+      return Boolean(n) && nomesPagosEduzz.some(e => e.startsWith(n) || n.startsWith(e));
+    };
+
     function consolidarVendas(startSec, endSec, pixel) {
       let eduzzN = 0, eduzzV = 0;
       paidSales.forEach(s => {
@@ -6897,14 +7561,29 @@ app.get('/api/traffic-sales-weekly', async (req, res) => {
         eduzzN++;
         eduzzV += parseFloat(s.sale_total) || parseFloat(s.value) || 0;
       });
+      // Venda ganha no CRM com valor e sem pagamento na Eduzz (link especial,
+      // Pix direto): é venda ganha, ainda não faturada — antes ficava de fora
+      // sempre que o período tinha alguma venda na Eduzz (Solange, 07/10/2026)
+      let ganhoSoCrmN = 0, ganhoSoCrmV = 0;
+      if (!vendaDireta && funnelFilter !== 'all') {
+        commercialLeads.forEach(l => {
+          if (l.status_id !== 142 || !(parseFloat(l.price) > 0)) return;
+          const fechado = l.closed_at || l.updated_at || 0;
+          if (fechado < startSec || fechado > endSec) return;
+          if (pagouNaEduzz(l)) return;
+          ganhoSoCrmN++; ganhoSoCrmV += parseFloat(l.price);
+        });
+      }
       // KOR: sempre a Base Eduzz do CRM. O webhook cria o lead ali em toda
       // venda, então ela cobre o período inteiro — o cache Eduzz, não
-      const baseKor = vendasKorBaseEduzz(allLeads, startSec, endSec);
+      const baseKor = vendasKorBaseEduzz(allLeads, startSec, endSec, paidSales);
       if (funnelFilter === 'kor') {
         return { vendas: baseKor.vendas, faturamento: baseKor.valor, origemVendas: 'crm_base_eduzz' };
       }
 
-      if (eduzzN > 0 && eduzzCobre(startSec, endSec)) return { vendas: eduzzN, faturamento: eduzzV, origemVendas: 'eduzz' };
+      if (eduzzN > 0 && eduzzCobre(startSec, endSec)) {
+        return { vendas: eduzzN + ganhoSoCrmN, faturamento: eduzzV + ganhoSoCrmV, origemVendas: ganhoSoCrmN ? 'eduzz+crm' : 'eduzz' };
+      }
 
       // Venda conta na data de fechamento, não na criação do lead
       let crmN = 0, crmV = 0, reuniaoN = 0, reuniaoV = 0;
